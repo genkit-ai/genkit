@@ -32,12 +32,14 @@ import {
  *
  * `probabilities` is the model's distribution over the options and sums to 1;
  * `choice` is the option with the most of it; `confidence`, from 0 to 1, is
- * how concentrated the distribution is.
+ * how concentrated the distribution is. A server may leave `confidence` out,
+ * as Genkit Go's schema allows, so read it with a default:
+ * `(answer.confidence ?? 0) < 0.6`.
  */
 export interface ChoiceAnswer<K extends string = string> {
   choice: K;
   probabilities?: Partial<Record<K, number>>;
-  confidence: number;
+  confidence?: number;
 }
 
 /**
@@ -46,12 +48,12 @@ export interface ChoiceAnswer<K extends string = string> {
  * split. `probabilities` is that distribution, keyed by level number;
  * `confidence`, from 0 to 1, is how concentrated it is; `legend` maps each
  * level number back to its description, the string of the rubric even when
- * the level was sent with guidance.
+ * the level was sent with guidance. A server may leave `confidence` out.
  */
 export interface ScoreAnswer {
   score: number;
   probabilities?: Record<string, number>;
-  confidence: number;
+  confidence?: number;
   legend?: Record<string, string>;
 }
 
@@ -66,7 +68,7 @@ export interface NoulAnswer {
 }
 
 /** A question schema, the type of one field of a decision schema. */
-export type QuestionSchema<T> = z.ZodType<T, z.ZodTypeDef, T>;
+export type QuestionSchema<T> = z.ZodType<T>;
 
 /** The structured guidance of a choice's options, keyed by option. */
 export type OptionGuidance<K extends string> = Partial<Record<K, unknown>>;
@@ -85,7 +87,8 @@ export type OptionGuidance<K extends string> = Partial<Record<K, unknown>>;
  * });
  * ```
  *
- * The options go out in the order the criteria list them. `guidance` adds the
+ * The options go out sorted by name, as Genkit Go, Java, and Dart send a typed
+ * choice's options; a runtime question keeps the order given. `guidance` adds the
  * structured form of a description the wire format also takes, most often an
  * object with labeled parts such as `not_for` and `examples`. An object with
  * no `what` gets the option's string as its `what`, so guidance adds to the
@@ -96,13 +99,15 @@ export function choice<const K extends string>(
   criteria: Record<K, string>,
   options?: { guidance?: OptionGuidance<K> }
 ): QuestionSchema<ChoiceAnswer<K>> {
-  const keys = Object.keys(criteria) as K[];
+  const keys = (Object.keys(criteria) as K[]).sort((a, b) =>
+    a < b ? -1 : a > b ? 1 : 0
+  );
   const literals = keys.map((key) => z.literal(key).describe(criteria[key]));
   const answer = z
     .object({
       choice: z.union(literals as unknown as [z.ZodTypeAny, z.ZodTypeAny]),
       probabilities: z.record(z.number()).optional(),
-      confidence: z.number(),
+      confidence: z.number().optional(),
     })
     .strict();
   return question(answer, 'choice', {
@@ -133,7 +138,7 @@ export function score(
         .min(0)
         .max(Math.max(levels.length - 1, 0)),
       probabilities: z.record(z.number()).optional(),
-      confidence: z.number(),
+      confidence: z.number().optional(),
       legend: z.record(z.string()).optional(),
     })
     .strict();
@@ -321,7 +326,7 @@ export interface NoulQuestion extends YesNo {
  *   model: 'typesafe/jev-1.13.0',
  *   prompt: request,
  *   output: {
- *     jsonSchema: schema({
+ *     jsonSchema: systemOne.schema({
  *       tool: {
  *         type: 'choice',
  *         instructions: 'Which tool serves the request?',
@@ -421,7 +426,7 @@ function choiceSchema(options: ChoiceOption[]): JSONSchema {
       probabilities: probabilitiesSchema(),
       confidence: { type: 'number' },
     },
-    ['choice', 'confidence'],
+    ['choice'],
     { [GUIDANCE_KEYWORD]: guidanceOf(guidance) }
   );
 }
@@ -442,7 +447,7 @@ function scoreSchema(
       confidence: { type: 'number' },
       legend: { type: 'object', additionalProperties: { type: 'string' } },
     },
-    ['score', 'confidence'],
+    ['score'],
     {
       [LEVELS_KEYWORD]: levels ? [...levels] : levels,
       [GUIDANCE_KEYWORD]: guidanceOf(guidance),
@@ -468,6 +473,12 @@ function noulSchema(q: NoulQuestion): JSONSchema {
  * mean, and {@link answerKind} says which kind an answer is.
  */
 export interface Answer {
+  /**
+   * The kind of question it answers, as Genkit Go and Dart write an answer.
+   * The model's answers leave it out; {@link answerKind} reads it from the
+   * fields.
+   */
+  type?: 'choice' | 'score' | 'noul';
   choice?: string;
   score?: number;
   noul?: number;
@@ -480,6 +491,7 @@ export interface Answer {
 export function answerKind(
   answer: Answer
 ): 'choice' | 'score' | 'noul' | undefined {
+  if (answer.type) return answer.type;
   if (answer.choice !== undefined) return 'choice';
   if (answer.score !== undefined) return 'score';
   if (answer.noul !== undefined) return 'noul';
@@ -502,13 +514,14 @@ export interface Info {
 
 /**
  * Reads the {@link Info} of a decision model's response, from a
- * `GenerateResponse` or from the JSON of one, such as a flow's output or a
- * stored trace. It is `{model: ''}` for a response from any other model.
+ * `GenerateResponse` or from the JSON of one, such as `response.toJSON()`, a
+ * flow's output, or a stored trace, which carry it as `custom`. It is
+ * `{model: ''}` for a response from any other model.
  */
 export function responseInfo(
-  response: { raw?: unknown } | undefined | null
+  response: { raw?: unknown; custom?: unknown } | undefined | null
 ): Info {
-  const raw = response?.raw as Partial<Info> | undefined;
+  const raw = (response?.raw ?? response?.custom) as Partial<Info> | undefined;
   if (!raw || typeof raw !== 'object' || typeof raw.model !== 'string') {
     return { model: '' };
   }
@@ -517,7 +530,11 @@ export function responseInfo(
     info.provider = raw.provider;
   }
   if (typeof raw.id === 'string' && raw.id) info.id = raw.id;
-  if (raw.answers && typeof raw.answers === 'object') {
+  if (
+    raw.answers &&
+    typeof raw.answers === 'object' &&
+    !Array.isArray(raw.answers)
+  ) {
     info.answers = raw.answers;
   }
   return info;

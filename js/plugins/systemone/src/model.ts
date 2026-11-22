@@ -38,9 +38,9 @@ export const SystemOneConfigSchema = z.object({
   /**
    * Parses each text part of the state as JSON, so a prompt template that
    * renders a JSON document produces an object state rather than a string
-   * one. A text that is not JSON is an error. A fallback to another model
-   * takes that model's config, so set it there too, or send the state as a
-   * data part, which needs no parsing.
+   * one. A text that is not JSON is an error. A fallback model reference
+   * that carries a config of its own replaces this one, so set it there too,
+   * or send the state as a data part, which needs no parsing.
    */
   stateJSON: z
     .boolean()
@@ -60,6 +60,14 @@ export const SystemOneConfigSchema = z.object({
     .describe(
       "Extra top-level request fields, such as a gateway's session_id. Cannot replace model, state, questions, images, audio, or videos."
     ),
+  /**
+   * The API key for this request, in place of the plugin's. A plugin created
+   * with `apiKey: false` takes its key here.
+   */
+  apiKey: z
+    .string()
+    .optional()
+    .describe("The API key for this request, in place of the plugin's."),
 });
 
 /** The per-request configuration of a decision model. */
@@ -74,6 +82,12 @@ export interface ModelDescription {
    * before a request is sent.
    */
   reads: Reads;
+  /**
+   * The environment variable a server's key comes from, when the server
+   * requires a key and the plugin was created with `apiKey: false`, so each
+   * request reads it there or from `config.apiKey`.
+   */
+  keyRequiredFrom?: string;
 }
 
 /**
@@ -115,7 +129,7 @@ export function newModel(
       generate(
         client,
         id,
-        desc.reads,
+        desc,
         req as GenerateRequest<typeof SystemOneConfigSchema>,
         abortSignal
       )
@@ -126,7 +140,7 @@ export function newModel(
 async function generate(
   client: Client,
   id: string,
-  reads: Reads,
+  desc: ModelDescription,
   req: GenerateRequest<typeof SystemOneConfigSchema>,
   abortSignal?: AbortSignal
 ): Promise<GenerateResponseData> {
@@ -135,7 +149,7 @@ async function generate(
     throw new GenkitError({
       status: 'INVALID_ARGUMENT',
       message:
-        'systemone: the model answers questions encoded in an output schema; pass a decision schema as output.schema, or output.jsonSchema = schema(questions) for questions built at run time',
+        'systemone: the model answers questions encoded in an output schema; pass a decision schema as output.schema, or output.jsonSchema = systemOne.schema(questions) for questions built at run time',
     });
   }
   if (req.tools?.length) {
@@ -145,6 +159,27 @@ async function generate(
     });
   }
   const config = req.config ?? {};
+  if (
+    config.extra !== undefined &&
+    (config.extra === null ||
+      typeof config.extra !== 'object' ||
+      Array.isArray(config.extra))
+  ) {
+    throw new GenkitError({
+      status: 'INVALID_ARGUMENT',
+      message: 'systemone: config.extra must be an object of request fields',
+    });
+  }
+  // A plugin created with apiKey: false reads its key here, per request.
+  const apiKey =
+    config.apiKey ||
+    (desc.keyRequiredFrom ? process.env[desc.keyRequiredFrom] : undefined);
+  if (desc.keyRequiredFrom && !apiKey) {
+    throw new GenkitError({
+      status: 'FAILED_PRECONDITION',
+      message: `${client.endpoint.name}: pass the API key as config.apiKey or set the ${desc.keyRequiredFrom} environment variable`,
+    });
+  }
   for (const field of RESERVED_FIELDS) {
     if (config.extra && field in config.extra) {
       throw new GenkitError({
@@ -157,23 +192,29 @@ async function generate(
   const questions = isEnum
     ? enumQuestion(req.output?.schema, preamble)
     : compileQuestions(req.output?.schema, preamble);
-  const { state, media } = buildState(req, !!config.stateJSON, reads);
+  const { state, media } = buildState(req, !!config.stateJSON, desc.reads);
 
   const resp = await client.decide(
     id,
     { state, media, questions: wireQuestions(questions), extra: config.extra },
-    abortSignal
+    { signal: abortSignal, apiKey: apiKey || undefined }
   );
-  const inputTokens = resp.usage?.input_tokens ?? 0;
-  const outputTokens = resp.usage?.output_tokens ?? 0;
+  const count = (n: unknown) =>
+    typeof n === 'number' && Number.isFinite(n) ? n : 0;
+  const inputTokens = count(resp.usage?.input_tokens);
+  const outputTokens = count(resp.usage?.output_tokens);
   logger.debug(
     `systemone: answered: endpoint=${client.endpoint.name} model=${resp.model} questions=${Object.keys(questions).length} inputTokens=${inputTokens} outputTokens=${outputTokens}`
   );
 
   const text = answersText(resp.answers, questions, isEnum);
-  const info: Info = { model: resp.model };
-  if (resp.provider) info.provider = resp.provider;
-  if (resp.id) info.id = resp.id;
+  const info: Info = {
+    model: typeof resp.model === 'string' ? resp.model : '',
+  };
+  if (typeof resp.provider === 'string' && resp.provider) {
+    info.provider = resp.provider;
+  }
+  if (typeof resp.id === 'string' && resp.id) info.id = resp.id;
   info.answers = resp.answers;
   return {
     message: { role: 'model', content: [{ text }] },
@@ -182,7 +223,8 @@ async function generate(
       inputTokens,
       outputTokens,
       totalTokens: inputTokens + outputTokens,
-      ...(typeof resp.usage?.cost === 'number'
+      ...(typeof resp.usage?.cost === 'number' &&
+      Number.isFinite(resp.usage.cost)
         ? { custom: { cost: resp.usage.cost } }
         : {}),
     },

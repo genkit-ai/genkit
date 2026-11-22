@@ -196,7 +196,7 @@ describe('client', () => {
             throw new Error('aborted');
           },
         }
-      ).decide('jev', request, abort.signal),
+      ).decide('jev', request, { signal: abort.signal }),
       (e: GenkitError) =>
         e.status === 'CANCELLED' &&
         /last attempt: test: HTTP 503/.test(e.message)
@@ -221,6 +221,179 @@ describe('client', () => {
         e.status === 'INTERNAL' && /larger than 8388608 bytes/.test(e.message)
     );
     assert.strictEqual(calls, 1);
+  });
+
+  it('does not retry 501 or 505', async () => {
+    for (const status of [501, 505]) {
+      server.failures = [{ status }];
+      const before = server.requests.length;
+      await assert.rejects(
+        client(server, {}, { sleep: async () => {} }).decide('jev', request),
+        (e: GenkitError) => e.status === 'UNIMPLEMENTED'
+      );
+      assert.strictEqual(server.requests.length - before, 1, String(status));
+    }
+  });
+
+  it('ends a Retry-After wait at once when the caller cancels', async () => {
+    server.failures = [{ status: 503, headers: { 'Retry-After': '5' } }];
+    const abort = new AbortController();
+    const started = Date.now();
+    setTimeout(() => abort.abort(), 100);
+    await assert.rejects(
+      client(server).decide('jev', request, { signal: abort.signal }),
+      (e: GenkitError) => e.status === 'CANCELLED'
+    );
+    assert.ok(Date.now() - started < 1000, 'cancelled within a second');
+    server.failures = [];
+  });
+
+  it('caps Retry-After at 30 seconds', async () => {
+    const waits: number[] = [];
+    server.failures = [{ status: 429, headers: { 'Retry-After': '100' } }];
+    await client(
+      server,
+      {},
+      {
+        sleep: async (ms) => {
+          waits.push(ms);
+        },
+      }
+    ).decide('jev', request);
+    assert.deepStrictEqual(waits, [30000]);
+  });
+
+  it('retries an attempt that times out', async () => {
+    server.failures = [
+      { status: 200, body: '{}', delayMs: 400 },
+      { status: 200, body: '{}', delayMs: 400 },
+      { status: 200, body: '{}', delayMs: 400 },
+    ];
+    const before = server.requests.length;
+    await assert.rejects(
+      client(server, {}, { timeoutMs: 50, sleep: async () => {} }).decide(
+        'jev',
+        request
+      ),
+      (e: GenkitError) => e.status === 'UNAVAILABLE'
+    );
+    assert.strictEqual(server.requests.length - before, 3);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  });
+
+  it('retries a network error', async () => {
+    let calls = 0;
+    const down = new Client({
+      fetch: async () => {
+        calls++;
+        throw new TypeError('fetch failed');
+      },
+      baseUrl: 'http://unused',
+      endpoint: { name: 'test', path: '', modelsPath: '' },
+      sleep: async () => {},
+    });
+    await assert.rejects(
+      down.decide('jev', request),
+      (e: GenkitError) =>
+        e.status === 'UNAVAILABLE' && e.originalMessage === 'test: fetch failed'
+    );
+    assert.strictEqual(calls, 3);
+  });
+
+  it('refuses a response that is not a System One answer', async () => {
+    const cases: [string, RegExp][] = [
+      ['not json', /response is not a System One answer/],
+      ['[1, 2]', /response is not a System One answer/],
+      ['{"model": "jev"}', /response carries no answers/],
+      ['{"model": "jev", "answers": [1]}', /response carries no answers/],
+    ];
+    for (const [body, message] of cases) {
+      server.failures = [{ status: 200, body }];
+      await assert.rejects(
+        client(server).decide('jev', request),
+        (e: GenkitError) => e.status === 'INTERNAL' && message.test(e.message),
+        body
+      );
+    }
+  });
+
+  it('does not follow a redirect, which would carry the key away', async () => {
+    server.failures = [{ status: 302, headers: { Location: '/elsewhere' } }];
+    const before = server.requests.length;
+    await assert.rejects(
+      client(server).decide('jev', request),
+      (e: GenkitError) =>
+        e.status === 'FAILED_PRECONDITION' && /HTTP 302/.test(e.message)
+    );
+    assert.strictEqual(server.requests.length - before, 1);
+  });
+
+  it('reports hook mistakes with a status', async () => {
+    await assert.rejects(
+      client(server, {
+        route: () => {
+          throw new Error('no route');
+        },
+      }).decide('jev', request),
+      (e: GenkitError) =>
+        e.status === 'UNKNOWN' && e.originalMessage === 'test: no route'
+    );
+    await assert.rejects(
+      client(server, {
+        route: () => {
+          throw new GenkitError({
+            status: 'INVALID_ARGUMENT',
+            message: 'bad id',
+          });
+        },
+      }).decide('jev', request),
+      (e: GenkitError) =>
+        e.status === 'INVALID_ARGUMENT' && e.originalMessage === 'bad id'
+    );
+    await assert.rejects(
+      client(server, { route: () => ({ body: undefined }) }).decide(
+        'jev',
+        request
+      ),
+      /route must return \{path, body\} with a body/
+    );
+    await assert.rejects(
+      client(server, { unwrap: async (body) => body }).decide('jev', request),
+      /unwrap must return the response, not a promise/
+    );
+  });
+
+  it('refuses a body that is not JSON before sending it', async () => {
+    const before = server.requests.length;
+    await assert.rejects(
+      client(server).decide('jev', {
+        ...request,
+        extra: { trace: { id: BigInt(1) } },
+      }),
+      (e: GenkitError) =>
+        e.status === 'INVALID_ARGUMENT' && /request is not JSON/.test(e.message)
+    );
+    assert.strictEqual(server.requests.length, before);
+  });
+
+  it('sends a per-request key, and leaves a timeout to a caller fetch', async () => {
+    let init: RequestInit | undefined;
+    const own = new Client({
+      fetch: async (url, i) => {
+        init = i;
+        return globalThis.fetch(url, i);
+      },
+      baseUrl: server.url,
+      apiKey: 'plugin-key',
+      endpoint: { name: 'test', path: '/v1/systemone', modelsPath: '' },
+    });
+    await own.decide('jev', request, { apiKey: 'request-key' });
+    assert.strictEqual(
+      server.requests.at(-1)!.headers.authorization,
+      'Bearer request-key'
+    );
+    assert.strictEqual(init?.signal, undefined);
+    assert.strictEqual(init?.redirect, 'manual');
   });
 
   it('lists models from a bare array or an envelope', async () => {

@@ -187,21 +187,29 @@ export function compileQuestions(
  */
 function resolveRef(
   root: JsonObject | undefined,
-  prop: JsonObject
+  prop: JsonObject,
+  seen: Set<string> = new Set()
 ): JsonObject {
   const ref = prop.$ref;
   if (typeof ref !== 'string' || !ref.startsWith('#')) return prop;
+  if (seen.has(ref)) {
+    throw invalidSchema(`the output schema's $ref "${ref}" refers to itself`);
+  }
+  seen.add(ref);
   let target: unknown = root;
   for (const token of ref.slice(1).split('/').slice(1)) {
-    const key = decodeURIComponent(token)
-      .replace(/~1/g, '/')
-      .replace(/~0/g, '~');
+    let key: string;
+    try {
+      key = decodeURIComponent(token).replace(/~1/g, '/').replace(/~0/g, '~');
+    } catch {
+      throw invalidSchema(`the output schema's $ref "${ref}" is malformed`);
+    }
     target =
       isObject(target) && Object.hasOwn(target, key) ? target[key] : undefined;
   }
   if (!isObject(target)) return prop;
-  const { $ref: _ref, ...own } = prop;
-  return { ...resolveRef(root, target), ...own };
+  const { $ref: _ref, ...rest } = prop;
+  return { ...resolveRef(root, target, seen), ...rest };
 }
 
 /**

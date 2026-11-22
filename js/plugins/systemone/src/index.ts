@@ -76,7 +76,12 @@ import {
   modelActionMetadata,
   type GenkitPluginV2,
 } from 'genkit/plugin';
-import { Client, type Route, type Unwrap } from './client.js';
+import {
+  Client,
+  REQUEST_TIMEOUT_MS,
+  type Route,
+  type Unwrap,
+} from './client.js';
 import {
   SystemOneConfigSchema,
   modelInfo,
@@ -85,6 +90,7 @@ import {
   type SystemOneConfig,
 } from './model.js';
 import { ollamaRoute } from './ollama.js';
+import { schema } from './questions.js';
 import { unwrapWorkersAI, workersAIRoute } from './workersai.js';
 
 export type { Route, Unwrap } from './client.js';
@@ -98,7 +104,6 @@ export {
   noul,
   ranked,
   responseInfo,
-  schema,
   score,
   type Answer,
   type ChoiceAnswer,
@@ -153,10 +158,10 @@ export interface ModelSpec {
  */
 export interface SystemOneOptions {
   /**
-   * Names the plugin and prefixes its model names. It is required, and must
-   * differ from every other plugin's name, so a host that serves chat models
-   * through another plugin needs a name of its own here, such as
-   * openrouter-decisions.
+   * Names the plugin and prefixes its model names. It is required, cannot
+   * contain a slash, and must differ from every other plugin's name, so a
+   * host that serves chat models through another plugin needs a name of its
+   * own here, such as openrouter-decisions.
    */
   provider: string;
   /**
@@ -177,14 +182,18 @@ export interface SystemOneOptions {
   /**
    * Sent as a bearer token. A constructor reads it from the environment
    * variable it names when this is unset; a server that takes no key, such as
-   * a local one, is reached with none.
+   * a local one, is reached with none. `false` defers the key to each
+   * request, which takes it from `config.apiKey` or the constructor's
+   * environment variable, so an app starts, and the Dev UI lists the models,
+   * without one.
    */
-  apiKey?: string;
+  apiKey?: string | false;
   /**
    * The models known ahead, keyed by the ID the server uses or by the full
    * model name, `provider/ID`. They are listed in the Dev UI whether or not
    * the server has a listing. Any other ID resolves too, as a model with no
-   * description.
+   * description. A constructor's models stay: these add to them, and an entry
+   * for one of them changes only the fields it sets.
    */
   models?: Record<string, ModelSpec>;
   /**
@@ -200,11 +209,19 @@ export interface SystemOneOptions {
   video?: MediaSupport;
   /**
    * Sends the requests: the escape hatch to the transport, such as a proxy
-   * or client middleware. The global `fetch` when unset. Each attempt is
-   * bounded at 30 seconds.
+   * or client middleware. The global `fetch` when unset.
    */
   fetch?: typeof fetch;
-  /** Sent on every request, after the authorization header. */
+  /**
+   * Bounds one attempt, in milliseconds. Unset means 30 seconds with the
+   * global `fetch`, and no bound of the plugin's with a `fetch` of your own,
+   * which keeps its own timeouts.
+   */
+  timeoutMs?: number;
+  /**
+   * Sent on every request. The Authorization header the API key makes
+   * replaces one given here.
+   */
   headers?: Record<string, string>;
   /**
    * For a server whose wire is not the native one, builds the request it
@@ -275,19 +292,40 @@ function rooted(path: string): string {
   return `/${path}`;
 }
 
-function newPlugin(options: SystemOneOptions, preset: Preset): SystemOnePlugin {
+/** The options without the ones set to undefined, which keep the defaults. */
+function given<T extends object>(options: T | undefined): Partial<T> {
+  return Object.fromEntries(
+    Object.entries(options ?? {}).filter(([, value]) => value !== undefined)
+  ) as Partial<T>;
+}
+
+/** Most IDs a listing contributes, and the longest ID taken from one. */
+const LISTING_MAX_MODELS = 1_000;
+const LISTING_MAX_ID_LENGTH = 256;
+
+function newPlugin(
+  options: SystemOneOptions,
+  preset: Preset,
+  presetModels: Record<string, ModelSpec> = {}
+): SystemOnePlugin {
   const provider = options.provider;
   if (!provider) {
     throw misconfigured(
       "systemone: set provider, the plugin's name and the prefix of its models"
     );
   }
-  let apiKey = options.apiKey;
-  if (preset.apiKeyEnv) {
+  if (provider.includes('/')) {
+    throw misconfigured(
+      `systemone: provider ${JSON.stringify(provider)} contains a slash, which separates it from the model ID`
+    );
+  }
+  let apiKey = options.apiKey === false ? undefined : options.apiKey;
+  const keyDeferred = options.apiKey === false && !!preset.apiKeyEnv;
+  if (preset.apiKeyEnv && !keyDeferred) {
     apiKey = apiKey || process.env[preset.apiKeyEnv];
     if (!apiKey) {
       throw misconfigured(
-        `${provider}: set apiKey or the ${preset.apiKeyEnv} environment variable`
+        `${provider}: set apiKey or the ${preset.apiKeyEnv} environment variable, or pass apiKey: false to give it per request`
       );
     }
   }
@@ -315,19 +353,24 @@ function newPlugin(options: SystemOneOptions, preset: Preset): SystemOnePlugin {
 
   const trim = (id: string) =>
     id.startsWith(`${provider}/`) ? id.slice(provider.length + 1) : id;
-  const models = new Map<string, ModelSpec>();
+  const models = new Map<string, ModelSpec>(Object.entries(presetModels));
+  const named = new Set<string>();
   for (const [key, spec] of Object.entries(options.models ?? {})) {
     const id = trim(key);
-    if (models.has(id)) {
+    if (named.has(id)) {
       throw misconfigured(
         `${provider}: models names ${id} twice, by its ID and by its full name`
       );
     }
-    models.set(id, spec);
+    named.add(id);
+    // An entry for a preset model changes only the fields it sets.
+    models.set(id, { ...models.get(id), ...given(spec) });
   }
 
   const client = new Client({
     fetch: options.fetch ?? globalThis.fetch,
+    timeoutMs:
+      options.timeoutMs ?? (options.fetch ? undefined : REQUEST_TIMEOUT_MS),
     baseUrl: baseUrl.replace(/\/+$/, ''),
     apiKey,
     headers: { ...options.headers },
@@ -351,6 +394,7 @@ function newPlugin(options: SystemOneOptions, preset: Preset): SystemOnePlugin {
         audio: reads(options.audio, spec.audio),
         video: reads(options.video, spec.video),
       },
+      keyRequiredFrom: keyDeferred ? preset.apiKeyEnv : undefined,
     };
   };
 
@@ -359,6 +403,7 @@ function newPlugin(options: SystemOneOptions, preset: Preset): SystemOnePlugin {
   let listed: ActionMetadata[] | undefined;
   let listedUntil = 0;
   let listing: Promise<ActionMetadata[]> | undefined;
+  let listingWarned = false;
 
   const listedIds = async (): Promise<{ ids: string[]; ttl: number }> => {
     if (!client.endpoint.modelsPath) return { ids: [], ttl: LISTING_TTL_MS };
@@ -367,13 +412,25 @@ function newPlugin(options: SystemOneOptions, preset: Preset): SystemOnePlugin {
         AbortSignal.timeout(LISTING_TIMEOUT_MS)
       );
       const ids = listedModels
-        .map((m) => m?.id || m?.name || '')
-        .filter((id) => id !== '');
+        .map((m) => m?.id || m?.name)
+        .filter(
+          (id): id is string =>
+            typeof id === 'string' &&
+            id !== '' &&
+            id.length <= LISTING_MAX_ID_LENGTH
+        )
+        .slice(0, LISTING_MAX_MODELS);
       return { ids, ttl: LISTING_TTL_MS };
     } catch (e) {
-      logger.debug(
-        `${provider}: model listing failed, advertising the configured models: ${(e as Error)?.message ?? e}`
-      );
+      const message = `${provider}: model listing failed, advertising the configured models: ${(e as Error)?.message ?? e}`;
+      // Said once at warn level, since it hides models from the Dev UI, and
+      // again at debug level after that.
+      if (listingWarned) {
+        logger.debug(message);
+      } else {
+        listingWarned = true;
+        logger.warn(message);
+      }
       return { ids: [], ttl: LISTING_RETRY_MS };
     }
   };
@@ -413,9 +470,11 @@ function newPlugin(options: SystemOneOptions, preset: Preset): SystemOnePlugin {
   });
   return Object.assign(plugin, {
     modelRef(id: string, config?: SystemOneConfig) {
+      const modelId = trim(id);
       return modelRef({
-        name: `${provider}/${trim(id)}`,
+        name: `${provider}/${modelId}`,
         configSchema: SystemOneConfigSchema,
+        info: modelInfo(describe(modelId)),
         ...(config ? { config } : {}),
       });
     },
@@ -450,15 +509,15 @@ function typeSafe(options?: Partial<SystemOneOptions>): SystemOnePlugin {
     {
       provider: 'typesafe',
       modelsPath: '/v1/models',
-      models: { 'jev-latest': {}, 'jev-1.13.0': {} },
-      ...options,
+      ...given(options),
     },
     {
       label: 'TypeSafe',
       apiKeyEnv: 'TYPESAFE_API_KEY',
       baseUrl: 'https://api.typesafe.ai',
       baseUrlEnv: 'TYPESAFE_BASE_URL',
-    }
+    },
+    { 'jev-latest': {}, 'jev-1.13.0': {} }
   );
 }
 
@@ -484,19 +543,19 @@ function openRouter(options?: Partial<SystemOneOptions>): SystemOnePlugin {
       provider: 'openrouter-decisions',
       path: '/api/alpha/decisions',
       modelsPath: '/api/v1/models?output_modalities=decisions',
-      models: {
-        'cloudflare/clef': {},
-        'cloudflare/clef-flash': {},
-        'liquid/d1': {},
-        'typesafe/jev-1.13': {},
-        '~typesafe/jev-latest': {},
-      },
-      ...options,
+      ...given(options),
     },
     {
       label: 'OpenRouter',
       apiKeyEnv: 'OPENROUTER_API_KEY',
       baseUrl: 'https://openrouter.ai',
+    },
+    {
+      'cloudflare/clef': {},
+      'cloudflare/clef-flash': {},
+      'liquid/d1': {},
+      'typesafe/jev-1.13': {},
+      '~typesafe/jev-latest': {},
     }
   );
 }
@@ -519,10 +578,10 @@ function ollama(options?: Partial<SystemOneOptions>): SystemOnePlugin {
       provider: 'ollama-decisions',
       route: ollamaRoute,
       images: 'supported',
-      models: { clef: {} },
-      ...options,
+      ...given(options),
     },
-    { label: 'Ollama', baseUrl: 'http://localhost:11434' }
+    { label: 'Ollama', baseUrl: 'http://localhost:11434' },
+    { clef: {} }
   );
 }
 
@@ -553,13 +612,7 @@ function workersAI(
       route: workersAIRoute,
       unwrap: unwrapWorkersAI,
       images: 'supported',
-      models: {
-        '@cf/cloudflare/clef': {},
-        '@cf/cloudflare/clef-flash': {},
-        '@cf/cloudflare/clef-omni': { audio: 'supported', video: 'supported' },
-        'typesafe/jev': { images: 'unsupported' },
-      },
-      ...options,
+      ...given(options),
     },
     {
       label: 'Workers AI',
@@ -567,19 +620,27 @@ function workersAI(
       baseUrl: 'https://api.cloudflare.com/client/v4/accounts/{account}',
       account: accountId,
       accountEnv: 'CLOUDFLARE_ACCOUNT_ID',
+    },
+    {
+      '@cf/cloudflare/clef': {},
+      '@cf/cloudflare/clef-flash': {},
+      '@cf/cloudflare/clef-omni': { audio: 'supported', video: 'supported' },
+      'typesafe/jev': { images: 'unsupported' },
     }
   );
 }
 
 /**
  * The System One plugin: `systemOne(options)` for any server that speaks the
- * protocol, and constructors for the known ones.
+ * protocol, constructors for the known ones, and `systemOne.schema()`, which
+ * builds the output schema of questions known only at run time.
  */
 export const systemOne = Object.assign(systemOnePlugin, {
   typeSafe,
   openRouter,
   ollama,
   workersAI,
+  schema,
 });
 
 export default systemOne;

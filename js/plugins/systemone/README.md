@@ -4,8 +4,7 @@ Adds decision models to Genkit: models that speak System One, the protocol
 TypeSafe AI introduced with jev and that Liquid AI's d1, Cloudflare's Clef, and
 the gateways serving them also speak. A decision model does not generate text.
 It evaluates a state against typed questions and returns one typed answer per
-question, with calibrated probabilities, in a few hundred milliseconds. That
-makes it a fit for the decisions inside an application: routing,
+question, with calibrated probabilities. That makes it a fit for the decisions inside an application: routing,
 classification, scoring, guardrails, and verification.
 
 > Status: in preview. Its API may change in any minor version release.
@@ -23,6 +22,9 @@ takes the same questions and answers.
 ```bash
 npm i --save @genkit-ai/systemone
 ```
+
+It needs a `genkit` release whose schema validation accepts `x-` keywords,
+which the question schemas carry.
 
 ## Design principle: the output schema is the question set
 
@@ -65,7 +67,7 @@ const { output } = await ai.generate({
   prompt: ticket,
   output: { schema: Triage },
 });
-if (output!.department.confidence < 0.6) {
+if ((output!.department.confidence ?? 0) < 0.6) {
   // the caller owns thresholds
   return escalate(ticket);
 }
@@ -101,7 +103,9 @@ decisive the choice is. `level(answer, levels)` is a score's nearest whole
 level, and `label(answer, levels)` that level's text; both fall back to the
 answer's legend.
 
-The options go out in the order the criteria list them. Criteria and levels are
+A choice's options go out sorted by name, as Go, Java, and Dart send a typed
+choice's options. A server may leave `confidence` out of an answer, as the Go
+schema allows, so read it with a default. Criteria and levels are
 strings, and the schema and the answers show those strings. The wire format
 also takes a structured description, most often an object with labeled parts,
 which `guidance` adds: keyed by option for a choice, by level index for a
@@ -148,18 +152,19 @@ option; a `choice()` field gives both.
 ## Questions built at run time
 
 A question whose options come from data, such as the tools on hand, a tenant's
-categories, or the nodes of a taxonomy, is built from values. `schema()` turns
+categories, or the nodes of a taxonomy, is built from values.
+`systemOne.schema()` turns
 them into the output schema, and the answers come back as a record of
 `Answer`:
 
 ```ts
-import { schema, type Answer } from '@genkit-ai/systemone';
+import { systemOne, type Answer } from '@genkit-ai/systemone';
 
 const response = await ai.generate({
   model: 'typesafe/jev-1.13.0',
   prompt: request,
   output: {
-    jsonSchema: schema({
+    jsonSchema: systemOne.schema({
       tool: {
         type: 'choice',
         instructions: 'Which tool serves the request?',
@@ -175,7 +180,7 @@ const response = await ai.generate({
   },
 });
 const { tool } = response.output as Record<string, Answer>;
-if (tool.confidence! >= 0.8) {
+if ((tool.confidence ?? 0) >= 0.8) {
   return run(tool.choice!);
 }
 ```
@@ -199,13 +204,17 @@ prompt, leave that prompt out of the messages.
 
 - One message is sent as its value: the string of a text part, or the JSON of a
   data part. `prompt: [{ data: value }]` sends any value as an object state,
-  which the vendors recommend so that a question can name a field.
+  so that a question can name a field.
 - Several messages are sent as an array of `{role, content}` records, roles
   included, so a question can refer to what the user said and what the model
   said.
 - With documents attached, the state is `{messages, context}`, each document as
   its content, read as a message's is, or as `{content, metadata}` when it has
   metadata.
+
+Output instructions that the generate loop adds to messages (parts with
+`metadata.purpose: 'output'`, which it adds for the enum format) are dropped,
+as are the ones a history recorded from another model keeps.
 
 A prompt template renders text, so a template that renders JSON needs
 `stateJSON: true` in its config to produce an object state. The JSON is sent as
@@ -281,7 +290,13 @@ the Ollama plugin for chat models has `ollama`.
 
 A constructor takes the same options as `systemOne()`, over the ones it sets
 for its server, such as a key from a secret manager rather than the
-environment: `systemOne.typeSafe({ apiKey })`.
+environment: `systemOne.typeSafe({ apiKey })`. Its `models` add to the
+constructor's, and an entry for one of those changes only the fields it sets.
+
+A server that needs a key refuses to start without one, unless `apiKey` is
+`false`: then each request takes the key from `config.apiKey` or the
+environment variable, so an app starts, and the Dev UI lists the models,
+before a key is set.
 
 ### OpenRouter
 
@@ -323,8 +338,10 @@ Each server is its own plugin, so one app can use several, and the fallback
 middleware moves a request to another server when one is down. Each model's
 answers are calibrated on their own, so check which model answered before
 applying a threshold tuned for one: `responseInfo(response).model`. A fallback
-takes each model's own config, so give every reference the `stateJSON` it
-needs, with `plugin.modelRef(id, config)`, or send the state as a data part.
+reference built with a config, `plugin.modelRef(id, config)`, sends that config
+in place of the request's, and one without inherits the request's, so give a
+reference with a config the `stateJSON` it needs, or send the state as a data
+part.
 
 ### Any other server
 
@@ -368,13 +385,18 @@ const wrapped = systemOne({
 
 `models` describes the models known ahead, keyed by the server's ID or by the
 full model name; they are listed in the Dev UI with whatever the server's
-listing adds, which is kept for five minutes. `fetch` and `headers` are the
-escape hatches to the transport, and the `extra` config merges fields into the
-request body that the plugin does not model, such as a gateway's `session_id`
-or `trace`; it cannot replace a field the request builds itself.
+listing adds, which is kept for five minutes. `fetch`, `timeoutMs`, and
+`headers` are the escape hatches to the transport; the Authorization header the
+API key makes replaces one in `headers`. The `extra` config merges fields into
+the request body that the plugin does not model, such as a gateway's
+`session_id` or `trace`; it cannot replace a field the request builds itself.
 
-Requests that fail to connect, time out, are rate limited, or hit a server
-error are retried twice, with `Retry-After` honored.
+Each attempt is bounded at 30 seconds with the global `fetch`, and by your own
+`fetch` when you pass one, unless `timeoutMs` says otherwise. Requests that fail
+to connect, time out, are rate limited, or hit a server error other than 501
+and 505 are retried twice, with `Retry-After` honored up to 30 seconds. A
+redirect is not followed, since it would take the key along: the request fails,
+and the base URL should name the final address.
 
 Pin a version in production where the server offers one. Confidence thresholds
 tuned against one release do not carry over to the next, nor from one model to

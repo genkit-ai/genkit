@@ -126,9 +126,9 @@ export interface ListedModel {
 }
 
 /**
- * Retry policy, matching the vendor SDK's defaults: two retries after the
- * first attempt, half a second doubling to five, a quarter of jitter, and the
- * server's Retry-After honored when it sends one.
+ * Retry policy, as Genkit Go's System One client has it: two retries after
+ * the first attempt, half a second doubling to five, a quarter of jitter, and
+ * the server's Retry-After honored when it sends one, up to 30 seconds.
  */
 const MAX_RETRIES = 2;
 const RETRY_BASE_MS = 500;
@@ -136,7 +136,7 @@ const RETRY_CAP_MS = 5_000;
 const RETRY_AFTER_CAP_MS = 30_000;
 const MAX_BODY_BYTES = 8 << 20;
 
-/** Bounds one attempt. */
+/** Bounds one attempt when the plugin supplies the transport. */
 export const REQUEST_TIMEOUT_MS = 30_000;
 
 /** Posts questions to one endpoint. */
@@ -154,7 +154,7 @@ export class Client {
       /** Sent on every request, after the authorization header. */
       headers?: Record<string, string>;
       endpoint: Endpoint;
-      /** Bounds one attempt; {@link REQUEST_TIMEOUT_MS} by default. */
+      /** Bounds one attempt; unset leaves it unbounded. */
       timeoutMs?: number;
       /** Waits between attempts; replaced in tests. */
       sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
@@ -165,26 +165,53 @@ export class Client {
     return this.options.endpoint;
   }
 
-  /** Posts one request and decodes the answers. */
+  /**
+   * Posts one request and decodes the answers. `apiKey` replaces the client's
+   * key for this request.
+   */
   async decide(
     model: string,
     req: DecideRequest,
-    signal?: AbortSignal
+    options: { signal?: AbortSignal; apiKey?: string } = {}
   ): Promise<DecideResponse> {
     const { endpoint, baseUrl } = this.options;
+    const { signal } = options;
     let suffix = '';
     let body: unknown = nativeBody(model, req);
     if (endpoint.route) {
-      const routed = endpoint.route(model, body as Record<string, unknown>);
+      const routed = hook(endpoint.name, 'route', () =>
+        endpoint.route!(model, body as Record<string, unknown>)
+      );
+      if (
+        !routed ||
+        typeof routed !== 'object' ||
+        isThenable(routed) ||
+        routed.body === undefined
+      ) {
+        throw new GenkitError({
+          status: 'UNKNOWN',
+          message: `${endpoint.name}: route must return {path, body} with a body, not a promise`,
+        });
+      }
       suffix = routed.path ?? '';
       body = routed.body;
       if (suffix !== '' && !suffix.startsWith('/')) suffix = `/${suffix}`;
     }
+    let payload: string;
+    try {
+      payload = stringifyBody(body);
+    } catch (e) {
+      throw new GenkitError({
+        status: 'INVALID_ARGUMENT',
+        message: `${endpoint.name}: request is not JSON: ${(e as Error)?.message ?? e}`,
+      });
+    }
     const text = await this.send(
       'POST',
       baseUrl + endpoint.path + suffix,
-      stringifyBody(body),
-      signal
+      payload,
+      signal,
+      options.apiKey ?? this.options.apiKey
     );
     let raw: unknown;
     try {
@@ -196,12 +223,12 @@ export class Client {
       });
     }
     if (endpoint.unwrap) {
-      try {
-        raw = endpoint.unwrap(raw);
-      } catch (e) {
+      const parsed = raw;
+      raw = hook(endpoint.name, 'unwrap', () => endpoint.unwrap!(parsed));
+      if (isThenable(raw)) {
         throw new GenkitError({
-          status: e instanceof GenkitError ? e.status : 'UNKNOWN',
-          message: `${endpoint.name}: ${e instanceof GenkitError ? e.originalMessage : ((e as Error)?.message ?? String(e))}`,
+          status: 'UNKNOWN',
+          message: `${endpoint.name}: unwrap must return the response, not a promise`,
         });
       }
     }
@@ -212,7 +239,11 @@ export class Client {
         message: `${endpoint.name}: response is not a System One answer`,
       });
     }
-    if (!resp.answers || typeof resp.answers !== 'object') {
+    if (
+      !resp.answers ||
+      typeof resp.answers !== 'object' ||
+      Array.isArray(resp.answers)
+    ) {
       throw new GenkitError({
         status: 'INTERNAL',
         message: `${endpoint.name}: response carries no answers`,
@@ -242,7 +273,8 @@ export class Client {
         'GET',
         baseUrl + endpoint.modelsPath,
         undefined,
-        signal
+        signal,
+        this.options.apiKey
       ));
     } catch (e) {
       throw e instanceof AttemptFailure ? e.error : e;
@@ -275,13 +307,14 @@ export class Client {
     method: string,
     url: string,
     payload: string,
-    signal?: AbortSignal
+    signal: AbortSignal | undefined,
+    apiKey: string | undefined
   ): Promise<string> {
     const sleep = this.options.sleep ?? abortableSleep;
     for (let attempt = 0; ; attempt++) {
       let failure: AttemptFailure;
       try {
-        return (await this.once(method, url, payload, signal)).text;
+        return (await this.once(method, url, payload, signal, apiKey)).text;
       } catch (e) {
         if (!(e instanceof AttemptFailure)) throw e;
         failure = e;
@@ -310,17 +343,20 @@ export class Client {
     method: string,
     url: string,
     payload: string | undefined,
-    signal?: AbortSignal
+    signal: AbortSignal | undefined,
+    apiKey: string | undefined
   ): Promise<{ text: string }> {
-    const { endpoint, apiKey, headers } = this.options;
+    const { endpoint, headers, timeoutMs } = this.options;
     const requestHeaders: Record<string, string> = { ...headers };
     if (apiKey) requestHeaders['Authorization'] = `Bearer ${apiKey}`;
     requestHeaders['Accept'] = 'application/json';
     if (payload !== undefined) {
       requestHeaders['Content-Type'] = 'application/json';
     }
-    const timeout = AbortSignal.timeout(
-      this.options.timeoutMs ?? REQUEST_TIMEOUT_MS
+    const attempt = anySignal(
+      [signal, timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined].filter(
+        (s): s is AbortSignal => !!s
+      )
     );
     let resp: Response;
     let text: string;
@@ -329,7 +365,10 @@ export class Client {
         method,
         headers: requestHeaders,
         body: payload,
-        signal: signal ? anySignal(signal, timeout) : timeout,
+        signal: attempt.signal,
+        // A redirect is refused rather than followed, since following one
+        // would send the key to wherever the server points.
+        redirect: 'manual',
       });
       text = await readBody(resp);
     } catch (e) {
@@ -353,9 +392,21 @@ export class Client {
         true,
         -1
       );
+    } finally {
+      attempt.release();
     }
     if (resp.ok) return { text };
     const code = resp.status;
+    if (code >= 300 && code < 400) {
+      throw new AttemptFailure(
+        new GenkitError({
+          status: 'FAILED_PRECONDITION',
+          message: `${endpoint.name}: HTTP ${code}: the server redirects, and redirects are not followed; set the base URL to the final one`,
+        }),
+        false,
+        -1
+      );
+    }
     const retry =
       code === 408 ||
       code === 429 ||
@@ -406,22 +457,66 @@ function stopped(
 class BodyTooLarge extends Error {}
 
 /**
- * A signal that aborts when either does, with that one's reason. It is
- * AbortSignal.any, which Node has from 20.3 only.
+ * A signal that aborts when any of the given ones does, with that one's
+ * reason, as AbortSignal.any does, which Node has from 20.3 only. `release`
+ * removes its listeners from the given signals once the attempt is over.
  */
-function anySignal(a: AbortSignal, b: AbortSignal): AbortSignal {
+function anySignal(signals: AbortSignal[]): {
+  signal: AbortSignal | undefined;
+  release: () => void;
+} {
+  if (signals.length === 0) return { signal: undefined, release: () => {} };
   const controller = new AbortController();
-  for (const signal of [a, b]) {
+  const listeners: [AbortSignal, () => void][] = [];
+  for (const signal of signals) {
     if (signal.aborted) {
       controller.abort(signal.reason);
       break;
     }
-    signal.addEventListener('abort', () => controller.abort(signal.reason), {
-      once: true,
-      signal: controller.signal,
+    const onAbort = () => controller.abort(signal.reason);
+    signal.addEventListener('abort', onAbort, { once: true });
+    listeners.push([signal, onAbort]);
+  }
+  return {
+    signal: controller.signal,
+    release: () => {
+      for (const [signal, onAbort] of listeners) {
+        signal.removeEventListener('abort', onAbort);
+      }
+    },
+  };
+}
+
+function isThenable(value: unknown): boolean {
+  return (
+    !!value &&
+    (typeof value === 'object' || typeof value === 'function') &&
+    typeof (value as { then?: unknown }).then === 'function'
+  );
+}
+
+/**
+ * Runs a caller's hook. An error it throws is reported under the endpoint's
+ * name, as UNKNOWN unless it is a GenkitError, whose status is kept, since
+ * neither the request nor the server is known to be at fault. A GenkitError
+ * from `route` goes out as it is, as Genkit Go returns a route's error.
+ */
+function hook<T>(name: string, which: 'route' | 'unwrap', run: () => T): T {
+  try {
+    return run();
+  } catch (e) {
+    if (e instanceof GenkitError) {
+      if (which === 'route') throw e;
+      throw new GenkitError({
+        status: e.status,
+        message: `${name}: ${e.originalMessage}`,
+      });
+    }
+    throw new GenkitError({
+      status: 'UNKNOWN',
+      message: `${name}: ${(e as Error)?.message ?? String(e)}`,
     });
   }
-  return controller.signal;
 }
 
 async function readBody(resp: Response): Promise<string> {

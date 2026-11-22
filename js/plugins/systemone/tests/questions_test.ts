@@ -79,7 +79,7 @@ describe('question helpers', () => {
     assert.strictEqual(s.properties.frustration.properties.score.maximum, 2);
   });
 
-  it('compile into wire questions, options in the order declared', () => {
+  it('compile into wire questions, a typed choice sorted by name', () => {
     const questions = compileQuestions(triageSchema(), 'You triage tickets.');
     assert.deepStrictEqual(wire(questions.department.wire), {
       type: 'choice',
@@ -93,7 +93,7 @@ describe('question helpers', () => {
     });
     assert.match(
       stringifyBody(questions.department.wire.criteria),
-      /^\{"technical":.*"billing":.*"other":/
+      /^\{"billing":.*"other":.*"technical":/
     );
     assert.deepStrictEqual(wire(questions.isUrgent.wire), {
       type: 'noul',

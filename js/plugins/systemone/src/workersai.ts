@@ -51,7 +51,7 @@ export function workersAIRoute(
 }
 
 /**
- * Handles both response shapes the Workers AI REST API is documented with: the
+ * Handles both response shapes Genkit Go's Workers AI plugin reads: the
  * bare model output, and the `{result, success, errors}` envelope the rest of
  * the API uses. A failed envelope's messages are read the way an error
  * response's are.
@@ -72,8 +72,8 @@ export function unwrapWorkersAI(body: unknown): unknown {
 }
 
 /**
- * Escapes one path segment as Go's url.PathEscape does, which the Workers AI
- * paths are documented with: `@`, `:`, `$`, `&`, `+`, and `=` stay as they
+ * Escapes one path segment as Go's url.PathEscape does, so a model ID goes
+ * out as Genkit Go sends it, `@cf` and all: `@`, `:`, `$`, `&`, `+`, and `=` stay as they
  * are, and everything else outside the unreserved set is escaped.
  */
 function pathEscape(segment: string): string {

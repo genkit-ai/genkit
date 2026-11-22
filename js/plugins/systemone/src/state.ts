@@ -292,8 +292,16 @@ export function mediaUrl(
   const colon = url.indexOf(':');
   const scheme = colon < 0 ? '' : url.slice(0, colon).toLowerCase();
   if (scheme === 'http' || scheme === 'https' || scheme === 'gs') {
+    // The URL is not quoted, since it can carry a token; its origin says
+    // which one it is.
+    let origin = scheme;
+    try {
+      origin = new URL(url).origin;
+    } catch {
+      // A URL that does not parse is named by its scheme alone.
+    }
     throw invalidArgument(
-      `the media "${url}" is a URL, and the models take inline media only; download it first and pass it as a data URL`
+      `the media at ${origin} is a URL, and the models take inline media only; download it first and pass it as a data URL`
     );
   }
   if (scheme !== 'data') {

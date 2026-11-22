@@ -29,12 +29,18 @@ export class FakeServer {
   usage: Record<string, unknown> = { input_tokens: 12, output_tokens: 3 };
   /** Wraps a reply in a server's envelope. */
   wrap?: (reply: Record<string, unknown>) => unknown;
-  /** Replies with these statuses first, in order, before answering. */
+  /**
+   * Replies with these first, in order, before answering; one with a
+   * `delayMs` waits that long before it replies.
+   */
   failures: {
     status: number;
     body?: string;
     headers?: Record<string, string>;
+    delayMs?: number;
   }[] = [];
+  /** Replaces the answers to the questions it names. */
+  answers?: Record<string, unknown>;
 
   readonly requests: { url: string; headers: IncomingMessage['headers'] }[] =
     [];
@@ -69,6 +75,10 @@ export class FakeServer {
       this.bodies.push(body);
       const failure = this.failures.shift();
       if (failure) {
+        if (failure.delayMs) {
+          await new Promise((resolve) => setTimeout(resolve, failure.delayMs));
+        }
+        if (res.destroyed) return;
         res.writeHead(failure.status, failure.headers ?? {});
         res.end(failure.body ?? '');
         return;
@@ -119,7 +129,7 @@ export class FakeServer {
       }
       const reply: Record<string, unknown> = {
         model: native.model ?? body.model,
-        answers,
+        answers: { ...answers, ...this.answers },
         usage: this.usage,
       };
       res.writeHead(200, { 'Content-Type': 'application/json' });

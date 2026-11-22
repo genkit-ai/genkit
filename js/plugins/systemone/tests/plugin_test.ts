@@ -22,7 +22,6 @@ import {
   choice,
   noul,
   responseInfo,
-  schema,
   score,
   systemOne,
   type Answer,
@@ -57,6 +56,8 @@ describe('systemOne', () => {
     server.models = undefined;
     server.wrap = undefined;
     server.usage = { input_tokens: 12, output_tokens: 3 };
+    server.answers = undefined;
+    server.failures = [];
   });
 
   const typeSafe = () =>
@@ -172,7 +173,7 @@ describe('systemOne', () => {
       model: 'typesafe/jev-1.13.0',
       prompt: 'Book a table for two.',
       output: {
-        jsonSchema: schema({
+        jsonSchema: systemOne.schema({
           tool: {
             type: 'choice',
             instructions: 'Which tool serves the request?',
@@ -298,6 +299,210 @@ describe('systemOne', () => {
       await assert.rejects(call, message, name);
     }
     assert.strictEqual(server.bodies.length, before, 'nothing was sent');
+  });
+
+  it('clamps a score a hair below the rubric to 0', async () => {
+    server.answers = {
+      frustration: { score: -1e-17, confidence: 0.9, probabilities: {} },
+    };
+    const ai = genkit({ plugins: [typeSafe()] });
+    const { output } = await ai.generate({
+      model: 'typesafe/jev-1.13.0',
+      prompt: ticket,
+      output: { schema: Triage },
+    });
+    assert.strictEqual(output!.frustration.score, 0);
+  });
+
+  it('rejects an answer outside the schema', async () => {
+    const ai = genkit({ plugins: [typeSafe()] });
+    for (const answers of [
+      { department: { choice: 'sales', confidence: 0.9 } },
+      { is_urgent: { noul: 1.5 } },
+    ]) {
+      server.answers = answers;
+      await assert.rejects(
+        ai.generate({
+          model: 'typesafe/jev-1.13.0',
+          prompt: ticket,
+          output: { schema: Triage },
+        }),
+        /Schema validation failed/,
+        JSON.stringify(answers)
+      );
+    }
+  });
+
+  it('lets a caller cancel a request through generate', async () => {
+    server.failures = [{ status: 200, body: '{}', delayMs: 2000 }];
+    const ai = genkit({ plugins: [typeSafe()] });
+    const abort = new AbortController();
+    const started = Date.now();
+    setTimeout(() => abort.abort(), 100);
+    await assert.rejects(
+      ai.generate({
+        model: 'typesafe/jev-1.13.0',
+        prompt: ticket,
+        output: { schema: Triage },
+        abortSignal: abort.signal,
+      }),
+      /CANCELLED|abort/i
+    );
+    assert.ok(Date.now() - started < 1500, 'cancelled before the reply');
+  });
+
+  it('asks one choice() behind two fields', async () => {
+    const Dept = choice({ billing: 'Payments', other: 'Anything else' });
+    const ai = genkit({ plugins: [typeSafe()] });
+    const { output } = await ai.generate({
+      model: 'typesafe/jev-1.13.0',
+      prompt: ticket,
+      output: {
+        schema: z.object({
+          primary: Dept.describe('Which team first?'),
+          secondary: Dept.describe('Which team next?'),
+        }),
+      },
+    });
+    assert.strictEqual(output!.secondary.choice, 'billing');
+    assert.deepStrictEqual(server.bodies.at(-1).questions.secondary, {
+      type: 'choice',
+      instructions: 'Which team next?',
+      criteria: { billing: 'Payments', other: 'Anything else' },
+    });
+  });
+
+  it('reads the info back from the JSON of a response', async () => {
+    const ai = genkit({ plugins: [typeSafe()] });
+    const response = await ai.generate({
+      model: 'typesafe/jev-1.13.0',
+      prompt: ticket,
+      output: { schema: Triage },
+    });
+    const json = JSON.parse(JSON.stringify(response.toJSON()));
+    assert.strictEqual(responseInfo(json).model, 'jev-1.13.0');
+  });
+
+  it('refuses an extra that is not an object, and ignores odd usage', async () => {
+    const ai = genkit({ plugins: [typeSafe()] });
+    const urgent = z.object({ u: noul().describe('Urgent?') });
+    await assert.rejects(
+      ai.generate({
+        model: 'typesafe/jev-1.13.0',
+        prompt: ticket,
+        config: { extra: ['session'] as any },
+        output: { schema: urgent },
+      }),
+      (e: GenkitError) => e.status === 'INVALID_ARGUMENT'
+    );
+    server.usage = { input_tokens: '12', output_tokens: 3, cost: 'free' };
+    const response = await ai.generate({
+      model: 'typesafe/jev-1.13.0',
+      prompt: ticket,
+      output: { schema: urgent },
+    });
+    assert.deepStrictEqual(response.usage, {
+      inputTokens: 0,
+      outputTokens: 3,
+      totalTokens: 3,
+    });
+  });
+
+  it('defers the key to each request with apiKey: false', async () => {
+    delete process.env.TYPESAFE_API_KEY;
+    const ts = systemOne.typeSafe({ apiKey: false, baseUrl: server.url });
+    const ai = genkit({ plugins: [ts] });
+    assert.ok((await ts.list!()).length > 0, 'lists without a key');
+    const urgent = z.object({ u: noul().describe('Urgent?') });
+    await assert.rejects(
+      ai.generate({
+        model: 'typesafe/jev-1.13.0',
+        prompt: ticket,
+        output: { schema: urgent },
+      }),
+      /pass the API key as config.apiKey or set the TYPESAFE_API_KEY/
+    );
+    await ai.generate({
+      model: 'typesafe/jev-1.13.0',
+      prompt: ticket,
+      config: { apiKey: 'request-key' },
+      output: { schema: urgent },
+    });
+    assert.strictEqual(
+      server.requests.at(-1)!.headers.authorization,
+      'Bearer request-key'
+    );
+    process.env.TYPESAFE_API_KEY = 'env-key';
+    await ai.generate({
+      model: 'typesafe/jev-1.13.0',
+      prompt: ticket,
+      output: { schema: urgent },
+    });
+    assert.strictEqual(
+      server.requests.at(-1)!.headers.authorization,
+      'Bearer env-key'
+    );
+  });
+
+  it("adds a constructor's models to its own, keeping theirs", async () => {
+    const ts = systemOne.typeSafe({
+      apiKey: 'k',
+      baseUrl: server.url,
+      models: { 'jev-2.0.0': {}, 'typesafe/jev-latest': { label: 'Latest' } },
+    });
+    const listed = await ts.list!();
+    assert.deepStrictEqual(
+      listed.map((a) => a.name),
+      ['typesafe/jev-1.13.0', 'typesafe/jev-2.0.0', 'typesafe/jev-latest']
+    );
+    assert.strictEqual((listed[2].metadata?.model as any).label, 'Latest');
+
+    const cf = systemOne.workersAI('acct', {
+      apiKey: 't',
+      baseUrl: `${server.url}/client/v4/accounts/{account}`,
+      route: undefined,
+      models: { '@cf/cloudflare/clef-omni': { label: 'Omni' } },
+    });
+    const ai = genkit({ plugins: [cf] });
+    await ai.generate({
+      model: 'cloudflare-decisions/@cf/cloudflare/clef-omni',
+      prompt: [
+        { text: 'Hear it.' },
+        { media: { url: 'data:audio/wav;base64,AA' } },
+      ],
+      output: { schema: z.object({ ok: noul().describe('Fine?') }) },
+    });
+    assert.strictEqual(
+      server.requests.at(-1)!.url,
+      '/client/v4/accounts/acct/ai/run/@cf/cloudflare/clef-omni'
+    );
+    assert.deepStrictEqual(server.bodies.at(-1).audio, [
+      'data:audio/wav;base64,AA',
+    ]);
+  });
+
+  it('refuses a provider with a slash, and references carry the model info', () => {
+    assert.throws(
+      () => systemOne({ provider: 'a/b', baseUrl: server.url }),
+      /contains a slash/
+    );
+    const ref = typeSafe().modelRef('jev-1.13.0', { stateJSON: true });
+    assert.strictEqual(ref.name, 'typesafe/jev-1.13.0');
+    assert.strictEqual(ref.info?.label, 'TypeSafe - jev-1.13.0');
+    assert.strictEqual(ref.info?.supports?.constrained, 'all');
+    assert.deepStrictEqual(ref.config, { stateJSON: true });
+  });
+
+  it('keeps only usable IDs from a listing', async () => {
+    server.models = JSON.stringify({
+      models: [{ name: 'jev-9' }, { name: 42 }, { id: 'x'.repeat(300) }, {}],
+    });
+    const names = (await typeSafe().list!()).map((a) => a.name);
+    assert.deepStrictEqual(names, [
+      'typesafe/jev-1.13.0',
+      'typesafe/jev-9',
+      'typesafe/jev-latest',
+    ]);
   });
 
   it('lists the configured and the listed models, and keeps the listing', async () => {

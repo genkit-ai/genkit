@@ -166,6 +166,44 @@ describe('state', () => {
     );
   });
 
+  it('reads the scheme, ;BASE64, and the media type in any case', () => {
+    assert.deepStrictEqual(mediaUrl('DATA:IMAGE/PNG;BASE64,AAAA'), {
+      dataUrl: 'data:image/png;base64,AAAA',
+      contentType: 'image/png',
+    });
+  });
+
+  it('never quotes a refused URL, which can carry a token', () => {
+    assert.throws(
+      () => mediaUrl('HTTPS://cdn.example.com/a.png?token=secret'),
+      (e: Error) =>
+        /the media at https:\/\/cdn\.example\.com is a URL/.test(e.message) &&
+        !e.message.includes('secret')
+    );
+  });
+
+  it('refuses video to a model that reads images only', () => {
+    assert.throws(
+      () =>
+        buildState(
+          request({
+            messages: [
+              {
+                role: 'user',
+                content: [
+                  { text: 'Look.' },
+                  { media: { url: 'data:video/mp4;base64,AA' } },
+                ],
+              },
+            ],
+          }),
+          false,
+          { images: true, audio: false, video: false }
+        ),
+      /reads no video\/mp4 media/
+    );
+  });
+
   it('percent-decodes a non-base64 data URL', () => {
     assert.deepStrictEqual(mediaUrl('DATA:Image/SVG+XML,%3Csvg%2F%3Eé'), {
       dataUrl: `data:image/svg+xml;base64,${Buffer.from('<svg/>é').toString('base64')}`,
