@@ -21,7 +21,7 @@ from typing import Any, cast
 
 import json5
 
-from genkit._ai._formats._schema import resolve_json_schema_refs
+from genkit._ai._formats._schema import has_local_json_schema_refs, resolve_json_schema_refs
 from genkit._ai._formats._types import FormatHandler, Formatter, FormatterConfig
 from genkit._ai._model import (
     Message,
@@ -141,11 +141,17 @@ class JsonlFormat(Formatter):
 
         instructions = None
         if resolved_schema and resolved_schema.get('items'):
+            instruction_schema = resolved_schema['items']
+            schema_description = 'the following schema'
+            if has_local_json_schema_refs(instruction_schema):
+                # Recursive references are relative to the array root, not to its items.
+                instruction_schema = resolved_schema
+                schema_description = 'the items schema of the following array schema'
             instructions = (
                 'Output should be JSONL format, a sequence of JSON objects (one per line) '
                 'separated by a newline `\\n` character. Each line should be a JSON object '
-                'conforming to the following schema:\n\n'
-                f'```\n{json.dumps(resolved_schema["items"], indent=2)}\n```\n'
+                f'conforming to {schema_description}:\n\n'
+                f'```\n{json.dumps(instruction_schema, indent=2)}\n```\n'
             )
         return FormatHandler(
             chunk_parser=chunk_parser,
