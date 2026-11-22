@@ -17,13 +17,11 @@
 import EventEmitter from 'events';
 import getPort, { portNumbers } from 'get-port';
 import path from 'path';
-import { WebSocket, WebSocketServer } from 'ws';
-import {
-  Action,
-  RunActionResponse,
-  RunActionResponseSchema,
-} from '../types/action.js';
-import * as apis from '../types/apis.js';
+import type { WebSocket } from 'ws';
+import { WebSocketServer } from 'ws';
+import type { Action, RunActionResponse } from '../types/action.js';
+import { RunActionResponseSchema } from '../types/action.js';
+import type * as apis from '../types/apis.js';
 import {
   ReflectionCancelActionParamsSchema,
   ReflectionCancelActionResponseSchema,
@@ -40,9 +38,10 @@ import {
   type ReflectionRegisterParams,
 } from '../types/reflection.js';
 import { logger } from '../utils/logger.js';
-import { DevToolsInfo } from '../utils/utils.js';
-import { BaseRuntimeManager, RuntimeManagerOptions } from './manager.js';
-import { ProcessManager } from './process-manager.js';
+import type { DevToolsInfo } from '../utils/utils.js';
+import type { RuntimeManagerOptions } from './manager.js';
+import { BaseRuntimeManager } from './manager.js';
+import type { ProcessManager } from './process-manager.js';
 import {
   DEFAULT_REFLECTION_V2_HOST,
   REFLECTION_AUTH_ERROR_CODE,
@@ -51,12 +50,8 @@ import {
   reflectionV2Url,
   secretsEqual,
 } from './reflection-auth.js';
-import {
-  GenkitToolsError,
-  RuntimeEvent,
-  RuntimeInfo,
-  StreamingCallback,
-} from './types.js';
+import type { RuntimeInfo, StreamingCallback } from './types.js';
+import { GenkitToolsError, RuntimeEvent } from './types.js';
 
 /** How long a socket may stay open without completing `register`. */
 const REGISTER_TIMEOUT_MS = 10_000;

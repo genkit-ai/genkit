@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { LogRecordData } from '@genkit-ai/tools-common';
+import type { LogRecordData } from '@genkit-ai/tools-common';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';

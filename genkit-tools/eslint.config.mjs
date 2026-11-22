@@ -34,6 +34,7 @@ export default defineConfig(
     ],
     rules: {
       eqeqeq: ['error', 'always', { null: 'ignore' }],
+      '@typescript-eslint/consistent-type-imports': 'error',
       '@typescript-eslint/no-explicit-any': 'off',
       '@typescript-eslint/no-unused-vars': [
         'error',
@@ -75,6 +76,11 @@ export default defineConfig(
       vitest: vitestPlugin,
     },
     rules: {
+      // Allow `importOriginal<typeof import('...')>()` in Vitest `vi.mock()` factories.
+      '@typescript-eslint/consistent-type-imports': [
+        'error',
+        { disallowTypeAnnotations: false },
+      ],
       'vitest/no-focused-tests': 'error',
       'vitest/consistent-test-it': [
         'error',

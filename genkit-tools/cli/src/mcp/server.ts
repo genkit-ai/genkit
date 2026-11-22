@@ -21,7 +21,8 @@ import { defineDocsTool } from '../mcp/docs.js';
 import { defineFlowTools } from './flows.js';
 import { defineRuntimeTools } from './runtime.js';
 import { defineTraceTools } from './trace.js';
-import { McpRuntimeManager, McpToolOptions } from './utils.js';
+import type { McpToolOptions } from './utils.js';
+import { McpRuntimeManager } from './utils.js';
 
 export async function startMcpServer(params: {
   projectRoot: string;

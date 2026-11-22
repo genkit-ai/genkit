@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
+import type { LogRecordData } from '@genkit-ai/tools-common';
 import {
-  LogRecordData,
   type LogQuery,
   type LogQueryResponse,
   type LogStore,

@@ -22,7 +22,7 @@ import {
   validateSchema,
 } from '../eval/index.js';
 import type { BaseRuntimeManager } from '../manager/manager.js';
-import { AppProcessStatus } from '../manager/process-manager.js';
+import type { AppProcessStatus } from '../manager/process-manager.js';
 import { GenkitToolsError, type RuntimeInfo } from '../manager/types.js';
 import type { Action } from '../types/action.js';
 import * as apis from '../types/apis.js';
