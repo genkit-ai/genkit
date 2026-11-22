@@ -139,6 +139,39 @@ def test_run_main_ctrl_c_after_a_clean_main_exits() -> None:
     assert _printed_result(output) is None, output
 
 
+@pytest.mark.parametrize('use_uvloop', [True, False], ids=['uvloop', 'asyncio'])
+@pytest.mark.parametrize('error_type', [ImportError, ModuleNotFoundError])
+def test_run_main_preserves_application_import_errors(
+    monkeypatch: pytest.MonkeyPatch, use_uvloop: bool, error_type: type[ImportError]
+) -> None:
+    """An application's import failure is not a signal to retry its coroutine."""
+    monkeypatch.setenv('GENKIT_REFLECTION_ENABLED', 'false')
+    if use_uvloop:
+        pytest.importorskip('uvloop')
+    else:
+        monkeypatch.setitem(sys.modules, 'uvloop', None)
+    error = error_type('application dependency is missing')
+
+    async def main() -> None:
+        raise error
+
+    with pytest.raises(error_type) as caught:
+        Genkit().run_main(main())
+
+    assert caught.value is error
+
+
+def test_run_main_returns_result_without_uvloop(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The optional uvloop import can fail without preventing main from running."""
+    monkeypatch.setenv('GENKIT_REFLECTION_ENABLED', 'false')
+    monkeypatch.setitem(sys.modules, 'uvloop', None)
+
+    async def main() -> str:
+        return 'done'
+
+    assert Genkit().run_main(main()) == 'done'
+
+
 @pytest.mark.asyncio
 async def test_genkit_run() -> None:
     """Test Genkit.run method."""
