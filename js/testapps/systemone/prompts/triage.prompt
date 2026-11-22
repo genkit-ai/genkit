@@ -1,0 +1,19 @@
+---
+model: openrouter-decisions/typesafe/jev-1.13
+config:
+  stateJSON: true
+input:
+  schema:
+    ticket: string
+    accountTier: string
+output:
+  schema: Triage
+---
+{{role "system"}}
+The state is a support ticket; accountTier is the customer's plan.
+
+{{role "user"}}
+{
+  "ticket": {{json ticket}},
+  "accountTier": {{json accountTier}}
+}
