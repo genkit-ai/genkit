@@ -764,6 +764,10 @@ describe('systemOne', () => {
       { headers: { 'X-Trace': 'a\nb' } },
       { headers: { 'bad header': 'x' } },
       { apiKey: 'key\nwith-newline' },
+      { headers: { 'X-Trace': 'a\u000bb' } },
+      { headers: { 'X-Trace': 'a\u007fb' } },
+      { apiKey: 'key\u000bwith-vt' },
+      { apiKey: 'key\u007fwith-del' },
     ];
     for (const options of cases) {
       assert.throws(
@@ -773,30 +777,44 @@ describe('systemOne', () => {
           /header cannot be sent: its name or value is not valid HTTP/.test(
             e.message
           ) &&
-          !/a\nb|with-newline/.test(e.message),
+          !/with-|a[\n\u000b\u007f]b/.test(e.message),
         JSON.stringify(options)
       );
     }
+    // A horizontal tab is a valid field value.
+    assert.ok(
+      systemOne({
+        provider: 'x',
+        baseUrl: server.url,
+        headers: { 'X-Trace': 'a\tb' },
+      })
+    );
     const ai = genkit({
       plugins: [systemOne.typeSafe({ apiKey: false, baseUrl: server.url })],
     });
-    const before = server.requests.length;
-    await assert.rejects(
-      ai.generate({
-        model: 'typesafe/jev-1.13.0',
-        prompt: ticket,
-        config: { apiKey: 'key\nwith-newline' },
-        output: { schema: z.object({ u: noul().describe('Urgent?') }) },
-      }),
-      (e: GenkitError) =>
-        e.status === 'INVALID_ARGUMENT' &&
-        /the Authorization header cannot be sent/.test(e.message) &&
-        !e.message.includes('with-newline') &&
-        /header cannot be sent: its name or value is not valid HTTP/.test(
-          e.message
-        )
-    );
-    assert.strictEqual(server.requests.length, before, 'nothing was sent');
+    for (const apiKey of [
+      'key\nwith-newline',
+      'key\u000bwith-vt',
+      'key\u007fwith-del',
+    ]) {
+      const before = server.requests.length;
+      await assert.rejects(
+        ai.generate({
+          model: 'typesafe/jev-1.13.0',
+          prompt: ticket,
+          config: { apiKey },
+          output: { schema: z.object({ u: noul().describe('Urgent?') }) },
+        }),
+        (e: GenkitError) =>
+          e.status === 'INVALID_ARGUMENT' &&
+          /the Authorization header cannot be sent/.test(e.message) &&
+          !e.message.includes('with-') &&
+          /header cannot be sent: its name or value is not valid HTTP/.test(
+            e.message
+          )
+      );
+      assert.strictEqual(server.requests.length, before, 'nothing was sent');
+    }
   });
 
   it('refuses a baseUrl, a timeoutMs, or models it cannot use', () => {

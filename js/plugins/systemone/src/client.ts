@@ -455,6 +455,10 @@ export function buildHeaders(
   const out = new Headers();
   const set = (name: string, value: string) => {
     try {
+      // Headers accepts some control bytes, such as a vertical tab or DEL,
+      // that the transport then refuses on every attempt, so a field value
+      // is checked here too: no control byte but the horizontal tab.
+      if (/[\x00-\x08\x0a-\x1f\x7f]/.test(value)) throw new Error();
       out.set(name, value);
     } catch {
       // A name that is not a valid token is not quoted either.
