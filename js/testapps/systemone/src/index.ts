@@ -25,12 +25,16 @@ import {
 } from '@genkit-ai/systemone';
 import { genkit, z } from 'genkit';
 
-// jev, reached through OpenRouter's Decisions API. The key is read from
-// OPENROUTER_API_KEY on each request, so the Dev UI starts without one.
+// jev, reached through OpenRouter's Decisions API, with OPENROUTER_API_KEY.
+// Without it the plugin is created with apiKey: false, so the Dev UI still
+// starts and lists the models, and a flow fails with an error that says how
+// to give the key.
 const model = 'openrouter-decisions/typesafe/jev-1.13';
 
 const ai = genkit({
-  plugins: [systemOne.openRouter({ apiKey: false })],
+  plugins: [
+    systemOne.openRouter({ apiKey: process.env.OPENROUTER_API_KEY || false }),
+  ],
   promptDir: 'prompts',
 });
 

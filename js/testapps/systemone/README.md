@@ -7,8 +7,9 @@ The flows follow the Genkit Java System One sample.
 
 The output schema is the question set: each field is one question, built with
 `choice()`, `score()`, or `noul()` from `@genkit-ai/systemone`, its
-`.describe()` is the instructions, and the answer lands in the field with a
-probability for every option.
+`.describe()` is the instructions, and the answer lands in the field: a choice
+or a score with its probabilities, a yes/no question as the probability that
+the answer is yes.
 
 ## Flows
 
