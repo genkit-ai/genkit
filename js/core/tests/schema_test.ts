@@ -456,6 +456,72 @@ describe('validateSchema() with extension keywords', () => {
         valid: { a: 1 },
         invalid: { a: 'one' },
       },
+      {
+        at: 'allOf',
+        jsonSchema: {
+          allOf: [{ type: 'number', 'x-hint': 'n' }, { minimum: 0 }],
+        },
+        valid: 1,
+        invalid: -1,
+      },
+      {
+        at: 'oneOf',
+        jsonSchema: {
+          oneOf: [
+            { type: 'number', 'x-hint': 'n' },
+            { type: 'string', 'x-hint': 's' },
+          ],
+        },
+        valid: 'a',
+        invalid: true,
+      },
+      {
+        at: 'not',
+        jsonSchema: { not: { type: 'string', 'x-hint': 's' } },
+        valid: 1,
+        invalid: 'a',
+      },
+      {
+        at: 'if/then/else',
+        jsonSchema: {
+          if: { type: 'number', 'x-hint': 'if' },
+          then: { minimum: 0, 'x-hint': 'then' },
+          else: { type: 'string', 'x-hint': 'else' },
+        },
+        valid: 1,
+        invalid: true,
+      },
+      {
+        at: 'tuple items',
+        jsonSchema: {
+          type: 'array',
+          items: [
+            { type: 'number', 'x-hint': 'first' },
+            { type: 'string', 'x-hint': 'second' },
+          ],
+        },
+        valid: [1, 'a'],
+        invalid: ['a', 1],
+      },
+      {
+        at: 'patternProperties',
+        jsonSchema: {
+          type: 'object',
+          patternProperties: { '^n_': { type: 'number', 'x-hint': 'n' } },
+        },
+        valid: { n_a: 1 },
+        invalid: { n_a: 'one' },
+      },
+      {
+        at: 'definitions reached by $ref',
+        jsonSchema: {
+          type: 'object',
+          properties: { level: { $ref: '#/definitions/level' } },
+          definitions: { level: { type: 'number', 'x-hint': 'n' } },
+        },
+        valid: { level: 1 },
+        invalid: { level: 'low' },
+      },
     ];
   for (const { at, jsonSchema, valid, invalid } of positions) {
     it(`accepts x- keywords in ${at} and still validates there`, () => {
@@ -463,6 +529,27 @@ describe('validateSchema() with extension keywords', () => {
       assert.strictEqual(validateSchema(invalid, { jsonSchema }).valid, false);
     });
   }
+
+  it('leaves contentSchema to Ajv, which does not compile it', () => {
+    const jsonSchema = {
+      type: 'string',
+      contentMediaType: 'application/json',
+      contentSchema: { type: 'object', 'x-hint': 'a ticket' },
+    };
+    assert.strictEqual(validateSchema('{}', { jsonSchema }).valid, true);
+  });
+
+  it('does not resolve a $ref into an x- keyword, which the copy drops', () => {
+    const jsonSchema = {
+      type: 'object',
+      properties: { level: { $ref: '#/x-defs/level' } },
+      'x-defs': { level: { type: 'number' } },
+    };
+    assert.throws(
+      () => validateSchema({ level: 1 }, { jsonSchema }),
+      /can't resolve reference #\/x-defs\/level/
+    );
+  });
 
   it('keeps x- keys inside enum, default, and examples values', () => {
     const jsonSchema = {
