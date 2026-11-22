@@ -91,3 +91,10 @@ export const ai = genkit({
 const hello = ai.defineFlow('hello', () => 'hello');
 expressHandler(hello);
 appRoute(hello);
+
+const expressEntry = import.meta.resolve('@genkit-ai/express');
+if (!expressEntry.endsWith('.mjs')) {
+  throw new Error(
+    `@genkit-ai/express resolved to ${expressEntry} in an ESM app, want the .mjs build`
+  );
+}
