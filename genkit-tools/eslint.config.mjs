@@ -65,6 +65,7 @@ export default defineConfig(
         'error',
         'error-handling-correctness-only',
       ],
+      '@typescript-eslint/only-throw-error': 'error',
     },
   },
   {
