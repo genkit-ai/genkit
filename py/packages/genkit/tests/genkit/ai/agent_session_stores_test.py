@@ -329,6 +329,35 @@ async def test_branched_session_newest_leaf_wins_by_default() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('file_backed', [False, True])
+@pytest.mark.parametrize(
+    ('older_time', 'newer_time'),
+    [
+        ('2026-06-18T12:00:00Z', '2026-06-18T12:00:00.100Z'),
+        ('2026-06-18T14:00:00+02:00', '2026-06-18T12:00:01Z'),
+        ('2026-06-18T12:00:00.100Z', '2026-06-18T12:00:00.100000+00:00'),
+        ('2026-06-18T12:00:00', '2026-06-18T12:00:00.100Z'),
+        ('legacy-a', 'legacy-z'),
+    ],
+)
+async def test_branched_session_compares_creation_instants(
+    tmp_path: Path, file_backed: bool, older_time: str, newer_time: str
+) -> None:
+    store = FileSessionStore(str(tmp_path)) if file_backed else InMemorySessionStore()
+    # The equivalent-instant case must use the snapshot ID to break the tie,
+    # regardless of timestamp spelling or insertion order.
+    newer = make_snapshot('sess-time', 'newer', created_at=newer_time)
+    older = make_snapshot('sess-time', 'older', created_at=older_time)
+    newer.snapshot_id = 'z-newer'
+    older.snapshot_id = 'a-older'
+    await store.save_snapshot(newer.snapshot_id, lambda _: newer)
+    await store.save_snapshot(older.snapshot_id, lambda _: older)
+
+    leaf = await store.get_snapshot(session_id='sess-time')
+    assert leaf is not None and leaf.snapshot_id == newer.snapshot_id
+
+
+@pytest.mark.asyncio
 async def test_branched_session_rejected_when_opted_in() -> None:
     store = InMemorySessionStore(reject_ambiguous_session=True)
     session_id = 'sess-fork-strict'
