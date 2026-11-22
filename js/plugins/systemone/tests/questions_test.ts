@@ -22,6 +22,7 @@ import {
   answersText,
   compileQuestions,
   enumQuestion,
+  wireQuestions,
 } from '../src/protocol.js';
 import {
   answerKind,
@@ -340,6 +341,35 @@ describe('option names and shapes', () => {
     assert.deepStrictEqual(wire(c.x.wire.criteria), {
       constructor: 'A builder',
     });
+  });
+
+  it('take any question ID and option name, __proto__ included', () => {
+    // A runtime question set read from JSON, as from a tenant's config.
+    const questions = JSON.parse(
+      '{"__proto__": {"type": "choice", "instructions": "Which?", "options": [{"name": "__proto__", "guidance": {"what": "The odd one"}}, {"name": "plain"}]}}'
+    );
+    const s = schema(questions);
+    assert.deepStrictEqual(s.required, ['__proto__']);
+    assert.ok(Object.hasOwn(s.properties, '__proto__'));
+    const q = compileQuestions(s, '');
+    assert.deepStrictEqual(Object.keys(q), ['__proto__']);
+    assert.strictEqual(
+      stringifyBody(wireQuestions(q)),
+      '{"__proto__":{"type":"choice","instructions":"Which?","criteria":{"__proto__":{"what":"The odd one"},"plain":"plain"}}}'
+    );
+    const text = answersText(
+      JSON.parse('{"__proto__": {"choice": "__proto__", "confidence": 0.9}}'),
+      q,
+      false
+    );
+    assert.strictEqual(
+      text,
+      '{"__proto__":{"choice":"__proto__","confidence":0.9}}'
+    );
+    assert.throws(
+      () => answersText({}, q, false),
+      /no answer for question "__proto__"/
+    );
   });
 
   it('survive one choice() behind two fields', () => {

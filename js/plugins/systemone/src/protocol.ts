@@ -146,30 +146,30 @@ export function compileQuestions(
     const instructions = questionInstructions(id, prop, lead);
     switch (kind) {
       case 'choice':
-        questions[id] = {
+        setOwn(questions, id, {
           wire: {
             type: kind,
             instructions,
             criteria: choiceCriteria(id, prop),
           },
-        };
+        });
         break;
       case 'score': {
         const { criteria, labels } = scoreCriteria(id, prop);
-        questions[id] = {
+        setOwn(questions, id, {
           wire: { type: kind, instructions, criteria },
           labels,
-        };
+        });
         break;
       }
       case 'noul': {
         const criteria = noulCriteria(id, prop);
-        questions[id] = {
+        setOwn(questions, id, {
           wire:
             criteria === undefined
               ? { type: kind, instructions }
               : { type: kind, instructions, criteria },
-        };
+        });
         break;
       }
       default:
@@ -355,8 +355,22 @@ function noulCriteria(id: string, prop: JsonObject): JsonObject | undefined {
 }
 
 /** An own property of an object, never one it inherits. */
-function own(object: JsonObject, key: string): unknown {
+export function own(object: JsonObject, key: string): unknown {
   return Object.hasOwn(object, key) ? object[key] : undefined;
+}
+
+/**
+ * Sets an own data property. A question ID or an option name is any string,
+ * and assigning `__proto__` on a plain object would set its prototype
+ * instead of adding the key.
+ */
+export function setOwn(object: JsonObject, key: string, value: unknown) {
+  Object.defineProperty(object, key, {
+    value,
+    enumerable: true,
+    writable: true,
+    configurable: true,
+  });
 }
 
 /**
@@ -464,7 +478,7 @@ export function answersText(
 ): string {
   const projected: Record<string, JsonObject> = {};
   for (const id of Object.keys(questions).sort()) {
-    const answer = answers[id];
+    const answer = own(answers, id);
     if (!isObject(answer)) {
       throw new GenkitError({
         status: 'INTERNAL',
@@ -484,7 +498,7 @@ export function answersText(
         fields.score = Math.min(Math.max(fields.score, 0), q.labels.length - 1);
       }
     }
-    projected[id] = fields;
+    setOwn(projected, id, fields);
   }
   if (isEnum) {
     const choice = projected[ENUM_QUESTION_ID]?.choice;

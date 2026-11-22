@@ -22,6 +22,8 @@ import {
   KIND_KEYWORD,
   LEVELS_KEYWORD,
   TRUE_KEYWORD,
+  own,
+  setOwn,
 } from './protocol.js';
 
 /**
@@ -208,7 +210,7 @@ function guidanceOf(
   if (!guidance) return undefined;
   const wire: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(guidance)) {
-    if (value !== undefined && value !== null) wire[key] = value;
+    if (value !== undefined && value !== null) setOwn(wire, key, value);
   }
   return Object.keys(wire).length > 0 ? wire : undefined;
 }
@@ -339,10 +341,10 @@ export function schema(questions: Record<string, Question>): JSONSchema {
   const ids = Object.keys(questions).sort();
   const properties: Record<string, JSONSchema> = {};
   for (const id of ids) {
-    const q = questions[id];
+    const q = own(questions, id) as Question | undefined;
     // A missing question is left unmarked, so the request is refused as
     // asking nothing.
-    properties[id] = q ? runtimeQuestionSchema(q) : {};
+    setOwn(properties, id, q ? runtimeQuestionSchema(q) : {});
   }
   return {
     type: 'object',
@@ -403,7 +405,7 @@ function choiceSchema(options: ChoiceOption[]): JSONSchema {
   const guidance: Record<string, unknown> = {};
   for (const option of options ?? []) {
     if (option.guidance !== undefined && option.guidance !== null) {
-      guidance[option.name] = option.guidance;
+      setOwn(guidance, option.name, option.guidance);
     }
   }
   return answerSchema(
