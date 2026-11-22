@@ -1015,6 +1015,27 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
+  plugins/systemone:
+    devDependencies:
+      '@types/node':
+        specifier: ^20.11.16
+        version: 20.19.37
+      genkit:
+        specifier: workspace:*
+        version: link:../../genkit
+      rimraf:
+        specifier: ^6.0.1
+        version: 6.1.3
+      tsup:
+        specifier: ^8.3.5
+        version: 8.5.1(jiti@2.7.0)(postcss@8.5.30)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.9.1)
+      tsx:
+        specifier: ^4.19.2
+        version: 4.21.0
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
   plugins/vercel-ai:
     dependencies:
       genkit:

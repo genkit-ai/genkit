@@ -1,0 +1,16 @@
+---
+model: typesafe/jev-1.13.0
+config:
+  stateJSON: true
+input:
+  schema:
+    ticket: string
+    tier: string
+output:
+  schema: Triage
+---
+{{role "system"}}
+The state is a support ticket; tier is the customer's plan.
+
+{{role "user"}}
+{"ticket": {{json ticket}}, "tier": {{json tier}} }

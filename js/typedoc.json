@@ -18,7 +18,8 @@
     "plugins/dev-local-vectorstore",
     "plugins/ollama",
     "plugins/chroma",
-    "plugins/pinecone"
+    "plugins/pinecone",
+    "plugins/systemone"
   ],
   "name": "Genkit JS API reference",
   "out": "api-refs-js",
