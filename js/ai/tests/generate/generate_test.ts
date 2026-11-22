@@ -16,6 +16,7 @@
 
 import {
   GenkitError,
+  annotateSchema,
   defineDynamicActionProvider,
   z,
   type PluginProvider,
@@ -1036,6 +1037,47 @@ describe('generate', () => {
 
     const context = JSON.parse(response.text.substring('Context: '.length));
     assert.deepStrictEqual(context.val, ['A', 'B']);
+  });
+});
+
+describe('generate with extension keywords', () => {
+  it('validates a constrained answer against a schema with x- keywords', async () => {
+    const registry = new Registry();
+    let schemaSeen: any;
+    defineModel(
+      registry,
+      {
+        apiVersion: 'v2',
+        name: 'constrainedModel',
+        supports: { constrained: 'all', output: ['json'] },
+      },
+      async (request) => {
+        schemaSeen = request.output?.schema;
+        return {
+          message: {
+            role: 'model',
+            content: [{ text: JSON.stringify({ urgent: { noul: 0.8 } }) }],
+          },
+          finishReason: 'stop',
+        };
+      }
+    );
+
+    const response = await generate(registry, {
+      model: 'constrainedModel',
+      prompt: 'The server is down and customers are waiting.',
+      output: {
+        schema: z.object({
+          urgent: annotateSchema(
+            z.object({ noul: z.number() }).describe('Is the ticket urgent?'),
+            { 'x-question': 'noul' }
+          ),
+        }),
+      },
+    });
+
+    assert.deepStrictEqual(response.output, { urgent: { noul: 0.8 } });
+    assert.strictEqual(schemaSeen.properties.urgent['x-question'], 'noul');
   });
 });
 

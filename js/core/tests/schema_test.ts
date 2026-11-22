@@ -321,6 +321,76 @@ describe('annotateSchema()', () => {
   });
 });
 
+describe('validateSchema() with extension keywords', () => {
+  const jsonSchema = {
+    type: 'object',
+    'x-kind': 'answer',
+    properties: {
+      answer: {
+        type: 'number',
+        'x-levels': ['low', 'high'],
+        'x-guidance': { '0': { what: 'low' } },
+      },
+    },
+    required: ['answer'],
+  };
+
+  it('accepts x- keywords as annotations', () => {
+    assert.strictEqual(
+      validateSchema({ answer: 1 }, { jsonSchema }).valid,
+      true
+    );
+    assert.strictEqual(
+      validateSchema({ answer: 'high' }, { jsonSchema }).valid,
+      false
+    );
+  });
+
+  it('accepts the keywords annotateSchema adds', () => {
+    const schema = z.object({
+      field: annotateSchema(z.string(), { 'x-genkit-widget': 'textarea' }),
+    });
+    assert.strictEqual(validateSchema({ field: 'hi' }, { schema }).valid, true);
+    assert.strictEqual(validateSchema({ field: 1 }, { schema }).valid, false);
+  });
+
+  it('keeps properties named x- and x- keys inside values', () => {
+    const jsonSchema = {
+      type: 'object',
+      properties: {
+        'x-id': { type: 'number' },
+        tag: { const: { 'x-kind': 'a' } },
+      },
+      required: ['x-id'],
+    };
+    assert.strictEqual(
+      validateSchema({ 'x-id': 1, tag: { 'x-kind': 'a' } }, { jsonSchema })
+        .valid,
+      true
+    );
+    assert.strictEqual(
+      validateSchema({ 'x-id': 'one' }, { jsonSchema }).valid,
+      false
+    );
+    assert.strictEqual(
+      validateSchema({ 'x-id': 1, tag: { 'x-kind': 'b' } }, { jsonSchema })
+        .valid,
+      false
+    );
+  });
+
+  it('still rejects unknown keywords without the x- prefix', () => {
+    assert.throws(
+      () =>
+        validateSchema(
+          { answer: 1 },
+          { jsonSchema: { type: 'object', requird: ['answer'] } }
+        ),
+      /unknown keyword: "requird"/
+    );
+  });
+});
+
 describe('disableSchemaCodeGeneration()', () => {
   let compileMock: any;
 
@@ -358,6 +428,20 @@ describe('disableSchemaCodeGeneration()', () => {
     const errorAtFoo = result.errors?.find((e) => e.path === 'foo');
     assert.ok(errorAtFoo, 'Should have error at foo');
     assert.strictEqual(compileMock.mock.callCount(), 0);
+  });
+
+  it('should accept x- keywords', () => {
+    disableSchemaCodeGeneration();
+    const result = validateSchema(
+      { foo: true },
+      {
+        jsonSchema: {
+          type: 'object',
+          properties: { foo: { type: 'boolean', 'x-hint': 'a flag' } },
+        },
+      }
+    );
+    assert.strictEqual(result.valid, true);
   });
 
   it('should strip undefined values before validating', () => {
