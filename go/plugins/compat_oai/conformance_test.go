@@ -28,6 +28,7 @@ import (
 	"github.com/firebase/genkit/go/plugins/compat_oai/deepseek"
 	"github.com/firebase/genkit/go/plugins/compat_oai/kimi"
 	"github.com/firebase/genkit/go/plugins/compat_oai/openrouter"
+	"github.com/firebase/genkit/go/plugins/compat_oai/orcarouter"
 	"github.com/firebase/genkit/go/plugins/compat_oai/xai"
 	"github.com/firebase/genkit/go/plugins/compat_oai/zai"
 )
@@ -61,6 +62,7 @@ func TestConfigSchemaConformance(t *testing.T) {
 	t.Setenv("DEEPSEEK_API_KEY", "test-key")
 	t.Setenv("KIMI_API_KEY", "test-key")
 	t.Setenv("OPENROUTER_API_KEY", "test-key")
+	t.Setenv("ORCAROUTER_API_KEY", "test-key")
 	t.Setenv("XAI_API_KEY", "test-key")
 	t.Setenv("ZAI_API_KEY", "test-key")
 
@@ -80,6 +82,7 @@ func TestConfigSchemaConformance(t *testing.T) {
 		{&deepseek.DeepSeek{}, "deepseek-v4-pro"},
 		{&kimi.Kimi{}, "kimi-k3"},
 		{&openrouter.OpenRouter{}, "openai/gpt-5"},
+		{&orcarouter.OrcaRouter{}, "openai/gpt-4o"},
 		{&xai.XAI{}, "grok-4.5"},
 		{&zai.ZAI{}, "glm-5.1"},
 	}
@@ -235,6 +238,7 @@ func TestClosedEnumsUseNamedTypes(t *testing.T) {
 		"deepseek":   deepseek.ChatConfig{},
 		"kimi":       kimi.ChatConfig{},
 		"openrouter": openrouter.ChatConfig{},
+		"orcarouter": orcarouter.ChatConfig{},
 		"xai":        xai.ChatConfig{},
 		"zai":        zai.ChatConfig{},
 	}
