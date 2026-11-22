@@ -379,6 +379,117 @@ describe('validateSchema() with extension keywords', () => {
     );
   });
 
+  it('rejects a typo beside an x- keyword, at the root and nested', () => {
+    assert.throws(
+      () =>
+        validateSchema(
+          { answer: 1 },
+          {
+            jsonSchema: {
+              type: 'object',
+              'x-kind': 'answer',
+              requird: ['answer'],
+            },
+          }
+        ),
+      /unknown keyword: "requird"/
+    );
+    assert.throws(
+      () =>
+        validateSchema(
+          { answer: { score: 1 } },
+          {
+            jsonSchema: {
+              type: 'object',
+              properties: {
+                answer: {
+                  type: 'object',
+                  'x-levels': ['low', 'high'],
+                  requird: ['score'],
+                },
+              },
+            },
+          }
+        ),
+      /unknown keyword: "requird"/
+    );
+  });
+
+  const positions: { at: string; jsonSchema: any; valid: any; invalid: any }[] =
+    [
+      {
+        at: 'items',
+        jsonSchema: {
+          type: 'array',
+          items: { type: 'number', 'x-hint': 'a number' },
+        },
+        valid: [1, 2],
+        invalid: [1, 'two'],
+      },
+      {
+        at: 'anyOf',
+        jsonSchema: {
+          anyOf: [
+            { type: 'number', 'x-hint': 'a number' },
+            { type: 'boolean', 'x-hint': 'a flag' },
+          ],
+        },
+        valid: true,
+        invalid: 'text',
+      },
+      {
+        at: '$defs reached by $ref',
+        jsonSchema: {
+          type: 'object',
+          properties: { level: { $ref: '#/$defs/level' } },
+          $defs: { level: { type: 'number', 'x-levels': ['low', 'high'] } },
+        },
+        valid: { level: 1 },
+        invalid: { level: 'low' },
+      },
+      {
+        at: 'additionalProperties',
+        jsonSchema: {
+          type: 'object',
+          additionalProperties: { type: 'number', 'x-hint': 'a score' },
+        },
+        valid: { a: 1 },
+        invalid: { a: 'one' },
+      },
+    ];
+  for (const { at, jsonSchema, valid, invalid } of positions) {
+    it(`accepts x- keywords in ${at} and still validates there`, () => {
+      assert.strictEqual(validateSchema(valid, { jsonSchema }).valid, true);
+      assert.strictEqual(validateSchema(invalid, { jsonSchema }).valid, false);
+    });
+  }
+
+  it('keeps x- keys inside enum, default, and examples values', () => {
+    const jsonSchema = {
+      type: 'object',
+      enum: [{ 'x-kind': 'a' }],
+      default: { 'x-kind': 'a' },
+      examples: [{ 'x-kind': 'a' }],
+    };
+    assert.strictEqual(
+      validateSchema({ 'x-kind': 'a' }, { jsonSchema }).valid,
+      true
+    );
+    assert.strictEqual(
+      validateSchema({ 'x-kind': 'b' }, { jsonSchema }).valid,
+      false
+    );
+  });
+
+  it('keeps a key named __proto__ an own key of the copy, not its prototype', () => {
+    // Ajv ignores a __proto__ key; a copy that set it as the prototype would
+    // make its required list apply.
+    const jsonSchema = JSON.parse(
+      '{"type": "object", "x-kind": "a", "__proto__": {"required": ["a"]}}'
+    );
+    assert.strictEqual(validateSchema({}, { jsonSchema }).valid, true);
+  });
+
   it('still rejects unknown keywords without the x- prefix', () => {
     assert.throws(
       () =>

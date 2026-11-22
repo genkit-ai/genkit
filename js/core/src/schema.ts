@@ -278,32 +278,34 @@ function withoutExtensionKeywords(schema: unknown): unknown {
   if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
     return schema;
   }
-  const out: Record<string, unknown> = {};
+  // Built from entries, so that a key such as `__proto__` stays an own key
+  // of the copy, as it is of the schema, rather than setting its prototype.
+  const entries: [string, unknown][] = [];
   for (const [key, value] of Object.entries(schema)) {
     if (key.startsWith('x-')) continue;
+    let copy: unknown = value;
     if (SUBSCHEMA_KEYWORDS.includes(key)) {
-      out[key] = Array.isArray(value)
+      copy = Array.isArray(value)
         ? value.map(withoutExtensionKeywords)
         : withoutExtensionKeywords(value);
     } else if (SUBSCHEMA_LIST_KEYWORDS.includes(key) && Array.isArray(value)) {
-      out[key] = value.map(withoutExtensionKeywords);
+      copy = value.map(withoutExtensionKeywords);
     } else if (
       SUBSCHEMA_MAP_KEYWORDS.includes(key) &&
       value &&
       typeof value === 'object' &&
       !Array.isArray(value)
     ) {
-      out[key] = Object.fromEntries(
+      copy = Object.fromEntries(
         Object.entries(value).map(([name, sub]) => [
           name,
           withoutExtensionKeywords(sub),
         ])
       );
-    } else {
-      out[key] = value;
     }
+    entries.push([key, copy]);
   }
-  return out;
+  return Object.fromEntries(entries);
 }
 
 /**
