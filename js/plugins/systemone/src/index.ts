@@ -185,7 +185,9 @@ export interface SystemOneOptions {
    * a local one, is reached with none. `false` defers the key to each
    * request, which takes it from `config.apiKey` or the constructor's
    * environment variable, so an app starts, and the Dev UI lists the models,
-   * without one.
+   * without one. A key in `config.apiKey` is recorded in traces and the Dev UI
+   * like any other config field, so where traces are kept, prefer the
+   * environment variable or this option.
    */
   apiKey?: string | false;
   /**

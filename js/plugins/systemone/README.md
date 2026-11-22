@@ -296,7 +296,9 @@ constructor's, and an entry for one of those changes only the fields it sets.
 A server that needs a key refuses to start without one, unless `apiKey` is
 `false`: then each request takes the key from `config.apiKey` or the
 environment variable, so an app starts, and the Dev UI lists the models,
-before a key is set.
+before a key is set. A key passed in `config.apiKey` is recorded in traces and
+the Dev UI like any other config field, so where traces are kept, prefer the
+environment variable or the plugin's `apiKey`.
 
 ### OpenRouter
 

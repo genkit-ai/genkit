@@ -62,7 +62,9 @@ export const SystemOneConfigSchema = z.object({
     ),
   /**
    * The API key for this request, in place of the plugin's. A plugin created
-   * with `apiKey: false` takes its key here.
+   * with `apiKey: false` takes its key here. It is recorded in traces and the
+   * Dev UI like any other config field, so where traces are kept, prefer the
+   * environment variable or the plugin's `apiKey`.
    */
   apiKey: z
     .string()
