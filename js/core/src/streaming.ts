@@ -14,16 +14,53 @@
  * limitations under the License.
  */
 
-import { GenkitError } from './error.js';
+import { GenkitError, isGenkitError } from './error.js';
+
+const STREAM_NOT_FOUND_ERROR_BRAND = Symbol.for('genkit.streamNotFoundError');
 
 /**
  * Error thrown when a stream cannot be found.
+ *
+ * `instanceof StreamNotFoundError` also matches one created by another copy of
+ * `@genkit-ai/core` in the same process.
  */
 export class StreamNotFoundError extends GenkitError {
   constructor(message: string) {
     super({ status: 'NOT_FOUND', message });
     this.name = 'StreamNotFoundError';
   }
+
+  /**
+   * Matches a `StreamNotFoundError` from any copy of `@genkit-ai/core`.
+   * Subclasses keep the plain prototype check.
+   */
+  static [Symbol.hasInstance](instance: unknown): boolean {
+    if (Function.prototype[Symbol.hasInstance].call(this, instance)) {
+      return true;
+    }
+    return this === StreamNotFoundError && isStreamNotFoundError(instance);
+  }
+}
+
+Object.defineProperty(
+  StreamNotFoundError.prototype,
+  STREAM_NOT_FOUND_ERROR_BRAND,
+  {
+    value: true,
+  }
+);
+
+/**
+ * Returns whether `e` is a {@link StreamNotFoundError}, including one created
+ * by another copy of `@genkit-ai/core` in the same process.
+ */
+export function isStreamNotFoundError(e: unknown): e is StreamNotFoundError {
+  return (
+    isGenkitError(e) &&
+    (e as { [STREAM_NOT_FOUND_ERROR_BRAND]?: unknown })[
+      STREAM_NOT_FOUND_ERROR_BRAND
+    ] === true
+  );
 }
 
 /**

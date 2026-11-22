@@ -35,8 +35,10 @@ import { dirname, resolve } from 'node:path';
  *
  * 2. **Dual-instance / `instanceof` breakage** – If some paths point at `.js`
  *    and others at `.mjs`, Node loads the same module twice (CJS + ESM).
- *    Classes like `GenkitError` then have two distinct constructors and
- *    `instanceof` checks fail across the boundary.
+ *    Classes then have two distinct constructors and `instanceof` checks fail
+ *    across the boundary. `GenkitError` and `StreamNotFoundError` carry a
+ *    `Symbol.for` brand that survives this, but other classes and
+ *    module-level state do not.
  *
  * The plugin handles two cases:
  *
