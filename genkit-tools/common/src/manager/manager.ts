@@ -942,7 +942,7 @@ export class RuntimeManager extends BaseRuntimeManager {
           )
         ) {
           if (
-            runtimeInfo.reflectionApiSpecVersion !=
+            runtimeInfo.reflectionApiSpecVersion !==
             GENKIT_REFLECTION_API_SPEC_VERSION
           ) {
             if (

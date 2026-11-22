@@ -232,7 +232,7 @@ describe('local-file-store', () => {
       const spanId = `abc_${i}`;
       const traceId = TRACE_ID + `_${i}`;
       const spanData = span(traceId, spanId, 100 + i, 100 + i);
-      if (i % 2 == 0) {
+      if (i % 2 === 0) {
         spanData.attributes['genkit:type'] = 'banana';
       }
       const trace = {
@@ -240,7 +240,7 @@ describe('local-file-store', () => {
         displayName: 'trace',
         spans: { [spanId]: spanData },
       };
-      if (i % 2 != 0) {
+      if (i % 2 !== 0) {
         wantTraces.push(trace);
       }
 
