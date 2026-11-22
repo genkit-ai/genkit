@@ -19,18 +19,18 @@ import {
   noul,
   ranked,
   responseInfo,
-  schema,
   score,
   systemOne,
   type Answer,
 } from '@genkit-ai/systemone';
 import { genkit, z } from 'genkit';
 
-// jev, reached through OpenRouter's Decisions API (OPENROUTER_API_KEY).
+// jev, reached through OpenRouter's Decisions API. The key is read from
+// OPENROUTER_API_KEY on each request, so the Dev UI starts without one.
 const model = 'openrouter-decisions/typesafe/jev-1.13';
 
 const ai = genkit({
-  plugins: [systemOne.openRouter()],
+  plugins: [systemOne.openRouter({ apiKey: false })],
   promptDir: 'prompts',
 });
 
@@ -84,7 +84,7 @@ export const triageFlow = ai.defineFlow(
     });
     const out = response.output!;
     const route =
-      out.department.confidence < 0.6 ? 'human' : out.department.choice;
+      (out.department.confidence ?? 0) < 0.6 ? 'human' : out.department.choice;
     return {
       route,
       urgent: out.isUrgent.noul >= 0.7,
@@ -196,7 +196,7 @@ export const toolFlow = ai.defineFlow(
       model,
       prompt: request,
       output: {
-        jsonSchema: schema({
+        jsonSchema: systemOne.schema({
           tool: {
             type: 'choice',
             instructions: 'Which tool serves the request?',
@@ -210,11 +210,11 @@ export const toolFlow = ai.defineFlow(
     });
     const { tool } = response.output as Record<string, Answer>;
     return {
-      tool: tool.confidence! >= 0.8 ? tool.choice : 'ask the user',
+      tool: (tool.confidence ?? 0) >= 0.8 ? tool.choice : 'ask the user',
       ranked: ranked({
         choice: tool.choice!,
         probabilities: tool.probabilities,
-        confidence: tool.confidence!,
+        confidence: tool.confidence,
       }),
     };
   }

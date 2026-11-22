@@ -3,6 +3,7 @@
 Decisions: asking a System One model typed questions about a state and getting
 calibrated answers back, instead of asking a chat model for prose and parsing
 it. The model is TypeSafe's jev, reached through OpenRouter's Decisions API.
+The flows follow the Genkit Java System One sample.
 
 The output schema is the question set: each field is one question, built with
 `choice()`, `score()`, or `noul()` from `@genkit-ai/systemone`, its
@@ -26,6 +27,9 @@ probability for every option.
 export OPENROUTER_API_KEY=...
 pnpm genkit:dev
 ```
+
+The Dev UI also starts without the key; the flows then fail with an error that
+names it.
 
 The Dev UI shows the question set on each model request and the full
 distributions on each response.
