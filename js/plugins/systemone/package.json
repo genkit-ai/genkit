@@ -35,6 +35,7 @@
     "genkit": "workspace:^"
   },
   "devDependencies": {
+    "@genkit-ai/middleware": "workspace:*",
     "@types/node": "^20.11.16",
     "genkit": "workspace:*",
     "rimraf": "^6.0.1",

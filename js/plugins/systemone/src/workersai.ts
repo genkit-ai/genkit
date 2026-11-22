@@ -76,7 +76,7 @@ export function unwrapWorkersAI(body: unknown): unknown {
  * out as Genkit Go sends it, `@cf` and all: `@`, `:`, `$`, `&`, `+`, and `=` stay as they
  * are, and everything else outside the unreserved set is escaped.
  */
-function pathEscape(segment: string): string {
+export function pathEscape(segment: string): string {
   return encodeURIComponent(segment)
     .replace(/%(24|26|2B|3A|3D|40)/gi, (escape) => decodeURIComponent(escape))
     .replace(

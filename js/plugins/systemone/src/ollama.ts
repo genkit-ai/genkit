@@ -35,7 +35,15 @@ export function ollamaRoute(
   if (urls.length > 0) {
     body.images = urls.map((url) => {
       const i = url.indexOf(';base64,');
-      return i < 0 ? '' : url.slice(i + ';base64,'.length);
+      if (i < 0) {
+        // The plugin builds every image as a base64 data URL, so this is a
+        // bug, never an image to send empty.
+        throw new GenkitError({
+          status: 'INTERNAL',
+          message: 'systemone: an image is not a base64 data URL',
+        });
+      }
+      return url.slice(i + ';base64,'.length);
     });
   }
   return { body };

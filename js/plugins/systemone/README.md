@@ -105,7 +105,11 @@ answer's legend.
 
 A choice's options go out sorted by name, as Go, Java, and Dart send a typed
 choice's options. A server may leave `confidence` out of an answer, as the Go
-schema allows, so read it with a default. Criteria and levels are
+schema allows, so read it with a default. A confidence or a probability the
+server sends must be a number from 0 to 1, or the call fails as a malformed
+answer (INTERNAL), and a probability for an option or level the question does
+not declare is dropped from the answer, where Go keeps it; `responseInfo()`
+keeps the answers as sent. Criteria and levels are
 strings, and the schema and the answers show those strings. The wire format
 also takes a structured description, most often an object with labeled parts,
 which `guidance` adds: keyed by option for a choice, by level index for a
@@ -290,15 +294,23 @@ the Ollama plugin for chat models has `ollama`.
 
 A constructor takes the same options as `systemOne()`, over the ones it sets
 for its server, such as a key from a secret manager rather than the
-environment: `systemOne.typeSafe({ apiKey })`. Its `models` add to the
-constructor's, and an entry for one of those changes only the fields it sets.
+environment: `systemOne.typeSafe({ apiKey })`. As in Go, its `models` are
+added to the constructor's, and an entry with one of their IDs replaces that
+model's whole spec, so `{'@cf/cloudflare/clef-omni': {label: 'Omni'}}` also
+drops the audio and video the preset gave it. Naming a constructor's model by
+its full name is refused. The base URL must be an http or https URL with a
+host, which is checked when the plugin is created; Go finds out at the first
+request.
 
 A server that needs a key refuses to start without one, unless `apiKey` is
-`false`: then each request takes the key from `config.apiKey` or the
-environment variable, so an app starts, and the Dev UI lists the models,
-before a key is set. A key passed in `config.apiKey` is recorded in traces and
-the Dev UI like any other config field, so where traces are kept, prefer the
-environment variable or the plugin's `apiKey`.
+`false`: then, as with the anthropic and google-genai plugins, each request
+takes the key from `config.apiKey` only and is refused without one, and the
+model listing goes out with no key. A key passed in `config.apiKey` is
+recorded in traces and the Dev UI like any other config field, so where traces
+are kept, prefer the environment variable or the plugin's `apiKey`. With
+per-request keys, give every fallback reference a config with its own key, or
+set `isolateConfig`: a reference without one inherits the request's config, so
+the first server's key would go to the next server's host.
 
 ### OpenRouter
 
@@ -339,11 +351,12 @@ against a model can move when Cloudflare updates it.
 Each server is its own plugin, so one app can use several, and the fallback
 middleware moves a request to another server when one is down. Each model's
 answers are calibrated on their own, so check which model answered before
-applying a threshold tuned for one: `responseInfo(response).model`. A fallback
-reference built with a config, `plugin.modelRef(id, config)`, sends that config
-in place of the request's, and one without inherits the request's, so give a
-reference with a config the `stateJSON` it needs, or send the state as a data
-part.
+applying a threshold tuned for one: `responseInfo(response).model`. With the
+`fallback` middleware of `@genkit-ai/middleware`, a reference built with a
+config, `plugin.modelRef(id, config)`, sends that config in place of the
+request's, and one without inherits the request's unless `isolateConfig` is
+set, so give a reference with a config the `stateJSON` it needs, or send the
+state as a data part.
 
 ### Any other server
 
@@ -394,11 +407,16 @@ the request body that the plugin does not model, such as a gateway's
 `session_id` or `trace`; it cannot replace a field the request builds itself.
 
 Each attempt is bounded at 30 seconds with the global `fetch`, and by your own
-`fetch` when you pass one, unless `timeoutMs` says otherwise. Requests that fail
-to connect, time out, are rate limited, or hit a server error other than 501
-and 505 are retried twice, with `Retry-After` honored up to 30 seconds. A
-redirect is not followed, since it would take the key along: the request fails,
-and the base URL should name the final address.
+`fetch` when you pass one, unless `timeoutMs`, a positive number of
+milliseconds, says otherwise. Requests that fail to connect, time out, are rate
+limited, or hit a server error other than 501 and 505 are retried twice, with
+`Retry-After` honored up to 30 seconds. These retries stack with a `retry()`
+middleware on top, so a call can make up to three attempts for each of its
+retries. A redirect is not followed, so the key's handling never depends on
+the transport's redirect rules: the request fails (FAILED_PRECONDITION), and
+the base URL should name the final address. A response larger than 8 MiB is
+refused (INTERNAL) and not retried. A server's error message is quoted in the
+error up to 500 characters.
 
 Pin a version in production where the server offers one. Confidence thresholds
 tuned against one release do not carry over to the next, nor from one model to
@@ -417,6 +435,11 @@ every call. A gateway's cost is `response.usage.custom.cost`.
 - A server can cut a long state to fit its limit and answer from what is left,
   with no error. Check a long document against the model's limit, or split it.
 - No streaming; the answer arrives whole.
+- The answer is a text part holding JSON, with no content type of its own, as
+  JS text parts have none.
+- Token counts the server leaves out are left out of `usage`, rather than
+  read as zero.
+- A data part whose value is null is dropped from the state, as Go drops it.
 - A question ID or an option named `__proto__` does not reach the model: the
   generate loop's copy of the output schema drops that key.
 

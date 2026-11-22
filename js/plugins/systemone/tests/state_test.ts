@@ -17,6 +17,7 @@
 import * as assert from 'assert';
 import type { GenerateRequest } from 'genkit';
 import { describe, it } from 'node:test';
+import { ollamaRoute } from '../src/ollama.js';
 import {
   buildState,
   mediaUrl,
@@ -204,6 +205,40 @@ describe('state', () => {
     );
   });
 
+  it('drops a data part of null, as Go does', () => {
+    assert.deepStrictEqual(
+      buildState(
+        request({
+          messages: [
+            { role: 'user', content: [{ data: null }] },
+            { role: 'user', content: [{ text: 'hi' }, { data: null }] },
+          ],
+        }),
+        false,
+        none
+      ).state,
+      'hi'
+    );
+    assert.throws(
+      () =>
+        buildState(
+          request({ messages: [{ role: 'user', content: [{ data: null }] }] }),
+          false,
+          none
+        ),
+      /carries no state/
+    );
+  });
+
+  it('names a gs:// URL by its scheme', () => {
+    assert.throws(
+      () => mediaUrl('gs://bucket/secret-name.png'),
+      (e: Error) =>
+        /the media at gs:\/\/ is a URL/.test(e.message) &&
+        !e.message.includes('secret-name')
+    );
+  });
+
   it('percent-decodes a non-base64 data URL', () => {
     assert.deepStrictEqual(mediaUrl('DATA:Image/SVG+XML,%3Csvg%2F%3Eé'), {
       dataUrl: `data:image/svg+xml;base64,${Buffer.from('<svg/>é').toString('base64')}`,
@@ -301,6 +336,19 @@ describe('system preamble', () => {
           },
         ]),
       /a media part cannot be instructions/
+    );
+  });
+});
+
+describe('Ollama', () => {
+  it('never sends an image that is not base64 as empty', () => {
+    assert.throws(
+      () =>
+        ollamaRoute('clef', {
+          state: 'Look.',
+          images: ['data:image/png,abc'],
+        }),
+      (e: any) => e.status === 'INTERNAL'
     );
   });
 });

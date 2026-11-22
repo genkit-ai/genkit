@@ -396,6 +396,27 @@ describe('client', () => {
     assert.strictEqual(init?.redirect, 'manual');
   });
 
+  it('replaces an authorization header given in another case', async () => {
+    await client(
+      server,
+      {},
+      { headers: { authorization: 'Bearer other', accept: 'text/plain' } }
+    ).decide('jev', request);
+    const { headers } = server.requests.at(-1)!;
+    assert.strictEqual(headers.authorization, 'Bearer key');
+    assert.strictEqual(headers.accept, 'application/json');
+  });
+
+  it('refuses a route that returns no body', async () => {
+    for (const body of [undefined, null]) {
+      await assert.rejects(
+        client(server, { route: () => ({ body }) }).decide('jev', request),
+        (e: GenkitError) => e.status === 'INVALID_ARGUMENT',
+        String(body)
+      );
+    }
+  });
+
   it('lists models from a bare array or an envelope', async () => {
     const c = client(server, { modelsPath: '/v1/models' });
     server.models = '[{"name":"jev-1.13.0"}]';
@@ -458,6 +479,10 @@ describe('errors', () => {
       assert.strictEqual(errorMessage(body), message, body);
     }
     assert.strictEqual(errorMessage('x'.repeat(300)), 'x'.repeat(200) + '...');
+    assert.strictEqual(
+      errorMessage(JSON.stringify({ error: { message: 'y'.repeat(900) } })),
+      'y'.repeat(500) + '...'
+    );
     assert.strictEqual(
       httpError('x', 429, '').originalMessage,
       'x: HTTP 429: Too Many Requests'

@@ -207,7 +207,11 @@ function resolveRef(
     target =
       isObject(target) && Object.hasOwn(target, key) ? target[key] : undefined;
   }
-  if (!isObject(target)) return prop;
+  if (!isObject(target)) {
+    throw invalidSchema(
+      `the output schema references ${ref}, which it does not define`
+    );
+  }
   const { $ref: _ref, ...rest } = prop;
   return { ...resolveRef(root, target, seen), ...rest };
 }
@@ -469,6 +473,55 @@ const ANSWER_FIELDS: Record<QuestionKind, string[]> = {
   noul: ['noul'],
 };
 
+function malformed(message: string): GenkitError {
+  return new GenkitError({
+    status: 'INTERNAL',
+    message: `systemone: ${message}`,
+  });
+}
+
+/**
+ * Checks that a confidence or a probability is a finite number from 0 to 1;
+ * anything else, null included, is a malformed answer.
+ */
+function unitInterval(id: string, field: string, value: unknown) {
+  if (
+    typeof value !== 'number' ||
+    !Number.isFinite(value) ||
+    value < 0 ||
+    value > 1
+  ) {
+    throw malformed(
+      `the answer for question "${id}" has a ${field} that is not a number from 0 to 1`
+    );
+  }
+}
+
+/**
+ * A distribution kept to the options or levels the question declares, each
+ * value checked. A key the question does not declare is dropped from the
+ * typed answer, where Go keeps it; the response's info keeps the answer as
+ * the server sent it.
+ */
+function declaredProbabilities(
+  id: string,
+  value: unknown,
+  declared: string[]
+): JsonObject {
+  if (!isObject(value)) {
+    throw malformed(
+      `the answer for question "${id}" has probabilities that are not an object`
+    );
+  }
+  const kept: JsonObject = {};
+  for (const key of declared) {
+    if (!Object.hasOwn(value, key)) continue;
+    unitInterval(id, `probability for "${key}"`, value[key]);
+    setOwn(kept, key, value[key]);
+  }
+  return kept;
+}
+
 /**
  * Renders the answers as the message text: for the enum format the chosen
  * option itself, otherwise a JSON object keyed by question ID whose values are
@@ -487,16 +540,28 @@ export function answersText(
   const projected: Record<string, JsonObject> = {};
   for (const id of Object.keys(questions).sort()) {
     const answer = own(answers, id);
+    if (answer === undefined) {
+      throw malformed(`no answer for question "${id}"`);
+    }
     if (!isObject(answer)) {
-      throw new GenkitError({
-        status: 'INTERNAL',
-        message: `systemone: no answer for question "${id}"`,
-      });
+      throw malformed(`the answer for question "${id}" is not an object`);
     }
     const q = questions[id];
     const fields: JsonObject = {};
     for (const field of ANSWER_FIELDS[q.wire.type]) {
-      if (field in answer) fields[field] = answer[field];
+      if (Object.hasOwn(answer, field)) setOwn(fields, field, answer[field]);
+    }
+    if (Object.hasOwn(fields, 'confidence')) {
+      unitInterval(id, 'confidence', fields.confidence);
+    }
+    if (Object.hasOwn(fields, 'probabilities')) {
+      fields.probabilities = declaredProbabilities(
+        id,
+        fields.probabilities,
+        q.wire.criteria instanceof Options
+          ? q.wire.criteria.names()
+          : (q.labels ?? []).map((_, i) => String(i))
+      );
     }
     if (q.labels) {
       fields.legend = Object.fromEntries(

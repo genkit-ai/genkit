@@ -49,7 +49,7 @@
  *   prompt: ticket,
  *   output: { schema: Triage },
  * });
- * if (output!.department.confidence < 0.6) {
+ * if ((output!.department.confidence ?? 0) < 0.6) {
  *   // route to a human
  * }
  * ```
@@ -91,7 +91,7 @@ import {
 } from './model.js';
 import { ollamaRoute } from './ollama.js';
 import { schema } from './questions.js';
-import { unwrapWorkersAI, workersAIRoute } from './workersai.js';
+import { pathEscape, unwrapWorkersAI, workersAIRoute } from './workersai.js';
 
 export type { Route, Unwrap } from './client.js';
 export { SystemOneConfigSchema, type SystemOneConfig } from './model.js';
@@ -165,7 +165,8 @@ export interface SystemOneOptions {
    */
   provider: string;
   /**
-   * The server's root, which `path` and `modelsPath` are joined to. It is
+   * The server's root, which `path` and `modelsPath` are joined to: an http
+   * or https URL with a host, checked when the plugin is created. It is
    * required, unless a constructor gives a default.
    */
   baseUrl?: string;
@@ -182,20 +183,24 @@ export interface SystemOneOptions {
   /**
    * Sent as a bearer token. A constructor reads it from the environment
    * variable it names when this is unset; a server that takes no key, such as
-   * a local one, is reached with none. `false` defers the key to each
-   * request, which takes it from `config.apiKey` or the constructor's
-   * environment variable, so an app starts, and the Dev UI lists the models,
-   * without one. A key in `config.apiKey` is recorded in traces and the Dev UI
+   * a local one, is reached with none. `false` takes the key from each
+   * request's `config.apiKey` only, as the anthropic and google-genai plugins
+   * do, and refuses a request without one; the model listing then goes out
+   * with no key. A key in `config.apiKey` is recorded in traces and the Dev UI
    * like any other config field, so where traces are kept, prefer the
-   * environment variable or this option.
+   * environment variable or this option. With per-request keys, give every
+   * fallback reference a config with its own key, or set `isolateConfig`:
+   * a reference without a config inherits the request's, so the first
+   * server's key would go to the next server's host.
    */
   apiKey?: string | false;
   /**
    * The models known ahead, keyed by the ID the server uses or by the full
    * model name, `provider/ID`. They are listed in the Dev UI whether or not
    * the server has a listing. Any other ID resolves too, as a model with no
-   * description. A constructor's models stay: these add to them, and an entry
-   * for one of them changes only the fields it sets.
+   * description. A constructor's models stay: these are added to them, and
+   * an entry with one of their IDs replaces that model's whole spec, as in
+   * Go. Naming a constructor's model by its full name is refused.
    */
   models?: Record<string, ModelSpec>;
   /**
@@ -215,9 +220,9 @@ export interface SystemOneOptions {
    */
   fetch?: typeof fetch;
   /**
-   * Bounds one attempt, in milliseconds. Unset means 30 seconds with the
-   * global `fetch`, and no bound of the plugin's with a `fetch` of your own,
-   * which keeps its own timeouts.
+   * Bounds one attempt, in milliseconds: a positive number; 0 is refused.
+   * Unset means 30 seconds with the global `fetch`, and no bound of the
+   * plugin's with a `fetch` of your own, which keeps its own timeouts.
    */
   timeoutMs?: number;
   /**
@@ -322,7 +327,7 @@ function newPlugin(
     );
   }
   let apiKey = options.apiKey === false ? undefined : options.apiKey;
-  const keyDeferred = options.apiKey === false && !!preset.apiKeyEnv;
+  const keyDeferred = options.apiKey === false;
   if (preset.apiKeyEnv && !keyDeferred) {
     apiKey = apiKey || process.env[preset.apiKeyEnv];
     if (!apiKey) {
@@ -348,29 +353,63 @@ function newPlugin(
         `${provider}: pass an account ID or set the ${preset.accountEnv} environment variable`
       );
     }
-    baseUrl = baseUrl.replaceAll('{account}', encodeURIComponent(account));
+    baseUrl = baseUrl.replaceAll('{account}', pathEscape(account));
+  }
+  // Checked here rather than at the first request, as Go does, so a typo
+  // fails when the app starts.
+  let parsed: URL | undefined;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    parsed = undefined;
+  }
+  if (
+    !parsed ||
+    (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') ||
+    !parsed.hostname
+  ) {
+    throw misconfigured(
+      `${provider}: baseUrl must be an http or https URL with a host`
+    );
+  }
+  if (
+    options.timeoutMs !== undefined &&
+    !(Number.isFinite(options.timeoutMs) && options.timeoutMs > 0)
+  ) {
+    throw misconfigured(
+      `${provider}: timeoutMs must be a positive number of milliseconds`
+    );
   }
   let path = rooted(options.path || '/v1/systemone');
   if (path === '/') path = '';
 
   const trim = (id: string) =>
     id.startsWith(`${provider}/`) ? id.slice(provider.length + 1) : id;
+  // As in Go: the options' models are added to the preset's, an entry with a
+  // preset model's ID replaces its whole spec, and naming a preset model by
+  // its full name is a mistake, since the two keys would describe one model.
   const models = new Map<string, ModelSpec>(Object.entries(presetModels));
   const named = new Set<string>();
   for (const [key, spec] of Object.entries(options.models ?? {})) {
     const id = trim(key);
+    if (key !== id && Object.hasOwn(presetModels, id)) {
+      throw misconfigured(
+        `${provider}: models names ${key}, which is already defined by the preset as ${id}; use the bare ID`
+      );
+    }
     if (named.has(id)) {
       throw misconfigured(
         `${provider}: models names ${id} twice, by its ID and by its full name`
       );
     }
     named.add(id);
-    // An entry for a preset model changes only the fields it sets.
-    models.set(id, { ...models.get(id), ...given(spec) });
+    models.set(id, given(spec));
   }
 
   const client = new Client({
-    fetch: options.fetch ?? globalThis.fetch,
+    // The global fetch is looked up per request, so one installed later, as a
+    // test or an instrumentation library does, is used.
+    fetch: options.fetch ?? ((input, init) => globalThis.fetch(input, init)),
     timeoutMs:
       options.timeoutMs ?? (options.fetch ? undefined : REQUEST_TIMEOUT_MS),
     baseUrl: baseUrl.replace(/\/+$/, ''),
@@ -396,7 +435,7 @@ function newPlugin(
         audio: reads(options.audio, spec.audio),
         video: reads(options.video, spec.video),
       },
-      keyRequiredFrom: keyDeferred ? preset.apiKeyEnv : undefined,
+      keyPerRequest: keyDeferred,
     };
   };
 

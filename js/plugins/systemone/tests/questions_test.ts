@@ -408,6 +408,35 @@ describe('option names and shapes', () => {
   });
 });
 
+describe('references', () => {
+  const withRef = (ref: string, extra: object = {}) => ({
+    type: 'object',
+    properties: { x: { $ref: ref, description: 'x' } },
+    ...extra,
+  });
+
+  it('refuses a $ref that loops, is malformed, or dangles', () => {
+    assert.throws(
+      () =>
+        compileQuestions(
+          withRef('#/$defs/a', {
+            $defs: { a: { $ref: '#/$defs/b' }, b: { $ref: '#/$defs/a' } },
+          }),
+          ''
+        ),
+      /refers to itself/
+    );
+    assert.throws(
+      () => compileQuestions(withRef('#/$defs/%E0%A4%A'), ''),
+      /is malformed/
+    );
+    assert.throws(
+      () => compileQuestions(withRef('#/$defs/missing'), ''),
+      /references #\/\$defs\/missing, which it does not define/
+    );
+  });
+});
+
 describe('answers', () => {
   it('are projected onto the declared fields, legend rebuilt, score clamped', () => {
     const questions = compileQuestions(triageSchema(), '');
@@ -444,6 +473,60 @@ describe('answers', () => {
         legend: { '0': 'Calm', '1': 'Concerned but civil', '2': 'Very angry' },
       },
     });
+  });
+
+  it('say when an answer is not an object', () => {
+    const questions = compileQuestions(triageSchema(), '');
+    assert.throws(
+      () =>
+        answersText(
+          { department: 'billing', isUrgent: {}, frustration: {} },
+          questions,
+          false
+        ),
+      /the answer for question "department" is not an object/
+    );
+  });
+
+  it('check confidence and probabilities, keeping declared keys only', () => {
+    const questions = compileQuestions(triageSchema(), '');
+    const answers = (department: object) => ({
+      department: { choice: 'billing', ...department },
+      isUrgent: { noul: 0.5 },
+      frustration: { score: 1 },
+    });
+    const text = answersText(
+      answers({
+        confidence: 0.7,
+        probabilities: { billing: 0.7, technical: 0.3, sales: 0.0 },
+      }),
+      questions,
+      false
+    );
+    assert.deepStrictEqual(JSON.parse(text).department, {
+      choice: 'billing',
+      confidence: 0.7,
+      probabilities: { billing: 0.7, technical: 0.3 },
+    });
+    // A server may leave confidence out.
+    assert.deepStrictEqual(
+      JSON.parse(answersText(answers({}), questions, false)).department,
+      { choice: 'billing' }
+    );
+    for (const bad of [
+      { confidence: 1.2 },
+      { confidence: null },
+      { confidence: Number.NaN },
+      { probabilities: { billing: -0.1 } },
+      { probabilities: { billing: null } },
+      { probabilities: [0.5] },
+    ]) {
+      assert.throws(
+        () => answersText(answers(bad), questions, false),
+        /not a number from 0 to 1|probabilities that are not an object/,
+        JSON.stringify(bad)
+      );
+    }
   });
 
   it('must answer every question', () => {
@@ -487,9 +570,15 @@ describe('answers', () => {
           provider: 'TypeSafe',
           id: 'gen-1',
           answers: {},
+          systemOneInfo: true,
         },
       }),
       { model: 'jev-1.13.0', provider: 'TypeSafe', id: 'gen-1', answers: {} }
+    );
+    // Another model's raw output that happens to name a model is not info.
+    assert.deepStrictEqual(
+      responseInfo({ raw: { model: 'gpt-x', answers: {} } }),
+      { model: '' }
     );
   });
 });

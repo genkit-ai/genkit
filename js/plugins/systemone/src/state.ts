@@ -220,6 +220,8 @@ class StateBuilder {
       }
       return new RawJson(part.text);
     }
+    // A data part of null says nothing, and is dropped as Go drops it.
+    if (part.data === null) return undefined;
     if (part.data !== undefined) return part.data;
     if (part.media) {
       this.collect(part.media.url, part.media.contentType);
@@ -294,9 +296,11 @@ export function mediaUrl(
   if (scheme === 'http' || scheme === 'https' || scheme === 'gs') {
     // The URL is not quoted, since it can carry a token; its origin says
     // which one it is.
-    let origin = scheme;
+    let origin = `${scheme}://`;
     try {
-      origin = new URL(url).origin;
+      const parsed = new URL(url).origin;
+      // A gs:// URL has no web origin, and is named by its scheme alone.
+      if (parsed !== 'null') origin = parsed;
     } catch {
       // A URL that does not parse is named by its scheme alone.
     }

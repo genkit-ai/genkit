@@ -499,6 +499,12 @@ export function answerKind(
 }
 
 /**
+ * Marks the info a decision model's response carries, so {@link responseInfo}
+ * reads no other model's.
+ */
+export const INFO_MARKER = 'systemOneInfo';
+
+/**
  * What a decision model's response carries beside the answers in the message:
  * the model version that answered, which is what confidence thresholds are
  * tuned against, a gateway's provider and generation ID, and the answers as
@@ -516,13 +522,19 @@ export interface Info {
  * Reads the {@link Info} of a decision model's response, from a
  * `GenerateResponse` or from the JSON of one, such as `response.toJSON()`, a
  * flow's output, or a stored trace, which carry it as `custom`. It is
- * `{model: ''}` for a response from any other model.
+ * `{model: ''}` for a response from any other model, whatever its own raw
+ * output holds, since the plugin marks its own.
  */
 export function responseInfo(
   response: { raw?: unknown; custom?: unknown } | undefined | null
 ): Info {
   const raw = (response?.raw ?? response?.custom) as Partial<Info> | undefined;
-  if (!raw || typeof raw !== 'object' || typeof raw.model !== 'string') {
+  if (
+    !raw ||
+    typeof raw !== 'object' ||
+    (raw as Record<string, unknown>)[INFO_MARKER] !== true ||
+    typeof raw.model !== 'string'
+  ) {
     return { model: '' };
   }
   const info: Info = { model: raw.model };

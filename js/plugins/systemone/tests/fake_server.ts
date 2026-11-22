@@ -47,6 +47,8 @@ export class FakeServer {
   readonly bodies: any[] = [];
   readonly rawBodies: string[] = [];
   readonly listings: string[] = [];
+  /** The Authorization header of each listing request. */
+  readonly listingAuth: (string | undefined)[] = [];
   private server?: Server;
 
   get url(): string {
@@ -58,6 +60,7 @@ export class FakeServer {
     this.server = createServer(async (req, res) => {
       if (req.method === 'GET') {
         this.listings.push(req.url ?? '');
+        this.listingAuth.push(req.headers.authorization);
         if (this.models === undefined) {
           res.writeHead(500).end();
           return;

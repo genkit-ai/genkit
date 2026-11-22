@@ -186,10 +186,11 @@ export class Client {
         !routed ||
         typeof routed !== 'object' ||
         isThenable(routed) ||
-        routed.body === undefined
+        routed.body === undefined ||
+        routed.body === null
       ) {
         throw new GenkitError({
-          status: 'UNKNOWN',
+          status: 'INVALID_ARGUMENT',
           message: `${endpoint.name}: route must return {path, body} with a body, not a promise`,
         });
       }
@@ -347,11 +348,13 @@ export class Client {
     apiKey: string | undefined
   ): Promise<{ text: string }> {
     const { endpoint, headers, timeoutMs } = this.options;
-    const requestHeaders: Record<string, string> = { ...headers };
-    if (apiKey) requestHeaders['Authorization'] = `Bearer ${apiKey}`;
-    requestHeaders['Accept'] = 'application/json';
+    // A Headers object, so a header given in another case is replaced
+    // rather than sent twice.
+    const requestHeaders = new Headers(headers);
+    if (apiKey) requestHeaders.set('Authorization', `Bearer ${apiKey}`);
+    requestHeaders.set('Accept', 'application/json');
     if (payload !== undefined) {
-      requestHeaders['Content-Type'] = 'application/json';
+      requestHeaders.set('Content-Type', 'application/json');
     }
     const attempt = anySignal(
       [signal, timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined].filter(
@@ -366,8 +369,8 @@ export class Client {
         headers: requestHeaders,
         body: payload,
         signal: attempt.signal,
-        // A redirect is refused rather than followed, since following one
-        // would send the key to wherever the server points.
+        // A redirect is refused rather than followed, so the key's handling
+        // never depends on the transport's redirect rules.
         redirect: 'manual',
       });
       text = await readBody(resp);
@@ -612,9 +615,20 @@ export function httpError(
  * `{errors: [{code, message}]}` envelope, and a validation list, which
  * TypeSafe's API sends under `detail` as `{loc, msg}` records and OpenRouter
  * sends as the bare array of `{path, message}` records. A body in none of
- * these shapes is quoted as it came, and an empty one gives "".
+ * these shapes is quoted as it came, up to 200 characters, and an empty one
+ * gives "". Any message is cut at 500 characters.
  */
 export function errorMessage(body: string): string {
+  const message = bodyMessage(body);
+  return message.length > MAX_ERROR_MESSAGE
+    ? `${message.slice(0, MAX_ERROR_MESSAGE)}...`
+    : message;
+}
+
+/** The longest server message an error quotes. */
+const MAX_ERROR_MESSAGE = 500;
+
+function bodyMessage(body: string): string {
   let parsed: any;
   try {
     parsed = JSON.parse(body);

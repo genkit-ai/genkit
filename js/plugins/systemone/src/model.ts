@@ -19,6 +19,7 @@ import {
   z,
   type GenerateRequest,
   type GenerateResponseData,
+  type GenerationUsage,
 } from 'genkit';
 import { logger } from 'genkit/logging';
 import type { ModelAction, ModelInfo } from 'genkit/model';
@@ -30,7 +31,7 @@ import {
   enumQuestion,
   wireQuestions,
 } from './protocol.js';
-import type { Info } from './questions.js';
+import { INFO_MARKER, type Info } from './questions.js';
 import { buildState, systemPreamble, type Reads } from './state.js';
 
 /** The per-request configuration of a decision model. */
@@ -62,7 +63,7 @@ export const SystemOneConfigSchema = z.object({
     ),
   /**
    * The API key for this request, in place of the plugin's. A plugin created
-   * with `apiKey: false` takes its key here. It is recorded in traces and the
+   * with `apiKey: false` takes its key here only. It is recorded in traces and the
    * Dev UI like any other config field, so where traces are kept, prefer the
    * environment variable or the plugin's `apiKey`.
    */
@@ -85,11 +86,10 @@ export interface ModelDescription {
    */
   reads: Reads;
   /**
-   * The environment variable a server's key comes from, when the server
-   * requires a key and the plugin was created with `apiKey: false`, so each
-   * request reads it there or from `config.apiKey`.
+   * Whether each request takes its key from `config.apiKey`, for a plugin
+   * created with `apiKey: false`.
    */
-  keyRequiredFrom?: string;
+  keyPerRequest?: boolean;
 }
 
 /**
@@ -172,14 +172,12 @@ async function generate(
       message: 'systemone: config.extra must be an object of request fields',
     });
   }
-  // A plugin created with apiKey: false reads its key here, per request.
-  const apiKey =
-    config.apiKey ||
-    (desc.keyRequiredFrom ? process.env[desc.keyRequiredFrom] : undefined);
-  if (desc.keyRequiredFrom && !apiKey) {
+  // A plugin created with apiKey: false takes its key from each request.
+  const apiKey = config.apiKey || undefined;
+  if (desc.keyPerRequest && !apiKey) {
     throw new GenkitError({
       status: 'FAILED_PRECONDITION',
-      message: `${client.endpoint.name}: pass the API key as config.apiKey or set the ${desc.keyRequiredFrom} environment variable`,
+      message: `${client.endpoint.name}: the plugin was created with apiKey: false, so pass the API key as config.apiKey`,
     });
   }
   for (const field of RESERVED_FIELDS) {
@@ -201,8 +199,9 @@ async function generate(
     { state, media, questions: wireQuestions(questions), extra: config.extra },
     { signal: abortSignal, apiKey: apiKey || undefined }
   );
+  // A count the server leaves out stays out, rather than reading as zero.
   const count = (n: unknown) =>
-    typeof n === 'number' && Number.isFinite(n) ? n : 0;
+    typeof n === 'number' && Number.isFinite(n) ? n : undefined;
   const inputTokens = count(resp.usage?.input_tokens);
   const outputTokens = count(resp.usage?.output_tokens);
   logger.debug(
@@ -218,22 +217,26 @@ async function generate(
   }
   if (typeof resp.id === 'string' && resp.id) info.id = resp.id;
   info.answers = resp.answers;
+  const usage: GenerationUsage = {};
+  if (inputTokens !== undefined) usage.inputTokens = inputTokens;
+  if (outputTokens !== undefined) usage.outputTokens = outputTokens;
+  if (inputTokens !== undefined && outputTokens !== undefined) {
+    usage.totalTokens = inputTokens + outputTokens;
+  }
+  const cost = resp.usage?.cost;
+  if (typeof cost === 'number' && Number.isFinite(cost)) {
+    usage.custom = { cost };
+  }
+  // The generate loop serializes a response's custom field and not its raw
+  // one, and a GenerateResponse reads raw from custom, so the info goes in
+  // both: response.raw has it after generate as well as from the model. The
+  // marker tells responseInfo the info is this plugin's.
+  const raw = { ...info, [INFO_MARKER]: true };
   return {
     message: { role: 'model', content: [{ text }] },
     finishReason: 'stop',
-    usage: {
-      inputTokens,
-      outputTokens,
-      totalTokens: inputTokens + outputTokens,
-      ...(typeof resp.usage?.cost === 'number' &&
-      Number.isFinite(resp.usage.cost)
-        ? { custom: { cost: resp.usage.cost } }
-        : {}),
-    },
-    // The generate loop serializes a response's custom field and not its raw
-    // one, and a GenerateResponse reads raw from custom, so the info goes in
-    // both: response.raw has it after generate as well as from the model.
-    custom: info,
-    raw: info,
+    ...(Object.keys(usage).length > 0 ? { usage } : {}),
+    custom: raw,
+    raw,
   };
 }

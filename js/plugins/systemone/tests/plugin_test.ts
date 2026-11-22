@@ -14,9 +14,10 @@
  * limitations under the License.
  */
 
+import { fallback } from '@genkit-ai/middleware';
 import * as assert from 'assert';
 import { GenkitError, genkit, z } from 'genkit';
-import { after, afterEach, before, describe, it } from 'node:test';
+import { after, afterEach, before, describe, it, mock } from 'node:test';
 import * as path from 'path';
 import {
   choice,
@@ -401,18 +402,17 @@ describe('systemOne', () => {
       prompt: ticket,
       output: { schema: urgent },
     });
-    assert.deepStrictEqual(response.usage, {
-      inputTokens: 0,
-      outputTokens: 3,
-      totalTokens: 3,
-    });
+    // A count the server leaves out, or sends as something else, stays out.
+    assert.deepStrictEqual(response.usage, { outputTokens: 3 });
   });
 
-  it('defers the key to each request with apiKey: false', async () => {
-    delete process.env.TYPESAFE_API_KEY;
+  it('takes the key from each request only with apiKey: false', async () => {
+    process.env.TYPESAFE_API_KEY = 'env-key';
+    server.models = '[{"name":"jev-1.13.0"}]';
     const ts = systemOne.typeSafe({ apiKey: false, baseUrl: server.url });
     const ai = genkit({ plugins: [ts] });
     assert.ok((await ts.list!()).length > 0, 'lists without a key');
+    assert.strictEqual(server.listingAuth.at(-1), undefined, 'no key listed');
     const urgent = z.object({ u: noul().describe('Urgent?') });
     await assert.rejects(
       ai.generate({
@@ -420,7 +420,11 @@ describe('systemOne', () => {
         prompt: ticket,
         output: { schema: urgent },
       }),
-      /pass the API key as config.apiKey or set the TYPESAFE_API_KEY/
+      (e: GenkitError) =>
+        e.status === 'FAILED_PRECONDITION' &&
+        /created with apiKey: false, so pass the API key as config.apiKey/.test(
+          e.message
+        )
     );
     await ai.generate({
       model: 'typesafe/jev-1.13.0',
@@ -432,23 +436,23 @@ describe('systemOne', () => {
       server.requests.at(-1)!.headers.authorization,
       'Bearer request-key'
     );
-    process.env.TYPESAFE_API_KEY = 'env-key';
-    await ai.generate({
-      model: 'typesafe/jev-1.13.0',
-      prompt: ticket,
-      output: { schema: urgent },
-    });
-    assert.strictEqual(
-      server.requests.at(-1)!.headers.authorization,
-      'Bearer env-key'
+  });
+
+  it('needs a key when the server requires one', async () => {
+    delete process.env.TYPESAFE_API_KEY;
+    assert.throws(
+      () => systemOne.typeSafe({ baseUrl: server.url }),
+      (e: GenkitError) =>
+        e.status === 'FAILED_PRECONDITION' &&
+        /set apiKey or the TYPESAFE_API_KEY/.test(e.message)
     );
   });
 
-  it("adds a constructor's models to its own, keeping theirs", async () => {
+  it("adds models to a constructor's, an entry replacing a whole spec", async () => {
     const ts = systemOne.typeSafe({
       apiKey: 'k',
       baseUrl: server.url,
-      models: { 'jev-2.0.0': {}, 'typesafe/jev-latest': { label: 'Latest' } },
+      models: { 'jev-2.0.0': {}, 'jev-latest': { label: 'Latest' } },
     });
     const listed = await ts.list!();
     assert.deepStrictEqual(
@@ -456,22 +460,37 @@ describe('systemOne', () => {
       ['typesafe/jev-1.13.0', 'typesafe/jev-2.0.0', 'typesafe/jev-latest']
     );
     assert.strictEqual((listed[2].metadata?.model as any).label, 'Latest');
+    assert.throws(
+      () =>
+        systemOne.typeSafe({
+          apiKey: 'k',
+          models: { 'typesafe/jev-latest': {} },
+        }),
+      /already defined by the preset as jev-latest; use the bare ID/
+    );
 
-    const cf = systemOne.workersAI('acct', {
-      apiKey: 't',
-      baseUrl: `${server.url}/client/v4/accounts/{account}`,
-      route: undefined,
-      models: { '@cf/cloudflare/clef-omni': { label: 'Omni' } },
-    });
-    const ai = genkit({ plugins: [cf] });
-    await ai.generate({
-      model: 'cloudflare-decisions/@cf/cloudflare/clef-omni',
-      prompt: [
-        { text: 'Hear it.' },
-        { media: { url: 'data:audio/wav;base64,AA' } },
-      ],
-      output: { schema: z.object({ ok: noul().describe('Fine?') }) },
-    });
+    const workers = (models: Record<string, object>) =>
+      genkit({
+        plugins: [
+          systemOne.workersAI('acct', {
+            apiKey: 't',
+            baseUrl: `${server.url}/client/v4/accounts/{account}`,
+            route: undefined,
+            models,
+          }),
+        ],
+      });
+    const hear = (ai: ReturnType<typeof genkit>) =>
+      ai.generate({
+        model: 'cloudflare-decisions/@cf/cloudflare/clef-omni',
+        prompt: [
+          { text: 'Hear it.' },
+          { media: { url: 'data:audio/wav;base64,AA' } },
+        ],
+        output: { schema: z.object({ ok: noul().describe('Fine?') }) },
+      });
+    // The preset's spec stays, and undefined options keep the preset's route.
+    await hear(workers({ '@cf/cloudflare/clef-flash': { label: 'Flash' } }));
     assert.strictEqual(
       server.requests.at(-1)!.url,
       '/client/v4/accounts/acct/ai/run/@cf/cloudflare/clef-omni'
@@ -479,6 +498,11 @@ describe('systemOne', () => {
     assert.deepStrictEqual(server.bodies.at(-1).audio, [
       'data:audio/wav;base64,AA',
     ]);
+    // An entry for it replaces the whole spec, audio included.
+    await assert.rejects(
+      hear(workers({ '@cf/cloudflare/clef-omni': { label: 'Omni' } })),
+      /reads no audio\/wav media/
+    );
   });
 
   it('refuses a provider with a slash, and references carry the model info', () => {
@@ -503,6 +527,270 @@ describe('systemOne', () => {
       'typesafe/jev-9',
       'typesafe/jev-latest',
     ]);
+  });
+
+  it('takes answers without confidence, typed and at run time', async () => {
+    server.answers = {
+      department: { choice: 'billing' },
+      tool: { choice: 'search' },
+    };
+    const ai = genkit({ plugins: [typeSafe()] });
+    const typed = await ai.generate({
+      model: 'typesafe/jev-1.13.0',
+      prompt: ticket,
+      output: { schema: Triage },
+    });
+    assert.strictEqual(typed.output!.department.confidence, undefined);
+    const runtime = await ai.generate({
+      model: 'typesafe/jev-1.13.0',
+      prompt: ticket,
+      output: {
+        jsonSchema: systemOne.schema({
+          tool: {
+            type: 'choice',
+            instructions: 'Which tool?',
+            options: [{ name: 'search' }, { name: 'none' }],
+          },
+        }),
+      },
+    });
+    assert.deepStrictEqual((runtime.output as any).tool, { choice: 'search' });
+  });
+
+  it('refuses a runtime answer outside the question set', async () => {
+    const ai = genkit({ plugins: [typeSafe()] });
+    const jsonSchema = systemOne.schema({
+      tool: {
+        type: 'choice',
+        instructions: 'Which tool?',
+        options: [{ name: 'search' }, { name: 'none' }],
+      },
+      personal: { type: 'noul', instructions: 'Personal?' },
+    });
+    for (const answers of [
+      { tool: { choice: 'calendar' } },
+      { personal: { noul: 1.5 } },
+    ]) {
+      server.answers = answers;
+      await assert.rejects(
+        ai.generate({
+          model: 'typesafe/jev-1.13.0',
+          prompt: ticket,
+          output: { jsonSchema },
+        }),
+        /Schema validation failed/,
+        JSON.stringify(answers)
+      );
+    }
+  });
+
+  it('refuses a probability or a confidence outside 0 to 1', async () => {
+    const ai = genkit({ plugins: [typeSafe()] });
+    for (const department of [
+      { choice: 'billing', confidence: 1.5 },
+      { choice: 'billing', probabilities: { billing: 2 } },
+    ]) {
+      server.answers = { department };
+      await assert.rejects(
+        ai.generate({
+          model: 'typesafe/jev-1.13.0',
+          prompt: ticket,
+          output: { schema: Triage },
+        }),
+        (e: GenkitError) =>
+          e.status === 'INTERNAL' && /not a number from 0 to 1/.test(e.message)
+      );
+    }
+  });
+
+  it('keeps probabilities for undeclared options in the info only', async () => {
+    server.answers = {
+      department: {
+        choice: 'billing',
+        probabilities: { billing: 0.9, refunds: 0.1 },
+      },
+    };
+    const ai = genkit({ plugins: [typeSafe()] });
+    const response = await ai.generate({
+      model: 'typesafe/jev-1.13.0',
+      prompt: ticket,
+      output: { schema: Triage },
+    });
+    assert.deepStrictEqual(response.output!.department.probabilities, {
+      billing: 0.9,
+    });
+    assert.deepStrictEqual(
+      (responseInfo(response).answers!.department as any).probabilities,
+      { billing: 0.9, refunds: 0.1 }
+    );
+  });
+
+  it('omits usage the server does not report', async () => {
+    server.usage = undefined as any;
+    const ai = genkit({ plugins: [typeSafe()] });
+    const response = await ai.generate({
+      model: 'typesafe/jev-1.13.0',
+      prompt: ticket,
+      output: { schema: Triage },
+    });
+    assert.strictEqual(response.usage.inputTokens, undefined);
+    assert.strictEqual(response.usage.outputTokens, undefined);
+  });
+
+  it('bounds each attempt as configured, and passes the caller signal on', async () => {
+    const timeouts: number[] = [];
+    const realTimeout = AbortSignal.timeout.bind(AbortSignal);
+    const timeout = mock.method(AbortSignal, 'timeout', (ms: number) => {
+      timeouts.push(ms);
+      return realTimeout(ms);
+    });
+    try {
+      const urgent = z.object({ u: noul().describe('Urgent?') });
+      const ask = (
+        plugin: ReturnType<typeof systemOne>,
+        signal?: AbortSignal
+      ) =>
+        genkit({ plugins: [plugin] }).generate({
+          model: 'typesafe/jev-1.13.0',
+          prompt: ticket,
+          output: { schema: urgent },
+          abortSignal: signal,
+        });
+      // The global fetch, looked up when a request is made, and 30 s.
+      const original = globalThis.fetch;
+      let globalCalls = 0;
+      globalThis.fetch = (input, init) => {
+        globalCalls++;
+        return original(input, init);
+      };
+      try {
+        await ask(typeSafe());
+      } finally {
+        globalThis.fetch = original;
+      }
+      assert.strictEqual(globalCalls, 1);
+      assert.deepStrictEqual(timeouts, [30000]);
+
+      // A caller's fetch keeps its own timeouts, and gets the caller's signal.
+      timeouts.length = 0;
+      let seen: AbortSignal | undefined;
+      const fetch: typeof globalThis.fetch = (input, init) => {
+        seen = init?.signal ?? undefined;
+        return original(input, init);
+      };
+      const own = systemOne.typeSafe({
+        apiKey: 'k',
+        baseUrl: server.url,
+        fetch,
+      });
+      await ask(own);
+      assert.deepStrictEqual(timeouts, []);
+      server.failures = [{ status: 200, body: '{}', delayMs: 1000 }];
+      const abort = new AbortController();
+      setTimeout(() => abort.abort(), 50);
+      await assert.rejects(ask(own, abort.signal), /CANCELLED|abort/i);
+      assert.strictEqual(seen?.aborted, true);
+
+      await ask(
+        systemOne.typeSafe({
+          apiKey: 'k',
+          baseUrl: server.url,
+          fetch,
+          timeoutMs: 1234,
+        })
+      );
+      assert.deepStrictEqual(timeouts, [1234]);
+    } finally {
+      timeout.mock.restore();
+    }
+  });
+
+  it('falls back across two plugins without sending one key to the other', async () => {
+    const backup = await new FakeServer().start();
+    try {
+      server.failures = [{ status: 501 }, { status: 501 }];
+      const primary = systemOne.typeSafe({
+        apiKey: false,
+        baseUrl: server.url,
+      });
+      const secondary = systemOne({
+        provider: 'backup',
+        baseUrl: backup.url,
+        apiKey: false,
+      });
+      const ai = genkit({ plugins: [primary, secondary] });
+      const urgent = z.object({ u: noul().describe('Urgent?') });
+      const ask = (use: any) =>
+        ai.generate({
+          model: 'typesafe/jev-1.13.0',
+          prompt: ticket,
+          config: { apiKey: 'primary-key' },
+          output: { schema: urgent },
+          use: [use],
+        });
+      // A reference with its own config sends its own key.
+      await ask(
+        fallback({
+          models: [secondary.modelRef('d1', { apiKey: 'backup-key' })],
+          statuses: ['UNIMPLEMENTED'],
+        })
+      );
+      assert.strictEqual(
+        backup.requests.at(-1)!.headers.authorization,
+        'Bearer backup-key'
+      );
+      // isolateConfig keeps the primary key from the backup, which then
+      // refuses the request for want of a key of its own.
+      const before = backup.requests.length;
+      await assert.rejects(
+        ask(
+          fallback({
+            models: [secondary.modelRef('d1')],
+            statuses: ['UNIMPLEMENTED'],
+            isolateConfig: true,
+          })
+        ),
+        (e: GenkitError) => e.status === 'FAILED_PRECONDITION'
+      );
+      assert.strictEqual(backup.requests.length, before);
+    } finally {
+      await backup.stop();
+    }
+  });
+
+  it('refuses a baseUrl, a timeoutMs, or models it cannot use', () => {
+    for (const baseUrl of ['api.example.com', 'ftp://example.com', 'http://']) {
+      assert.throws(
+        () => systemOne({ provider: 'x', baseUrl }),
+        (e: GenkitError) =>
+          e.status === 'FAILED_PRECONDITION' &&
+          /baseUrl must be an http or https URL with a host/.test(e.message),
+        baseUrl
+      );
+    }
+    for (const timeoutMs of [0, -1, Number.NaN, Infinity]) {
+      assert.throws(
+        () => systemOne({ provider: 'x', baseUrl: server.url, timeoutMs }),
+        /timeoutMs must be a positive number/,
+        String(timeoutMs)
+      );
+    }
+  });
+
+  it('escapes the account into the base URL as a path segment', async () => {
+    const cf = systemOne.workersAI('team@one 1', {
+      apiKey: 't',
+      baseUrl: `${server.url}/client/v4/accounts/{account}`,
+    });
+    await genkit({ plugins: [cf] }).generate({
+      model: 'cloudflare-decisions/typesafe/jev',
+      prompt: ticket,
+      output: { schema: z.object({ ok: noul().describe('Fine?') }) },
+    });
+    assert.strictEqual(
+      server.requests.at(-1)!.url,
+      '/client/v4/accounts/team@one%201/ai/run'
+    );
   });
 
   it('lists the configured and the listed models, and keeps the listing', async () => {

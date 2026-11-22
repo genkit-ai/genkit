@@ -1017,6 +1017,9 @@ importers:
 
   plugins/systemone:
     devDependencies:
+      '@genkit-ai/middleware':
+        specifier: workspace:*
+        version: link:../middleware
       '@types/node':
         specifier: ^20.11.16
         version: 20.19.37
