@@ -41,6 +41,15 @@ func listActions(ctx context.Context, client *genai.Client, c catalog) []api.Act
 		actions = append(actions, newVeoModel(client, name, c.modelOptions(name)).Desc())
 	}
 
+	// Lyria music models
+	// (Vertex AI only, and only the :predict models.)
+	for _, name := range models.lyria {
+		if !lyriaSupported(client, name) {
+			continue
+		}
+		actions = append(actions, newModel(client, name, c.modelOptions(name)).Desc())
+	}
+
 	// Embedders
 	for _, name := range models.embedders {
 		opts := c.embedderOptions(name)
@@ -72,6 +81,11 @@ func resolveAction(client *genai.Client, c catalog, atype api.ActionType, id str
 	case api.ActionTypeModel:
 		// Veo models should not be resolved as regular models
 		if mt == ModelTypeVeo {
+			return nil
+		}
+		// Lyria is served only by Vertex AI's :predict endpoint (lyria-002).
+		// Lyria 3 needs the Interactions API, which is not implemented.
+		if mt == ModelTypeLyria && !lyriaSupported(client, id) {
 			return nil
 		}
 		return newModel(client, id, c.modelOptions(id))
