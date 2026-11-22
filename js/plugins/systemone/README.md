@@ -393,6 +393,8 @@ every call. A gateway's cost is `response.usage.custom.cost`.
 - A server can cut a long state to fit its limit and answer from what is left,
   with no error. Check a long document against the model's limit, or split it.
 - No streaming; the answer arrives whole.
+- A question ID or an option named `__proto__` does not reach the model: the
+  generate loop's copy of the output schema drops that key.
 
 ## Tests
 
