@@ -454,13 +454,21 @@ export function fetchHandler<
   return (request: Request) => handleActionRequest(request, action, options);
 }
 
+function notFound(): Response {
+  return new Response('No action matched the request path.', {
+    status: 404,
+    headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+  });
+}
+
 /**
  * Returns a Fetch handler for multiple actions with path-based routing.
  * Express-like API: pass actions and optional path prefix, then call the returned handler with the request.
  *
  * @param actions - Array of actions (or ActionWithOptions) to expose; each is routed by path (action name or options.path)
  * @param pathPrefix - Optional path prefix to strip from the URL (e.g., '/api')
- * @returns A handler function that takes a Request and returns a Promise<Response>
+ * @returns A handler function that takes a Request and returns a Promise<Response>.
+ * A path that matches no action gets a 404 with a plain-text body.
  *
  * @example
  * ```typescript
@@ -485,13 +493,7 @@ export function fetchHandlers(
       } else if (pathname.startsWith(prefix)) {
         pathname = pathname.slice(prefix.length);
       } else {
-        return new Response(
-          JSON.stringify({
-            status: 'NOT_FOUND',
-            message: 'No action matched the request path.',
-          }),
-          { status: 404, headers: { 'Content-Type': 'application/json' } }
-        );
+        return notFound();
       }
     }
 
@@ -521,13 +523,7 @@ export function fetchHandlers(
     }
 
     if (!matchedAction) {
-      return new Response(
-        JSON.stringify({
-          status: 'NOT_FOUND',
-          message: 'No action matched the request path.',
-        }),
-        { status: 404, headers: { 'Content-Type': 'application/json' } }
-      );
+      return notFound();
     }
 
     return handleActionRequest(request, matchedAction, handlerOptions);
