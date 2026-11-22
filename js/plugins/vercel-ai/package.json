@@ -65,14 +65,8 @@
     "test": "tsx --test ./tests/*_test.ts"
   },
   "peerDependencies": {
-    "@ai-sdk/react": "^3.0.0",
     "ai": "^6.0.0",
     "genkit": "workspace:^"
-  },
-  "peerDependenciesMeta": {
-    "@ai-sdk/react": {
-      "optional": true
-    }
   },
   "devDependencies": {
     "@ai-sdk/react": "^3.0.0",
