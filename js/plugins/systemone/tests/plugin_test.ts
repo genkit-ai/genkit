@@ -26,6 +26,7 @@ import {
   score,
   systemOne,
   type Answer,
+  type SystemOneOptions,
 } from '../src/index.js';
 import { FakeServer } from './fake_server.js';
 
@@ -756,6 +757,39 @@ describe('systemOne', () => {
     } finally {
       await backup.stop();
     }
+  });
+
+  it('refuses headers or a key HTTP cannot carry', async () => {
+    const cases: Partial<SystemOneOptions>[] = [
+      { headers: { 'X-Trace': 'a\nb' } },
+      { headers: { 'bad header': 'x' } },
+      { apiKey: 'key\nwith-newline' },
+    ];
+    for (const options of cases) {
+      assert.throws(
+        () => systemOne({ provider: 'x', baseUrl: server.url, ...options }),
+        (e: GenkitError) =>
+          e.status === 'FAILED_PRECONDITION' &&
+          /cannot be sent as HTTP headers/.test(e.message),
+        JSON.stringify(options)
+      );
+    }
+    const ai = genkit({
+      plugins: [systemOne.typeSafe({ apiKey: false, baseUrl: server.url })],
+    });
+    const before = server.requests.length;
+    await assert.rejects(
+      ai.generate({
+        model: 'typesafe/jev-1.13.0',
+        prompt: ticket,
+        config: { apiKey: 'key\nwith-newline' },
+        output: { schema: z.object({ u: noul().describe('Urgent?') }) },
+      }),
+      (e: GenkitError) =>
+        e.status === 'INVALID_ARGUMENT' &&
+        /cannot be sent as HTTP headers/.test(e.message)
+    );
+    assert.strictEqual(server.requests.length, before, 'nothing was sent');
   });
 
   it('refuses a baseUrl, a timeoutMs, or models it cannot use', () => {

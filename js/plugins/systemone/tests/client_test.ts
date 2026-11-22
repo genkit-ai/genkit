@@ -407,6 +407,24 @@ describe('client', () => {
     assert.strictEqual(headers.accept, 'application/json');
   });
 
+  it('fails once, with a status, on a key HTTP cannot carry', async () => {
+    let calls = 0;
+    const c = new Client({
+      fetch: async () => {
+        calls++;
+        return new Response('{}');
+      },
+      baseUrl: 'http://unused',
+      endpoint: { name: 'test', path: '', modelsPath: '' },
+      sleep: async () => {},
+    });
+    await assert.rejects(
+      c.decide('jev', request, { apiKey: 'key\nwith-newline' }),
+      (e: GenkitError) => e.status === 'INVALID_ARGUMENT'
+    );
+    assert.strictEqual(calls, 0);
+  });
+
   it('refuses a route that returns no body', async () => {
     for (const body of [undefined, null]) {
       await assert.rejects(

@@ -79,6 +79,7 @@ import {
 import {
   Client,
   REQUEST_TIMEOUT_MS,
+  buildHeaders,
   type Route,
   type Unwrap,
 } from './client.js';
@@ -227,7 +228,10 @@ export interface SystemOneOptions {
   timeoutMs?: number;
   /**
    * Sent on every request. The Authorization header the API key makes
-   * replaces one given here.
+   * replaces one given here. A name or value HTTP cannot carry is refused
+   * when the plugin is created (FAILED_PRECONDITION), as is such a key; a
+   * per-request key in `config.apiKey` that HTTP cannot carry fails that
+   * request (INVALID_ARGUMENT), without a retry.
    */
   headers?: Record<string, string>;
   /**
@@ -382,6 +386,16 @@ function newPlugin(
   }
   let path = rooted(options.path || '/v1/systemone');
   if (path === '/') path = '';
+
+  // The plugin's headers and key go on every request, so one that HTTP
+  // cannot carry is a setup to fix now, not a failure at the first request.
+  try {
+    buildHeaders(options.headers, apiKey, true);
+  } catch (e) {
+    throw misconfigured(
+      `${provider}: the API key or headers cannot be sent as HTTP headers: ${(e as Error)?.message ?? e}`
+    );
+  }
 
   const trim = (id: string) =>
     id.startsWith(`${provider}/`) ? id.slice(provider.length + 1) : id;

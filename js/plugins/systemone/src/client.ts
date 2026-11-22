@@ -348,13 +348,20 @@ export class Client {
     apiKey: string | undefined
   ): Promise<{ text: string }> {
     const { endpoint, headers, timeoutMs } = this.options;
-    // A Headers object, so a header given in another case is replaced
-    // rather than sent twice.
-    const requestHeaders = new Headers(headers);
-    if (apiKey) requestHeaders.set('Authorization', `Bearer ${apiKey}`);
-    requestHeaders.set('Accept', 'application/json');
-    if (payload !== undefined) {
-      requestHeaders.set('Content-Type', 'application/json');
+    let requestHeaders: Headers;
+    try {
+      requestHeaders = buildHeaders(headers, apiKey, payload !== undefined);
+    } catch (e) {
+      // The plugin's own headers and key are checked when it is created, so
+      // this is a request's key: the caller's to fix, and not worth a retry.
+      throw new AttemptFailure(
+        new GenkitError({
+          status: 'INVALID_ARGUMENT',
+          message: `${endpoint.name}: the API key or headers cannot be sent as HTTP headers: ${(e as Error)?.message ?? e}`,
+        }),
+        false,
+        -1
+      );
     }
     const attempt = anySignal(
       [signal, timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined].filter(
@@ -420,6 +427,23 @@ export class Client {
       parseRetryAfter(resp.headers.get('Retry-After'))
     );
   }
+}
+
+/**
+ * The headers of one request: a Headers object, so a header given in another
+ * case is replaced rather than sent twice. It throws a TypeError for a name or
+ * a value HTTP cannot carry, such as a key with a newline.
+ */
+export function buildHeaders(
+  headers: Record<string, string> | undefined,
+  apiKey: string | undefined,
+  hasBody: boolean
+): Headers {
+  const out = new Headers(headers);
+  if (apiKey) out.set('Authorization', `Bearer ${apiKey}`);
+  out.set('Accept', 'application/json');
+  if (hasBody) out.set('Content-Type', 'application/json');
+  return out;
 }
 
 /** One failed attempt, and whether and when to retry it. */
