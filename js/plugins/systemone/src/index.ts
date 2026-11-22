@@ -78,6 +78,7 @@ import {
 } from 'genkit/plugin';
 import {
   Client,
+  HeaderError,
   REQUEST_TIMEOUT_MS,
   buildHeaders,
   type Route,
@@ -393,7 +394,7 @@ function newPlugin(
     buildHeaders(options.headers, apiKey, true);
   } catch (e) {
     throw misconfigured(
-      `${provider}: the API key or headers cannot be sent as HTTP headers: ${(e as Error)?.message ?? e}`
+      `${provider}: ${e instanceof HeaderError ? e.message : 'a header cannot be sent'}`
     );
   }
 

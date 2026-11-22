@@ -770,7 +770,10 @@ describe('systemOne', () => {
         () => systemOne({ provider: 'x', baseUrl: server.url, ...options }),
         (e: GenkitError) =>
           e.status === 'FAILED_PRECONDITION' &&
-          /cannot be sent as HTTP headers/.test(e.message),
+          /header cannot be sent: its name or value is not valid HTTP/.test(
+            e.message
+          ) &&
+          !/a\nb|with-newline/.test(e.message),
         JSON.stringify(options)
       );
     }
@@ -787,7 +790,11 @@ describe('systemOne', () => {
       }),
       (e: GenkitError) =>
         e.status === 'INVALID_ARGUMENT' &&
-        /cannot be sent as HTTP headers/.test(e.message)
+        /the Authorization header cannot be sent/.test(e.message) &&
+        !e.message.includes('with-newline') &&
+        /header cannot be sent: its name or value is not valid HTTP/.test(
+          e.message
+        )
     );
     assert.strictEqual(server.requests.length, before, 'nothing was sent');
   });

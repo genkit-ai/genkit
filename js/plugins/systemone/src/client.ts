@@ -357,7 +357,7 @@ export class Client {
       throw new AttemptFailure(
         new GenkitError({
           status: 'INVALID_ARGUMENT',
-          message: `${endpoint.name}: the API key or headers cannot be sent as HTTP headers: ${(e as Error)?.message ?? e}`,
+          message: `${endpoint.name}: ${e instanceof HeaderError ? e.message : 'a header cannot be sent'}`,
         }),
         false,
         -1
@@ -430,19 +430,43 @@ export class Client {
 }
 
 /**
+ * A header HTTP cannot carry. Its message names the header only: the value,
+ * which can be a key, is never quoted, nor the platform's error, which can
+ * quote it.
+ */
+export class HeaderError extends Error {
+  constructor(readonly header: string | undefined) {
+    super(
+      `${header ? `the ${header} header` : 'a header'} cannot be sent: its name or value is not valid HTTP`
+    );
+  }
+}
+
+/**
  * The headers of one request: a Headers object, so a header given in another
- * case is replaced rather than sent twice. It throws a TypeError for a name or
- * a value HTTP cannot carry, such as a key with a newline.
+ * case is replaced rather than sent twice. It throws a {@link HeaderError}
+ * for a name or a value HTTP cannot carry, such as a key with a newline.
  */
 export function buildHeaders(
   headers: Record<string, string> | undefined,
   apiKey: string | undefined,
   hasBody: boolean
 ): Headers {
-  const out = new Headers(headers);
-  if (apiKey) out.set('Authorization', `Bearer ${apiKey}`);
-  out.set('Accept', 'application/json');
-  if (hasBody) out.set('Content-Type', 'application/json');
+  const out = new Headers();
+  const set = (name: string, value: string) => {
+    try {
+      out.set(name, value);
+    } catch {
+      // A name that is not a valid token is not quoted either.
+      throw new HeaderError(
+        /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name) ? name : undefined
+      );
+    }
+  };
+  for (const [name, value] of Object.entries(headers ?? {})) set(name, value);
+  if (apiKey) set('Authorization', `Bearer ${apiKey}`);
+  set('Accept', 'application/json');
+  if (hasBody) set('Content-Type', 'application/json');
   return out;
 }
 
