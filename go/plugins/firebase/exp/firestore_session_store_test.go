@@ -18,6 +18,7 @@ package exp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"testing"
@@ -26,6 +27,7 @@ import (
 	"cloud.google.com/go/firestore"
 	aix "github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/ai/exp/sessionstoretest"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/firebase"
 	"github.com/google/uuid"
@@ -408,5 +410,65 @@ func TestOversizedDiffPromotion(t *testing.T) {
 	// checkpoint, not a diff off root.
 	if got.ParentID != "root" {
 		t.Errorf("child ParentID = %q, want root", got.ParentID)
+	}
+}
+
+// rewriteRow saves id again with edit applied to the stored snapshot.
+func rewriteRow(store *FirestoreSessionStore[testState], id string, edit func(*aix.SessionSnapshot[testState])) error {
+	_, err := store.SaveSnapshot(context.Background(), id, func(existing *aix.SessionSnapshot[testState]) (*aix.SessionSnapshot[testState], error) {
+		edit(existing)
+		return existing, nil
+	})
+	return err
+}
+
+// TestRejectsStateChangeUnderADiff checks that a snapshot's state cannot change
+// while another snapshot stores a diff against it, since the change would
+// corrupt that snapshot, and that everything else about the snapshot still can.
+func TestRejectsStateChangeUnderADiff(t *testing.T) {
+	ctx := context.Background()
+	store := newEmulatorStore(t)
+
+	saveRow(t, store, "parent", "sess", "", aix.SnapshotStatusCompleted, 1)
+	tick()
+	saveRow(t, store, "child", "sess", "parent", aix.SnapshotStatusCompleted, 2)
+
+	if err := rewriteRow(store, "parent", func(s *aix.SessionSnapshot[testState]) { s.State.Custom.Counter = 99 }); !errors.Is(err, status.ErrFailedPrecondition) {
+		t.Errorf("changing the state of a diff's parent: err = %v, want FAILED_PRECONDITION", err)
+	}
+	if err := rewriteRow(store, "parent", func(s *aix.SessionSnapshot[testState]) { s.FinishReason = aix.AgentFinishReasonStop }); err != nil {
+		t.Errorf("changing the parent's metadata: %v", err)
+	}
+	if err := rewriteRow(store, "child", func(s *aix.SessionSnapshot[testState]) { s.State.Custom.Counter = 3 }); err != nil {
+		t.Errorf("changing the state of the leaf: %v", err)
+	}
+
+	parent, err := store.GetSnapshot(ctx, "parent")
+	if err != nil || parent == nil || parent.State.Custom.Counter != 1 || parent.FinishReason != aix.AgentFinishReasonStop {
+		t.Errorf("parent after its rewrites = (%+v, %v), want counter 1 and finish reason stop", parent, err)
+	}
+	child, err := store.GetSnapshot(ctx, "child")
+	if err != nil || child == nil || child.State.Custom.Counter != 3 {
+		t.Errorf("child after the rewrites = (%+v, %v), want counter 3", child, err)
+	}
+}
+
+// TestAllowsStateChangeOverACheckpoint checks that a child stored as a
+// checkpoint, which holds its full state, does not block a change to its
+// parent's state.
+func TestAllowsStateChangeOverACheckpoint(t *testing.T) {
+	ctx := context.Background()
+	store := newEmulatorStore(t, WithCheckpointInterval(1))
+
+	saveRow(t, store, "parent", "sess", "", aix.SnapshotStatusCompleted, 1)
+	tick()
+	saveRow(t, store, "child", "sess", "parent", aix.SnapshotStatusCompleted, 2)
+
+	if err := rewriteRow(store, "parent", func(s *aix.SessionSnapshot[testState]) { s.State.Custom.Counter = 99 }); err != nil {
+		t.Errorf("changing the state of a checkpoint's parent: %v", err)
+	}
+	child, err := store.GetSnapshot(ctx, "child")
+	if err != nil || child == nil || child.State.Custom.Counter != 2 {
+		t.Errorf("child after the parent's rewrite = (%+v, %v), want counter 2", child, err)
 	}
 }
