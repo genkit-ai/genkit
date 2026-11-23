@@ -25,6 +25,9 @@ import { GenkitError } from './error.js';
 import type { Registry } from './registry.js';
 
 function allowUnknownFormats(ajvInstance: Ajv): void {
+  // Make the formats registry prototype-free so inherited Object.prototype names
+  // (e.g. "toString") are treated as unknown by both Ajv and ajv-formats limits.
+  Object.setPrototypeOf(ajvInstance.formats, null);
   const formatKeyword = ajvInstance.getKeyword('format');
   if (typeof formatKeyword !== 'object' || !('code' in formatKeyword)) {
     return;

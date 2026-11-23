@@ -70,12 +70,52 @@ describe('validate()', () => {
   });
 
   it('continues to validate known formats', () => {
-    const jsonSchema = { type: 'string', format: 'email' };
+    const emailSchema = { type: 'string', format: 'email' };
     assert.strictEqual(
-      validateSchema('user@example.com', { jsonSchema }).valid,
+      validateSchema('user@example.com', { jsonSchema: emailSchema }).valid,
       true
     );
-    assert.strictEqual(validateSchema('invalid', { jsonSchema }).valid, false);
+    assert.strictEqual(
+      validateSchema('invalid', { jsonSchema: emailSchema }).valid,
+      false
+    );
+
+    const dateSchema = {
+      type: 'string',
+      format: 'date',
+      formatMinimum: '2025-01-01',
+    };
+    assert.strictEqual(
+      validateSchema('2025-06-01', { jsonSchema: dateSchema }).valid,
+      true
+    );
+    assert.strictEqual(
+      validateSchema('2024-06-01', { jsonSchema: dateSchema }).valid,
+      false
+    );
+  });
+
+  it('treats Object.prototype property names as unknown formats with format limits', () => {
+    const warnSpy = mock.method(console, 'warn', () => {});
+    try {
+      const jsonSchema = {
+        type: 'string',
+        format: 'toString',
+        formatMinimum: 'a',
+        minLength: 2,
+      };
+      assert.strictEqual(validateSchema('ok', { jsonSchema }).valid, true);
+      assert.strictEqual(validateSchema('x', { jsonSchema }).valid, false);
+      const warnings = warnSpy.mock.calls.map((call) =>
+        String(call.arguments[0])
+      );
+      assert.ok(
+        warnings.some((msg) => msg.includes('unknown format "toString"')),
+        'Expected unknown format warning for toString'
+      );
+    } finally {
+      warnSpy.mock.restore();
+    }
   });
 
   it('still rejects unknown keywords under strict schema mode', () => {
