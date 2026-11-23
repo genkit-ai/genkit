@@ -166,7 +166,7 @@ const ai = genkit({
   plugins: [googleAI()],
 });
 
-// MCP tool inputs can use numbers and other JSON Schema types.
+// MCP tool inputs are objects whose properties can use numbers and other JSON Schema types.
 ai.defineTool(
   {
     name: 'add',
@@ -179,13 +179,13 @@ ai.defineTool(
   }
 );
 
-// MCP prompt arguments are strings, so prompt inputs must be string-valued.
+// MCP prompt arguments are strings, so prompt inputs must be objects with string-valued properties.
 ai.definePrompt({
   name: 'happy',
   description: 'everybody together now',
   input: {
     schema: z.object({
-      action: z.string().default('clap your hands'),
+      action: z.string(),
     }),
   },
   prompt: `If you're happy and you know it, {{action}}.`,
@@ -240,7 +240,7 @@ The `createMcpServer` function returns a `GenkitMcpServer` instance. The `start(
 
 ### Known Limitations
 
-- MCP prompt arguments are strings, so prompt input schemas must be objects with string-valued properties. This applies to MCP prompts only (such as prompts defined with `ai.definePrompt` or `.prompt` files). MCP tool input schemas (such as `ai.defineTool`) may use other JSON Schema types, like the numeric inputs in the `add` tool above.
+- MCP prompt arguments are strings, so prompt input schemas must be objects with string-valued properties. This applies to MCP prompts only (such as prompts defined with `ai.definePrompt` or `.prompt` files). MCP tool inputs are objects whose properties can use other JSON Schema types, such as the numeric `a` and `b` in the `add` tool above.
 - MCP prompts only support `user` and `model` messages. `system` messages are not supported.
 - MCP prompts only support a single "type" within a message so you can't mix media and text in the same message.
 
