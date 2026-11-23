@@ -26,5 +26,4 @@ export interface VectorSearchOptionsConfig {
 }
 
 export interface PluginOptions
-  extends CommonPluginOptions,
-    VectorSearchOptionsConfig {}
+  extends CommonPluginOptions, VectorSearchOptionsConfig {}

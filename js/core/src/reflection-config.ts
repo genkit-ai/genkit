@@ -36,8 +36,7 @@ export const REFLECTION_AUTH_ERROR_CODE = -32001;
  * {@link DEFAULT_REFLECTION_PORT}, used only when nobody chose a port.
  */
 export type ReflectionPort =
-  | { kind: 'pinned'; port: number }
-  | { kind: 'probe' };
+  { kind: 'pinned'; port: number } | { kind: 'probe' };
 
 /**
  * How the reflection API runs, if at all.
@@ -49,9 +48,7 @@ export type ReflectionPort =
  * defaults.
  */
 export type ReflectionConfig =
-  | { kind: 'disabled' }
-  | { kind: 'off' }
-  | ReflectionServerConfig;
+  { kind: 'disabled' } | { kind: 'off' } | ReflectionServerConfig;
 
 /** How a running reflection API connects: dial out (v2) or listen (v1). */
 export type ReflectionServerConfig =

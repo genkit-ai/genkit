@@ -24,6 +24,7 @@ import {
   embedderRef,
   modelActionMetadata,
   modelRef,
+  type ActionMetadata,
   type EmbedderReference,
   type Genkit,
   type ModelReference,
@@ -288,7 +289,7 @@ async function listActions(options?: PluginOptions) {
  * Add Google Cloud Vertex AI to Genkit. Includes Gemini and Imagen models and text embedder.
  */
 function vertexAIPlugin(options?: PluginOptions): GenkitPlugin {
-  let listActionsCache;
+  let listActionsCache: ActionMetadata[] | undefined;
   return genkitPlugin(
     'vertexai',
     async (ai: Genkit) => await initializer(ai, options),

@@ -23,7 +23,6 @@ import type { DocumentData } from '../../src/document.js';
 import { configureFormats } from '../../src/formats/index.js';
 import { generate } from '../../src/generate.js';
 import {
-  defineModel,
   type GenerateRequest,
   type GenerateResponseData,
   type MessageData,
@@ -500,7 +499,7 @@ describe('fallback', () => {
 
     const fallbackPm = defineProgrammableModel(registry, {}, 'fallbackModel');
 
-    const result = await generate(registry, {
+    await generate(registry, {
       model: 'programmableModel',
       prompt: 'test',
       use: [fallback({ registry }, { models: ['fallbackModel'] })],
@@ -618,19 +617,6 @@ describe('fallback', () => {
     assert.strictEqual(pm.requestCount, 1);
     assert.strictEqual(fallbackPm.requestCount, 0);
   });
-});
-
-const registry = new Registry();
-configureFormats(registry);
-
-const echoModel = defineModel(registry, { name: 'echo' }, async (req) => {
-  return {
-    finishReason: 'stop',
-    message: {
-      role: 'model',
-      content: [{ data: req }],
-    },
-  };
 });
 
 describe('simulateSystemPrompt', () => {

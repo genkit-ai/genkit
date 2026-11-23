@@ -15,8 +15,8 @@
  */
 
 import { z } from 'zod';
-import { ActionMetadataSchema } from './action';
-import { RunActionRequestSchema } from './apis';
+import { ActionMetadataSchema } from './action.js';
+import { RunActionRequestSchema } from './apis.js';
 
 export { ActionMetadataSchema };
 

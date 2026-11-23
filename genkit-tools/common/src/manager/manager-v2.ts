@@ -15,15 +15,15 @@
  */
 
 import EventEmitter from 'events';
-import getPort, { makeRange } from 'get-port';
+import getPort, { portNumbers } from 'get-port';
 import path from 'path';
 import { WebSocket, WebSocketServer } from 'ws';
 import {
   Action,
   RunActionResponse,
   RunActionResponseSchema,
-} from '../types/action';
-import * as apis from '../types/apis';
+} from '../types/action.js';
+import * as apis from '../types/apis.js';
 import {
   ReflectionCancelActionParamsSchema,
   ReflectionCancelActionResponseSchema,
@@ -38,11 +38,11 @@ import {
   ReflectionSendInputStreamChunkParamsSchema,
   ReflectionStreamChunkParamsSchema,
   type ReflectionRegisterParams,
-} from '../types/reflection';
-import { logger } from '../utils/logger';
-import { DevToolsInfo } from '../utils/utils';
-import { BaseRuntimeManager, RuntimeManagerOptions } from './manager';
-import { ProcessManager } from './process-manager';
+} from '../types/reflection.js';
+import { logger } from '../utils/logger.js';
+import { DevToolsInfo } from '../utils/utils.js';
+import { BaseRuntimeManager, RuntimeManagerOptions } from './manager.js';
+import { ProcessManager } from './process-manager.js';
 import {
   DEFAULT_REFLECTION_V2_HOST,
   REFLECTION_AUTH_ERROR_CODE,
@@ -50,13 +50,13 @@ import {
   isLoopbackHost,
   reflectionV2Url,
   secretsEqual,
-} from './reflection-auth';
+} from './reflection-auth.js';
 import {
   GenkitToolsError,
   RuntimeEvent,
   RuntimeInfo,
   StreamingCallback,
-} from './types';
+} from './types.js';
 
 /** How long a socket may stay open without completing `register`. */
 const REGISTER_TIMEOUT_MS = 10_000;
@@ -221,7 +221,7 @@ export class RuntimeManagerV2 extends BaseRuntimeManager {
     host: string = DEFAULT_REFLECTION_V2_HOST
   ): Promise<{ port: number }> {
     if (!port) {
-      port = await getPort({ host, port: makeRange(3200, 3400) });
+      port = await getPort({ host, port: portNumbers(3200, 3400) });
     }
     if (!this.reflectionSecret && !isLoopbackHost(host)) {
       logger.warn(

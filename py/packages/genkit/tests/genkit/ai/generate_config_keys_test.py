@@ -18,11 +18,12 @@ import pytest
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
 
 from genkit import FinishReason, Genkit, Message, ModelResponse, Part
-from genkit._core._action import ActionKind, ActionRunContext
+from genkit._core._action import ActionKind
 from genkit._core._error import GenkitError
 from genkit._core._model import ModelRef, ModelRequest
-from genkit._core._typing import GenerationCommonConfig, Operation, Role
-from genkit.model import ModelConfig, model_ref
+from genkit._core._operation import Operation
+from genkit._core._typing import GenerationCommonConfig, Role
+from genkit.model import ModelConfig, ModelContext
 
 KEY = 'sk-tenant'
 SECRETS_HINT = "context={'secrets': {'api_key': ...}}"
@@ -98,7 +99,7 @@ class _Model:
         self.requests: list[ModelRequest] = []
 
     def define(self, ai: Genkit, *, name: str, config_schema: type[BaseModel] | None) -> None:
-        async def fn(request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+        async def fn(request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
             self.requests.append(request)
             return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
 
@@ -172,7 +173,7 @@ async def test_generate_unknown_config_key_error_has_validation_error_as_cause()
         await ai.generate(model='strict', prompt='hi', config={'temprature': 0.2})
 
     _assert_rejected(err, fn, 'temprature')
-    assert isinstance(err.value.cause, ValidationError)
+    assert isinstance(err.value.__cause__, ValidationError)
 
 
 @pytest.mark.asyncio
@@ -188,12 +189,12 @@ async def test_generate_wrong_type_config_value_raises_invalid_argument() -> Non
 
 @pytest.mark.asyncio
 async def test_generate_camel_case_key_alone_reaches_model() -> None:
-    """`{'maxOutputTokens': 5}` is the same declared setting, so it's accepted and reaches the model."""
+    """`{'maxOutputTokens': 5}` is the same declared setting; it reaches the model under the key the class accepts."""
     ai, fn = _ai_with_model()
 
     await ai.generate(model='strict', prompt='hi', config={'maxOutputTokens': 5})
 
-    assert _config_value(fn.requests[-1].config, 'maxOutputTokens') == 5
+    assert fn.requests[-1].config == {'max_output_tokens': 5}
 
 
 @pytest.mark.asyncio
@@ -305,7 +306,7 @@ async def test_model_ref_for_model_without_config_class_accepts_any_dict() -> No
 async def test_model_ref_with_declared_schema_config_typo_raises() -> None:
     """A ModelRef with StrictConfig plus `config={'temprature': 0.2}` raises like the string name."""
     ai, fn = _ai_with_model()
-    ref = model_ref('strict', config_schema=StrictConfig)
+    ref = ModelRef(name='strict', config_schema=StrictConfig)
 
     with pytest.raises(GenkitError) as err:
         await ai.generate(model=ref, prompt='hi', config={'temprature': 0.2})
@@ -315,9 +316,9 @@ async def test_model_ref_with_declared_schema_config_typo_raises() -> None:
 
 @pytest.mark.asyncio
 async def test_generate_model_ref_config_typo_raises() -> None:
-    """A typo in the call-site dict next to `model_ref(..., config=...)` raises like a string model name."""
+    """A typo in the call-site dict next to `ModelRef(..., config=...)` raises like a string model name."""
     ai, fn = _ai_with_model()
-    ref = model_ref('strict', config_schema=StrictConfig, config=StrictConfig(temperature=0.5))
+    ref = ModelRef(name='strict', config_schema=StrictConfig, config=StrictConfig(temperature=0.5))
 
     with pytest.raises(GenkitError) as err:
         await ai.generate(model=ref, prompt='hi', config={'temprature': 0.2})
@@ -346,11 +347,11 @@ async def test_generate_operation_unknown_config_key_raises() -> None:
     ai = Genkit()
     started: list[ModelRequest] = []
 
-    async def start(request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(request: ModelRequest, _ctx: ModelContext) -> Operation:
         started.append(request)
         return Operation(id='job-1', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     ai.define_background_model(name='bg', start=start, check=check, config_schema=StrictConfig)
@@ -464,7 +465,7 @@ async def test_generate_both_spellings_of_one_setting_raises_same_setting(config
         await ai.generate(model='strict', prompt='hi', config=config)
 
     _assert_rejected(err, fn)
-    assert err.value.original_message == 'strict: max_output_tokens and maxOutputTokens are the same setting; pass one'
+    assert err.value.message == 'strict: max_output_tokens and maxOutputTokens are the same setting; pass one'
 
 
 @pytest.mark.asyncio
@@ -480,7 +481,7 @@ async def test_generate_two_settings_each_in_both_spellings_names_both_pairs() -
         )
 
     _assert_rejected(err, fn)
-    assert err.value.original_message == (
+    assert err.value.message == (
         'strict: max_output_tokens and maxOutputTokens are the same setting; pass one; '
         'top_k and topK are the same setting; pass one'
     )
@@ -499,7 +500,7 @@ async def test_generate_both_spellings_of_plugin_declared_alias_raises_same_sett
         )
 
     _assert_rejected(err, fn)
-    assert err.value.original_message == 'gem: thinking_config and thinkingConfig are the same setting; pass one'
+    assert err.value.message == 'gem: thinking_config and thinkingConfig are the same setting; pass one'
 
 
 @pytest.mark.asyncio
@@ -515,17 +516,18 @@ async def test_generate_three_spellings_of_one_setting_lists_all_three() -> None
         await ai.generate(model='seeded', prompt='hi', config={'seedValue': 1, 'seed': 1, 'seed_value': 1})
 
     _assert_rejected(err, fn)
-    assert err.value.original_message == 'seeded: seed_value, seedValue, and seed are the same setting; pass one'
+    assert err.value.message == 'seeded: seed_value, seedValue, and seed are the same setting; pass one'
 
 
 @pytest.mark.asyncio
-async def test_generate_none_on_one_spelling_is_not_a_second_spelling() -> None:
-    """`{'maxOutputTokens': 5, 'max_output_tokens': None}` runs: None is unset, so only one spelling is set."""
+async def test_generate_none_on_one_spelling_is_still_a_second_spelling() -> None:
+    """`{'maxOutputTokens': 5, 'max_output_tokens': None}` raises: an explicit None is a value."""
     ai, fn = _ai_with_model()
 
-    await ai.generate(model='strict', prompt='hi', config={'maxOutputTokens': 5, 'max_output_tokens': None})
+    with pytest.raises(GenkitError) as err:
+        await ai.generate(model='strict', prompt='hi', config={'maxOutputTokens': 5, 'max_output_tokens': None})
 
-    assert fn.requests[-1].config == {'maxOutputTokens': 5}
+    _assert_rejected(err, fn, 'max_output_tokens and maxOutputTokens are the same setting')
 
 
 @pytest.mark.asyncio
@@ -541,7 +543,7 @@ async def test_generate_both_spellings_typo_and_bad_value_all_in_one_error() -> 
         )
 
     _assert_rejected(err, fn)
-    assert err.value.original_message.startswith(
+    assert err.value.message.startswith(
         'strict: max_output_tokens and maxOutputTokens are the same setting; pass one; '
         "unknown config key 'temprature'; put provider-only settings in config['extra']; "
         "config 'top_p': "
@@ -570,6 +572,80 @@ async def test_prompt_call_other_model_clearing_prompt_key_with_none_runs() -> N
     assert _config_value(other.requests[-1].config, 'thinkingConfig') is None
     assert _config_value(other.requests[-1].config, 'thinking_config') is None
     assert gem.requests == []
+
+
+def _sent_as_none(config: Any, key: str) -> bool:  # noqa: ANN401
+    if isinstance(config, dict):
+        return key in config and config[key] is None
+    return isinstance(config, BaseModel) and key in config.model_fields_set and getattr(config, key) is None
+
+
+def _gem_prompt_and_other(
+    *,
+    prompt_model: str | ModelRef[GeminiLikeConfig] = 'gem',
+    prompt_config: dict[str, Any] | None = None,
+) -> tuple[Genkit, _Model, _Model]:
+    ai = Genkit()
+    gem = _Model()
+    other = _Model()
+    gem.define(ai, name='gem', config_schema=GeminiLikeConfig)
+    other.define(ai, name='other', config_schema=ModelConfig)
+    ai.define_prompt(
+        name='hop',
+        model=prompt_model,
+        prompt='hi',
+        config=prompt_config if prompt_config is not None else {'thinkingConfig': {'thinkingBudget': 0}},
+    )
+    return ai, gem, other
+
+
+@pytest.mark.asyncio
+async def test_prompt_call_other_model_none_for_a_key_the_prompt_lacks_raises() -> None:
+    """`model='other', config={'temprature': None}` raises: the prompt has no temprature, so it's a typo."""
+    ai, gem, other = _gem_prompt_and_other()
+
+    with pytest.raises(GenkitError) as err:
+        await ai.prompt('hop')(model='other', config={'temprature': None})
+
+    _assert_rejected(err, other, "other: unknown config key 'temprature'")
+    assert gem.requests == []
+
+
+@pytest.mark.asyncio
+async def test_prompt_call_other_model_none_for_a_declared_key_is_a_value() -> None:
+    """`model='other', config={'temperature': None}` over the prompt's 0.5 sends temperature=None: other declares it."""
+    ai, gem, other = _gem_prompt_and_other(prompt_config={'temperature': 0.5})
+
+    response = await ai.prompt('hop')(model='other', config={'temperature': None})
+
+    assert response.text == 'ok'
+    assert _sent_as_none(other.requests[-1].config, 'temperature')
+    assert gem.requests == []
+
+
+@pytest.mark.asyncio
+async def test_prompt_same_model_none_for_prompt_key_is_a_value() -> None:
+    """`config={'thinkingConfig': None}` on the prompt's own model sends thinking_config=None, as before."""
+    ai, gem, other = _gem_prompt_and_other()
+
+    response = await ai.prompt('hop')(config={'thinkingConfig': None})
+
+    assert response.text == 'ok'
+    assert _sent_as_none(gem.requests[-1].config, 'thinking_config')
+    assert other.requests == []
+
+
+@pytest.mark.asyncio
+async def test_prompt_on_model_ref_called_with_its_name_is_not_a_hop() -> None:
+    """A prompt on `ModelRef(name='gem')` called with `model='gem'` keeps None a value: same model, no hop."""
+    ref = ModelRef(name='gem', config_schema=GeminiLikeConfig)
+    ai, gem, _ = _gem_prompt_and_other(prompt_model=ref)
+    prompt = ai.define_prompt(name='typo', model=ref, prompt='hi', config={'temprature': 0.2})
+
+    with pytest.raises(GenkitError) as err:
+        await prompt(model='gem', config={'temprature': None})
+
+    _assert_rejected(err, gem, "gem: unknown config key 'temprature'")
 
 
 @pytest.mark.asyncio
@@ -606,8 +682,8 @@ async def test_generate_incomplete_nested_setting_raises_naming_the_missing_fiel
 
 
 @pytest.mark.asyncio
-async def test_generate_missing_required_top_level_field_fails_the_turn_not_the_call() -> None:
-    """A required top-level field no layer supplies doesn't raise; the model action fails the turn."""
+async def test_generate_missing_required_top_level_field_fails_the_turn() -> None:
+    """A required field no layer or middleware supplies fails the turn; the model never runs."""
     ai, fn = _ai_with_model(config_schema=RequiredTopConfig, name='needs')
 
     response = await ai.generate(model='needs', prompt='hi', config={'temperature': 0.2})
@@ -615,15 +691,15 @@ async def test_generate_missing_required_top_level_field_fails_the_turn_not_the_
     assert response.finish_reason == FinishReason.FAILED
     assert response.error is not None
     assert response.error.status == 'INVALID_ARGUMENT'
-    assert "'must'" in response.error.message
+    assert "needs: config 'must': Field required" in response.error.message
     assert fn.requests == []
 
 
 @pytest.mark.asyncio
 async def test_generate_ref_with_shared_config_class_accepts_model_declared_setting() -> None:
-    """`model_ref(..., config_schema=ModelConfig)` with the model's `safety_settings` runs."""
+    """`ModelRef(..., config_schema=ModelConfig)` with the model's `safety_settings` runs."""
     ai, fn = _ai_with_model(config_schema=GeminiLikeConfig, name='gem')
-    ref = model_ref('gem', config_schema=ModelConfig)
+    ref = ModelRef(name='gem', config_schema=ModelConfig)
 
     response = await ai.generate(
         model=ref,
@@ -641,7 +717,7 @@ async def test_generate_ref_with_shared_config_class_accepts_model_declared_sett
 async def test_generate_ref_with_shared_config_class_rejects_typo_via_model_class() -> None:
     """The same ModelConfig ref with `{'temprature': 0.2}` raises INVALID_ARGUMENT naming temprature."""
     ai, fn = _ai_with_model(config_schema=GeminiLikeConfig, name='gem')
-    ref = model_ref('gem', config_schema=ModelConfig)
+    ref = ModelRef(name='gem', config_schema=ModelConfig)
 
     with pytest.raises(GenkitError) as err:
         await ai.generate(model=ref, prompt='hi', config={'temprature': 0.2})
@@ -650,15 +726,17 @@ async def test_generate_ref_with_shared_config_class_rejects_typo_via_model_clas
 
 
 @pytest.mark.asyncio
-async def test_generate_ref_with_plugin_class_still_checks_against_that_class() -> None:
-    """A ref that names another plugin's class still rejects this model's settings."""
+async def test_generate_ref_with_another_plugins_class_raises() -> None:
+    """A ref's config_schema must name the model's class; the model's definition owns it."""
     ai, fn = _ai_with_model(config_schema=GeminiLikeConfig, name='gem')
-    ref = model_ref('gem', config_schema=OtherConfig)
+    ref = ModelRef(name='gem', config_schema=OtherConfig)
 
     with pytest.raises(GenkitError) as err:
         await ai.generate(model=ref, prompt='hi', config={'safety_settings': [{'category': 'HARM'}]})
 
-    _assert_rejected(err, fn, 'safety_settings')
+    _assert_rejected(
+        err, fn, "model 'gem' takes config", 'GeminiLikeConfig', "the ref's config_schema is", 'OtherConfig'
+    )
 
 
 # -- api key ------------------------------------------------------------------
@@ -721,9 +799,9 @@ async def test_generate_plugin_class_that_declares_api_key_raises() -> None:
 
 @pytest.mark.asyncio
 async def test_generate_model_ref_with_api_key_in_its_config_raises() -> None:
-    """`model_ref('legacy', config=LegacyConfig(api_key=k))` raises when generate uses it, with no call-site config."""
+    """A ModelRef whose config carries api_key raises at generate, with no call-site config."""
     ai, fn = _ai_with_model(config_schema=LegacyConfig, name='legacy')
-    ref = model_ref('legacy', config_schema=LegacyConfig, config=LegacyConfig(api_key=KEY))
+    ref = ModelRef(name='legacy', config_schema=LegacyConfig, config=LegacyConfig(api_key=KEY))
 
     with pytest.raises(GenkitError) as err:
         await ai.generate(model=ref, prompt='hi')
@@ -776,11 +854,11 @@ async def test_generate_operation_config_api_key_raises() -> None:
     ai = Genkit()
     started: list[ModelRequest] = []
 
-    async def start(request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(request: ModelRequest, _ctx: ModelContext) -> Operation:
         started.append(request)
         return Operation(id='job-1', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     ai.define_background_model(name='bg', start=start, check=check)
@@ -853,8 +931,7 @@ async def test_model_action_run_directly_with_config_api_key_raises(request_inpu
     assert action is not None
 
     with pytest.raises(GenkitError) as err:
-        # Wire-shaped inputs on purpose: run() validates whatever it is handed.
-        await action.run(cast(Any, request_input))
+        await cast(Any, action).run(request_input)
 
     _assert_points_to_secrets(err, fn)
 
@@ -865,11 +942,11 @@ async def test_background_model_action_run_directly_with_config_api_key_raises()
     ai = Genkit()
     started: list[ModelRequest] = []
 
-    async def start(request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(request: ModelRequest, _ctx: ModelContext) -> Operation:
         started.append(request)
         return Operation(id='job-1', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     ai.define_background_model(name='bg', start=start, check=check)

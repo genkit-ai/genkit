@@ -106,8 +106,10 @@ export interface FirebaseContext {
   firebaseApp?: FirebaseServerApp;
 }
 
-export interface FirebaseContextProvider<I = any>
-  extends ContextProvider<FirebaseContext, I> {
+export interface FirebaseContextProvider<I = any> extends ContextProvider<
+  FirebaseContext,
+  I
+> {
   (request: RequestData<I>): Promise<FirebaseContext>;
 }
 

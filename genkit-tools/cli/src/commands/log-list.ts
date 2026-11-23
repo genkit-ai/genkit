@@ -22,8 +22,8 @@ import {
   logger,
 } from '@genkit-ai/tools-common/utils';
 import { Command, Option } from 'commander';
-import { runWithManager } from '../utils/manager-utils';
-import { parsePositiveInt } from '../utils/option-parsers';
+import { runWithManager } from '../utils/manager-utils.js';
+import { parsePositiveInt } from '../utils/option-parsers.js';
 
 export interface LogListOptions {
   limit: number;

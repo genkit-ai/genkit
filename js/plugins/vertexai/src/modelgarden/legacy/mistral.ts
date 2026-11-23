@@ -450,10 +450,7 @@ function createClientFactory(projectId: string) {
 }
 
 type MistralMessage =
-  | AssistantMessage
-  | ToolMessage
-  | SystemMessage
-  | UserMessage;
+  AssistantMessage | ToolMessage | SystemMessage | UserMessage;
 
 // Helper function to validate tool calls and responses match
 function validateToolSequence(messages: MistralMessage[]) {

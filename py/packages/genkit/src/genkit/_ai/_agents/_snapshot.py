@@ -24,7 +24,7 @@ from typing import Any
 from genkit._ai._agents._session import SessionStore
 from genkit._ai._agents._types import StateTransform
 from genkit._core._action import get_current_context
-from genkit._core._error import GenkitError, RuntimeErrorReason
+from genkit._core._error import ErrorReason, GenkitError
 from genkit._core._model import SessionSnapshot
 from genkit._core._typing import SnapshotStatus
 
@@ -80,11 +80,7 @@ def parse_snapshot_lookup_kw(
             raise GenkitError(
                 status='INVALID_ARGUMENT',
                 message=f'{name} must not be empty or whitespace-only.',
-                reason=(
-                    RuntimeErrorReason.INVALID_SNAPSHOT_ID
-                    if name == 'snapshot_id'
-                    else RuntimeErrorReason.SESSION_ID_REQUIRED
-                ),
+                reason=(ErrorReason.INVALID_SNAPSHOT_ID if name == 'snapshot_id' else ErrorReason.SESSION_ID_REQUIRED),
             )
     if bool(snapshot_id) == bool(session_id):
         raise GenkitError(
@@ -93,7 +89,7 @@ def parse_snapshot_lookup_kw(
                 "get_snapshot requires exactly one of 'snapshot_id' or 'session_id' "
                 f'(got snapshot_id={snapshot_id!r}, session_id={session_id!r}).'
             ),
-            reason=RuntimeErrorReason.INVALID_INPUT,
+            reason=ErrorReason.INVALID_INPUT,
         )
     return snapshot_id, session_id
 

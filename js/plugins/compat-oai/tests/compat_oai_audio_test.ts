@@ -19,7 +19,7 @@ import { describe, expect, it, jest } from '@jest/globals';
 import { GenerateRequest } from 'genkit';
 import OpenAI from 'openai';
 import { Response } from 'openai/core.mjs';
-import { Transcription } from 'openai/resources/audio/transcriptions.mjs';
+import type { Transcription } from 'openai/resources/audio/index.mjs';
 import {
   defineCompatOpenAISpeechModel,
   defineCompatOpenAITranscriptionModel,

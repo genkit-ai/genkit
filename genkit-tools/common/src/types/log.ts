@@ -17,7 +17,7 @@
 import { extendZodWithOpenApi } from '@asteasolutions/zod-to-openapi';
 import * as z from 'zod';
 
-import { InstrumentationLibrarySchema } from './trace';
+import { InstrumentationLibrarySchema } from './trace.js';
 
 extendZodWithOpenApi(z);
 

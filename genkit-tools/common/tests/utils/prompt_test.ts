@@ -14,15 +14,15 @@
  * limitations under the License.
  */
 
-import { describe, expect, it } from '@jest/globals';
-import type { MessageData } from '../../src/types/model';
-import { PromptFrontmatter } from '../../src/types/prompt';
+import { describe, expect, it } from 'vitest';
+import type { MessageData } from '../../src/types/model.js';
+import { PromptFrontmatter } from '../../src/types/prompt.js';
 import {
   renderPromptFile,
   toFrontmatterInput,
   toFrontmatterOutput,
   toPromptFile,
-} from '../../src/utils/prompt';
+} from '../../src/utils/prompt.js';
 
 describe('renderPromptFile', () => {
   it('builds a template from messages', () => {

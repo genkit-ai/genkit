@@ -29,7 +29,12 @@ import { remoteAgent } from 'genkit/beta/client';
 import { a2uiEnvelopesFromParts, a2uiPart } from './part.js';
 import type { A2uiClientAction, A2uiServerEnvelope } from './types.js';
 
-export { a2uiEnvelopesFromParts, a2uiPart, isA2uiPart } from './part.js';
+export {
+  a2uiEnvelopesFromParts,
+  a2uiPart,
+  a2uiPartMessages,
+  isA2uiPart,
+} from './part.js';
 export {
   A2UI_MIME_TYPE,
   A2UI_VERSION,
