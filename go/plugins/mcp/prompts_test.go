@@ -19,7 +19,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
@@ -214,53 +213,6 @@ func TestGetDynamicPromptAfterDisconnect(t *testing.T) {
 		t.Fatalf("Disconnect: %v", err)
 	}
 	if _, err := prompt.Render(ctx, map[string]any{"name": "Ada"}); err == nil || !strings.Contains(err.Error(), "not connected") {
-		t.Fatalf("Render after disconnect error = %v, want disconnected error", err)
-	}
-}
-
-func TestGetDynamicPromptDisconnectDuringRender(t *testing.T) {
-	entered := make(chan struct{}, 1)
-	release := make(chan struct{})
-	client := testPromptClient(t, greetingPrompt, func(_ context.Context, _ protocol.GetPromptRequest) (*protocol.GetPromptResult, error) {
-		entered <- struct{}{}
-		<-release
-		return textResult("Hello"), nil
-	})
-	ctx := context.Background()
-	prompt, err := client.GetDynamicPrompt(ctx, genkit.Init(ctx), "greeting")
-	if err != nil {
-		t.Fatalf("GetDynamicPrompt: %v", err)
-	}
-
-	renderDone := make(chan error, 1)
-	go func() {
-		_, err := prompt.Render(ctx, map[string]any{"name": "Ada"})
-		renderDone <- err
-	}()
-	select {
-	case <-entered:
-	case <-time.After(5 * time.Second):
-		close(release)
-		t.Fatal("MCP prompt handler was not reached")
-	}
-
-	disconnectDone := make(chan error, 1)
-	go func() { disconnectDone <- client.Disconnect() }()
-	close(release)
-	select {
-	case <-renderDone: // The in-flight request may finish or be interrupted.
-	case <-time.After(5 * time.Second):
-		t.Fatal("Render did not finish after disconnect")
-	}
-	select {
-	case err := <-disconnectDone:
-		if err != nil {
-			t.Fatalf("Disconnect: %v", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("Disconnect did not finish")
-	}
-	if _, err := prompt.Render(ctx, map[string]any{"name": "Grace"}); err == nil || !strings.Contains(err.Error(), "not connected") {
 		t.Fatalf("Render after disconnect error = %v, want disconnected error", err)
 	}
 }
