@@ -194,7 +194,7 @@ export interface GenkitOptions {
  *   },
  *   async ({ subject }) => {
  *     const { text } = await ai.generate({
- *       model: googleAI.model('gemini-2.5-flash'),
+ *       model: googleAI.model('gemini-flash-latest'),
  *       prompt: `Say hello to ${subject}`,
  *     });
  *     return text;
@@ -257,13 +257,6 @@ export class Genkit extends GenkitAI implements HasRegistry {
    *
    * @example
    * ```ts
-   * import { genkit, z } from 'genkit';
-   * import { googleAI } from '@genkit-ai/google-genai';
-   *
-   * const ai = genkit({
-   *   plugins: [googleAI()],
-   * });
-   *
    * export const myFlow = ai.defineFlow(
    *   {
    *     name: 'myFlow',
@@ -272,7 +265,7 @@ export class Genkit extends GenkitAI implements HasRegistry {
    *   },
    *   async ({ subject }) => {
    *     const { text } = await ai.generate({
-   *       model: googleAI.model('gemini-2.5-flash'),
+   *       model: googleAI.model('gemini-flash-latest'),
    *       prompt: `Say hello to ${subject}`,
    *     });
    *     return text;
@@ -876,7 +869,7 @@ function registerActionV2(
  *   },
  *   async ({ subject }) => {
  *     const { text } = await ai.generate({
- *       model: googleAI.model('gemini-2.5-flash'),
+ *       model: googleAI.model('gemini-flash-latest'),
  *       prompt: `Say hello to ${subject}`,
  *     });
  *     return text;

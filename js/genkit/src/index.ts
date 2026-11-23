@@ -36,7 +36,7 @@
  *   },
  *   async ({ subject }) => {
  *     const { text } = await ai.generate({
- *       model: googleAI.model('gemini-2.5-flash'),
+ *       model: googleAI.model('gemini-flash-latest'),
  *       prompt: `Say hello to ${subject}`,
  *     });
  *     return text;
