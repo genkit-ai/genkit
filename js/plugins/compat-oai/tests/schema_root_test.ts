@@ -306,4 +306,148 @@ describe('openAIModelRunner with a wrapped root', () => {
       { data: [{ name: 'a' }, { name: 'b' }] },
     ]);
   });
+
+  describe('with tools', () => {
+    const toolRequest = {
+      ...arrayRequest,
+      tools: [
+        {
+          name: 'lookup',
+          description: 'Look up people',
+          inputSchema: { type: 'object', properties: {} },
+        },
+      ],
+    } as GenerateRequest;
+
+    it('returns tool requests and keeps a preamble as text', async () => {
+      server.setNextResponse({
+        body: {
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content: 'Let me check.',
+                tool_calls: [
+                  {
+                    id: 'call_1',
+                    type: 'function',
+                    function: { name: 'lookup', arguments: '{}' },
+                  },
+                ],
+              },
+              finish_reason: 'tool_calls',
+            },
+          ],
+        },
+      });
+      const res = await runner()(toolRequest);
+      const body = server.requests[0].body;
+      expect(body.tools).toHaveLength(1);
+      expect(body.response_format.json_schema.schema).toStrictEqual(
+        wrapSchemaRoot(arraySchema)
+      );
+      expect(res.finishReason).toBe('stop');
+      expect(res.message?.content).toStrictEqual([
+        { text: 'Let me check.' },
+        {
+          toolRequest: { ref: 'call_1', name: 'lookup', input: {} },
+        },
+      ]);
+    });
+
+    it('unwraps the final answer after the tool turn', async () => {
+      server.setNextResponse({
+        body: {
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content: '{"value":[{"name":"a"}]}',
+              },
+              finish_reason: 'stop',
+            },
+          ],
+        },
+      });
+      const res = await runner()({
+        ...toolRequest,
+        messages: [
+          ...toolRequest.messages,
+          {
+            role: 'model',
+            content: [
+              { toolRequest: { ref: 'call_1', name: 'lookup', input: {} } },
+            ],
+          },
+          {
+            role: 'tool',
+            content: [
+              {
+                toolResponse: { ref: 'call_1', name: 'lookup', output: ['a'] },
+              },
+            ],
+          },
+        ],
+      } as GenerateRequest);
+      expect(res.message?.content).toStrictEqual([{ data: [{ name: 'a' }] }]);
+    });
+
+    it('streams a preamble and tool call through unchanged', async () => {
+      server.setNextResponse({
+        stream: true,
+        chunks: [
+          {
+            choices: [
+              { index: 0, delta: { role: 'assistant', content: 'Let me ' } },
+            ],
+          },
+          { choices: [{ index: 0, delta: { content: 'check. ' } }] },
+          {
+            choices: [
+              {
+                index: 0,
+                delta: {
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id: 'call_1',
+                      type: 'function',
+                      function: { name: 'lookup', arguments: '' },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+          {
+            choices: [
+              {
+                index: 0,
+                delta: {
+                  tool_calls: [{ index: 0, function: { arguments: '{}' } }],
+                },
+              },
+            ],
+          },
+          { choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] },
+        ],
+      });
+      let text = '';
+      let sawToolRequest = false;
+      const res = await runner()(toolRequest, {
+        streamingRequested: true,
+        sendChunk: (c) => {
+          for (const p of c.content) {
+            if (p.text) text += p.text;
+            if (p.toolRequest) sawToolRequest = true;
+          }
+        },
+      });
+      expect(text).toBe('Let me check. ');
+      expect(sawToolRequest).toBe(true);
+      expect(res.message?.content).toContainEqual({
+        toolRequest: { ref: 'call_1', name: 'lookup', input: {} },
+      });
+    });
+  });
 });
