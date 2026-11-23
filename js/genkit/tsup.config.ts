@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 
-import { readFile, writeFile } from 'node:fs/promises';
+import { readdir, readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { build, defineConfig, type Options } from 'tsup';
 import { defaultOptions } from '../tsup.common';
 
@@ -41,48 +42,23 @@ export default defineConfig({
     const indexSource = await readFile('src/index.ts', 'utf8');
     const header = extractLeadingComments(indexSource);
 
-    for (const [dtsExt, jsExt] of [
-      ['d.ts', 'js'],
-      ['d.mts', 'mjs'],
-    ] as const) {
-      const indexDtsPath = `lib/index.${dtsExt}`;
-      const genkitDtsPath = `lib/genkit.${dtsExt}`;
-      const [indexDts, rawGenkitDts] = await Promise.all([
-        readFile(indexDtsPath, 'utf8'),
-        readFile(genkitDtsPath, 'utf8'),
-      ]);
-
-      const genkitDts =
-        jsExt === 'mjs'
-          ? rawGenkitDts.replace(/from '(\.\.?\/[^']+)\.js'/g, "from '$1.mjs'")
-          : rawGenkitDts;
-
-      const combinedIndexDts =
-        header +
-        indexDts.replace(
-          /export \{[^}]*\} from '\.\/genkit\.(?:js|mjs)';/,
-          genkitDts.trim()
-        );
-
-      const genkitReexportDts = `${header}export { Genkit, type GenkitOptions, type PromptFn, __disableReflectionApi, genkit } from './index.${jsExt}';\n`;
-
-      await Promise.all([
-        writeFile(indexDtsPath, combinedIndexDts, 'utf8'),
-        writeFile(genkitDtsPath, genkitReexportDts, 'utf8'),
-      ]);
+    for (const indexDtsPath of ['lib/index.d.ts', 'lib/index.d.mts']) {
+      const indexDts = await readFile(indexDtsPath, 'utf8');
+      await writeFile(indexDtsPath, `${header}${indexDts}`, 'utf8');
     }
 
-    for (const dtsMtsFile of [
-      'lib/plugin.d.mts',
-      'lib/genkit-beta.d.mts',
-      'lib/beta.d.mts',
-    ]) {
-      const content = await readFile(dtsMtsFile, 'utf8');
-      await writeFile(
-        dtsMtsFile,
-        content.replace(/from '(\.\.?\/[^']+)\.js'/g, "from '$1.mjs'"),
-        'utf8'
+    const libEntries = await readdir('lib', { recursive: true });
+    for (const entry of libEntries) {
+      if (!entry.endsWith('.d.mts')) continue;
+      const dtsMtsPath = join('lib', entry);
+      const content = await readFile(dtsMtsPath, 'utf8');
+      const rewritten = content.replace(
+        /from '(\.\.?\/[^']+)\.js'/g,
+        "from '$1.mjs'"
       );
+      if (rewritten !== content) {
+        await writeFile(dtsMtsPath, rewritten, 'utf8');
+      }
     }
   },
 });
