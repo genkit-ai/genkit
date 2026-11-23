@@ -214,11 +214,10 @@ func TestMCPServerUsesPromptDefaults(t *testing.T) {
 	)
 	s := NewMCPServer(g, MCPServerOptions{Name: "defaults"})
 	// Required follows the input schema, whatever the default input holds.
+	want := []mcp.PromptArgument{{Name: "greeting"}, {Name: "name", Required: true}}
 	for _, prompt := range listPrompts(t, s) {
-		for _, arg := range prompt.Arguments {
-			if want := arg.Name == "name"; arg.Required != want {
-				t.Errorf("%s argument %q required = %t, want %t", prompt.Name, arg.Name, arg.Required, want)
-			}
+		if diff := cmp.Diff(want, prompt.Arguments); diff != "" {
+			t.Errorf("%s arguments mismatch (-want +got):\n%s", prompt.Name, diff)
 		}
 	}
 	for _, name := range []string{"default-greet", "zero-greet"} {
