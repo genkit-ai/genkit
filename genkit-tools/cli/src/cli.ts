@@ -23,7 +23,8 @@ import {
   notifyAnalyticsIfFirstRun,
   record,
 } from '@genkit-ai/tools-common/utils';
-import { Command, program } from 'commander';
+import type { Command } from 'commander';
+import { program } from 'commander';
 import { config } from './commands/config.js';
 import { devTestModel } from './commands/dev-test-model.js';
 import { docsList, docsRead, docsSearch } from './commands/docs.js';

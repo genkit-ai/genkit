@@ -26,7 +26,7 @@ import {
   type RunActionResponse,
 } from '../types/action.js';
 import * as apis from '../types/apis.js';
-import { GenkitError } from '../types/index.js';
+import type { GenkitError } from '../types/index.js';
 import type { TraceData } from '../types/trace.js';
 import { logger } from '../utils/logger.js';
 import {
@@ -39,7 +39,7 @@ import {
   retriable,
   type DevToolsInfo,
 } from '../utils/utils.js';
-import { ProcessManager } from './process-manager.js';
+import type { ProcessManager } from './process-manager.js';
 import {
   REFLECTION_SECRET_HEADER,
   secretForRuntime,

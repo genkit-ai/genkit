@@ -18,18 +18,18 @@ import * as clc from 'colorette';
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
 import type { BaseRuntimeManager } from '../manager/manager.js';
-import {
+import type {
+  Action,
+  CandidateData,
+  Dataset,
+  EvalInput,
+  EvalKeyAugments,
+  EvalRun,
+  EvalRunKey,
   GenerateActionOptions,
   GenerateResponseData,
-  type Action,
-  type CandidateData,
-  type Dataset,
-  type EvalInput,
-  type EvalKeyAugments,
-  type EvalRun,
-  type EvalRunKey,
-  type RunNewEvaluationRequest,
-  type SpanData,
+  RunNewEvaluationRequest,
+  SpanData,
 } from '../types/index.js';
 import {
   evaluatorName,

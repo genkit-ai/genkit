@@ -16,7 +16,8 @@
 
 import { GenkitToolsError } from '@genkit-ai/tools-common/manager';
 import { getUserSettings, logger } from '@genkit-ai/tools-common/utils';
-import axios, { AxiosInstance } from 'axios';
+import type { AxiosInstance } from 'axios';
+import axios from 'axios';
 import * as clc from 'colorette';
 import { arch, platform } from 'os';
 import semver from 'semver';

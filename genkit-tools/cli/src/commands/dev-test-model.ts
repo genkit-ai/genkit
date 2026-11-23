@@ -14,17 +14,15 @@
  * limitations under the License.
  */
 
-import {
+import type {
   GenerateRequestData,
   GenerateResponseChunkData,
   GenerateResponseData,
-  GenerateResponseSchema,
   Part,
 } from '@genkit-ai/tools-common';
-import {
-  BaseRuntimeManager,
-  GenkitToolsError,
-} from '@genkit-ai/tools-common/manager';
+import { GenerateResponseSchema } from '@genkit-ai/tools-common';
+import type { BaseRuntimeManager } from '@genkit-ai/tools-common/manager';
+import { GenkitToolsError } from '@genkit-ai/tools-common/manager';
 import { findProjectRoot, logger } from '@genkit-ai/tools-common/utils';
 import { Command } from 'commander';
 import { readFileSync } from 'fs';
