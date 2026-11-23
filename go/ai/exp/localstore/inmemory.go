@@ -56,7 +56,10 @@ type InMemorySessionStore[State any] struct {
 	mu        sync.RWMutex
 	snapshots map[string]*exp.SessionSnapshot[State]
 	subs      map[string][]chan exp.SnapshotStatus
-	// deleted holds sessions removed by DeleteSession; see SaveSnapshot.
+	// deleted holds the IDs of snapshots removed by DeleteSession, so a late
+	// writer continuing a deleted chain is rejected even after a fresh root
+	// snapshot reuses the session ID; see SaveSnapshot. It grows by one ID per
+	// deleted snapshot for the life of the store, which is the process.
 	deleted map[string]struct{}
 }
 
@@ -220,13 +223,11 @@ func (s *InMemorySessionStore[State]) SaveSnapshot(
 	if next.Status == "" {
 		next.Status = exp.SnapshotStatusCompleted
 	}
-	// A deleted session only accepts a fresh root snapshot; a late writer
-	// continuing the old chain must not bring it back.
-	if _, gone := s.deleted[next.SessionID]; gone {
-		if existing != nil || next.ParentID != "" {
-			return nil, status.Errorf(exp.ErrSessionDeleted, "session %q was deleted", next.SessionID)
-		}
-		delete(s.deleted, next.SessionID)
+	// A late writer continuing a deleted chain (or rewriting one of its rows)
+	// must not bring the session back, even if a fresh root has since reused the
+	// session ID.
+	if s.isDeleted(id, next.ParentID) {
+		return nil, status.Errorf(exp.ErrSessionDeleted, "session %q was deleted", next.SessionID)
 	}
 
 	copied, err := copySnapshot(next)
@@ -280,6 +281,7 @@ func (s *InMemorySessionStore[State]) DeleteSession(_ context.Context, sessionID
 			continue
 		}
 		delete(s.snapshots, id)
+		s.deleted[id] = struct{}{}
 		removed = true
 		for _, ch := range s.subs[id] {
 			coalesceSend(ch, exp.SnapshotStatusAborted)
@@ -287,10 +289,20 @@ func (s *InMemorySessionStore[State]) DeleteSession(_ context.Context, sessionID
 		}
 		delete(s.subs, id)
 	}
-	if removed {
-		s.deleted[sessionID] = struct{}{}
-	}
 	return removed, nil
+}
+
+// isDeleted reports whether a write for snapshot id with the given parent
+// touches a snapshot removed by DeleteSession. Caller must hold s.mu.
+func (s *InMemorySessionStore[State]) isDeleted(id, parentID string) bool {
+	if _, gone := s.deleted[id]; gone {
+		return true
+	}
+	if parentID == "" {
+		return false
+	}
+	_, gone := s.deleted[parentID]
+	return gone
 }
 
 // removeSub detaches a subscriber and closes its channel.

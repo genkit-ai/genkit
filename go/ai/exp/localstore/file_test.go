@@ -772,16 +772,6 @@ func TestFileSessionStore_PathUnsafeSessionIDRejected(t *testing.T) {
 	}
 }
 
-func TestFileSessionStore_Delete(t *testing.T) {
-	runDeleteStoreTests(t, func(t *testing.T) exp.SessionStore[testState] {
-		store, err := NewFileSessionStore[testState](t.TempDir(), WithPollInterval(10*time.Millisecond))
-		if err != nil {
-			t.Fatalf("NewFileSessionStore: %v", err)
-		}
-		return store
-	})
-}
-
 type deleteTenantKey struct{}
 
 func TestFileSessionStore_Delete_TenantPrefix(t *testing.T) {

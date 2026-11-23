@@ -94,9 +94,12 @@ type FileSessionStore[State any] struct {
 	// snapshot files to detect cross-process status changes; <= 0 disables it.
 	poll time.Duration
 	subs map[string]*snapshotSubs
-	// deleted holds the sessions removed by DeleteSession, keyed by prefix and
-	// session ID; see SaveSnapshot. In-process only: a writer in another process
-	// sharing the directory is not stopped.
+	// deleted holds the snapshots removed by DeleteSession, keyed by prefix and
+	// snapshot ID, so a late writer continuing a deleted chain is rejected even
+	// after a fresh root snapshot reuses the session ID; see SaveSnapshot. It
+	// grows by one entry per deleted snapshot for the life of the store.
+	// In-process only: a writer in another process sharing the directory is not
+	// stopped.
 	deleted map[string]struct{}
 	// pollCancel stops the background poller. It is non-nil exactly while the
 	// poller runs: while at least one subscription is active and poll > 0.
@@ -260,14 +263,13 @@ func (s *FileSessionStore[State]) SaveSnapshot(
 	if next.Status == "" {
 		next.Status = exp.SnapshotStatusCompleted
 	}
-	// A deleted session only accepts a fresh root snapshot; a late writer
-	// continuing the old chain must not bring it back.
-	tombstone := tombstoneKey(prefix, next.SessionID)
-	if _, gone := s.deleted[tombstone]; gone {
-		if existing != nil || next.ParentID != "" {
-			return nil, status.Errorf(exp.ErrSessionDeleted, "session %q was deleted", next.SessionID)
-		}
-		delete(s.deleted, tombstone)
+	// A late writer continuing a deleted chain (or rewriting one of its rows)
+	// must not bring the session back, even if a fresh root has since reused the
+	// session ID.
+	_, rowGone := s.deleted[tombstoneKey(prefix, id)]
+	_, parentGone := s.deleted[tombstoneKey(prefix, next.ParentID)]
+	if rowGone || (next.ParentID != "" && parentGone) {
+		return nil, status.Errorf(exp.ErrSessionDeleted, "session %q was deleted", next.SessionID)
 	}
 
 	if err := s.writeAt(prefix, next); err != nil {
@@ -289,9 +291,9 @@ func (s *FileSessionStore[State]) SaveSnapshot(
 	return next, nil
 }
 
-// tombstoneKey identifies a deleted session within its tenant prefix.
-func tombstoneKey(prefix, sessionID string) string {
-	return prefix + "\x00" + sessionID
+// tombstoneKey identifies a deleted snapshot within its tenant prefix.
+func tombstoneKey(prefix, snapshotID string) string {
+	return prefix + "\x00" + snapshotID
 }
 
 // DeleteSession removes every snapshot file of the session, and its pointer,
@@ -332,15 +334,14 @@ func (s *FileSessionStore[State]) DeleteSession(ctx context.Context, sessionID s
 			return removed, fmt.Errorf("FileSessionStore: remove %s: %w", path, err)
 		}
 		removed = true
-		s.endSubsLocked(strings.TrimSuffix(name, ".json"), exp.SnapshotStatusAborted)
+		snapshotID := strings.TrimSuffix(name, ".json")
+		s.deleted[tombstoneKey(prefix, snapshotID)] = struct{}{}
+		s.endSubsLocked(snapshotID, exp.SnapshotStatusAborted)
 	}
 	if err := os.Remove(s.pointerPathFor(prefix, sessionID)); err == nil {
 		removed = true
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return removed, fmt.Errorf("FileSessionStore: remove pointer: %w", err)
-	}
-	if removed {
-		s.deleted[tombstoneKey(prefix, sessionID)] = struct{}{}
 	}
 	return removed, nil
 }

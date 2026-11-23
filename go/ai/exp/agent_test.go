@@ -9431,3 +9431,169 @@ func TestAgent_Usage(t *testing.T) {
 		}
 	})
 }
+
+// defineQuickDeleteAgent registers a trivial agent that completes each turn at once.
+func defineQuickDeleteAgent(t *testing.T, name string, store SessionStore[testState]) *Agent[testState] {
+	t.Helper()
+	opts := []AgentOption[testState]{}
+	if store != nil {
+		opts = append(opts, WithSessionStore(store))
+	}
+	return DefineCustomAgent(newTestRegistry(t), name,
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				sess.AddMessages(ai.NewModelTextMessage("done"))
+				return nil, nil
+			})
+		},
+		opts...,
+	)
+}
+
+func TestAgent_DeleteSession_CompletedSession(t *testing.T) {
+	ctx := context.Background()
+	store := newTestInMemStore[testState]()
+	agent := defineQuickDeleteAgent(t, "deleteCompleted", store)
+
+	out, err := agent.Run(ctx, &AgentInput{Message: ai.NewUserTextMessage("hi")})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if out.SessionID == "" || out.SnapshotID == "" {
+		t.Fatalf("output has no session/snapshot ID: %+v", out)
+	}
+
+	removed, err := agent.DeleteSession(ctx, out.SessionID)
+	if err != nil || !removed {
+		t.Fatalf("DeleteSession = %v, %v; want true, nil", removed, err)
+	}
+	if got, err := store.GetSnapshot(ctx, out.SnapshotID); err != nil || got != nil {
+		t.Errorf("snapshot survived the delete: %v, %v", got, err)
+	}
+	// Idempotent.
+	if removed, err := agent.DeleteSession(ctx, out.SessionID); err != nil || removed {
+		t.Errorf("second DeleteSession = %v, %v; want false, nil", removed, err)
+	}
+	// Resuming by snapshot ID now fails; by session ID it starts fresh.
+	if _, err := agent.Run(ctx, &AgentInput{Message: ai.NewUserTextMessage("again")}, WithSnapshotID[testState](out.SnapshotID)); err == nil {
+		t.Error("resume by snapshot ID after delete succeeded, want an error")
+	}
+	fresh, err := agent.Run(ctx, &AgentInput{Message: ai.NewUserTextMessage("again")}, WithSessionID[testState](out.SessionID))
+	if err != nil {
+		t.Fatalf("resume by session ID: %v", err)
+	}
+	row, err := store.GetSnapshot(ctx, fresh.SnapshotID)
+	if err != nil || row == nil || row.ParentID != "" {
+		t.Errorf("resumed session row = %+v, %v; want a fresh root", row, err)
+	}
+}
+
+func TestAgent_DeleteSession_AbortsPendingRunAndDoesNotResurrect(t *testing.T) {
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+	store.saved = make(chan string, 64)
+	agent, entered, release := defineGatedAgent(t, reg, "deletePending", store)
+
+	task, err := agent.RunDetached(ctx, &AgentInput{Message: ai.NewUserTextMessage("go")})
+	if err != nil {
+		t.Fatalf("RunDetached: %v", err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("background work did not start")
+	}
+	pending, err := store.GetSnapshot(ctx, task.SnapshotID())
+	if err != nil || pending == nil || pending.Status != SnapshotStatusPending {
+		t.Fatalf("pending row = %+v, %v", pending, err)
+	}
+
+	if removed, err := agent.DeleteSession(ctx, pending.SessionID); err != nil || !removed {
+		t.Fatalf("DeleteSession = %v, %v; want true, nil", removed, err)
+	}
+
+	// Let the worker finish whichever way it will. Its last write is the
+	// finalize of the pending row, so wait for that attempt rather than sleeping;
+	// nothing may be written back.
+	for len(store.saved) > 0 {
+		<-store.saved
+	}
+	close(release)
+	deadline := time.After(5 * time.Second)
+settled:
+	for {
+		select {
+		case id := <-store.saved:
+			if id == task.SnapshotID() {
+				break settled
+			}
+		case <-deadline:
+			t.Fatal("worker never finalized the deleted pending row")
+		}
+	}
+	if n := store.snapshotCount(); n != 0 {
+		t.Errorf("store holds %d rows after the delete, want 0 (session came back)", n)
+	}
+}
+
+func TestAgent_DeleteSession_Errors(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("client-managed agent", func(t *testing.T) {
+		agent := defineQuickDeleteAgent(t, "deleteNoStore", nil)
+		if _, err := agent.DeleteSession(ctx, "s"); !errors.Is(err, ErrSessionStoreNotConfigured) {
+			t.Errorf("error = %v, want ErrSessionStoreNotConfigured", err)
+		}
+	})
+
+	t.Run("store without the capability", func(t *testing.T) {
+		// Embedding the interface hides DeleteSession.
+		agent := defineQuickDeleteAgent(t, "deleteUnsupported", struct{ SessionStore[testState] }{newTestInMemStore[testState]()})
+		if _, err := agent.DeleteSession(ctx, "s"); !errors.Is(err, status.ErrFailedPrecondition) {
+			t.Errorf("error = %v, want FAILED_PRECONDITION", err)
+		}
+	})
+
+	t.Run("empty session ID", func(t *testing.T) {
+		agent := defineQuickDeleteAgent(t, "deleteEmptyID", newTestInMemStore[testState]())
+		if _, err := agent.DeleteSession(ctx, ""); !errors.Is(err, status.ErrInvalidArgument) {
+			t.Errorf("error = %v, want INVALID_ARGUMENT", err)
+		}
+	})
+}
+
+func TestAgent_DeleteSession_ProceedsWhenAbortFails(t *testing.T) {
+	ctx := context.Background()
+	inner := newTestInMemStore[testState]()
+	// A transient failure looking up the latest snapshot must not stop the
+	// delete: the store still removes the rows and rejects late writers.
+	store := &failingLatestStore{testInMemStore: inner}
+	agent := defineQuickDeleteAgent(t, "deleteLookupFails", store)
+
+	out, err := agent.Run(ctx, &AgentInput{Message: ai.NewUserTextMessage("hi")})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	store.fail = true
+	removed, err := agent.DeleteSession(ctx, out.SessionID)
+	if err != nil || !removed {
+		t.Fatalf("DeleteSession = %v, %v; want true, nil", removed, err)
+	}
+	if n := inner.snapshotCount(); n != 0 {
+		t.Errorf("store holds %d rows, want 0", n)
+	}
+}
+
+// failingLatestStore fails GetLatestSnapshot once fail is set.
+type failingLatestStore struct {
+	*testInMemStore[testState]
+	fail bool
+}
+
+func (s *failingLatestStore) GetLatestSnapshot(ctx context.Context, sessionID string) (*SessionSnapshot[testState], error) {
+	if s.fail {
+		return nil, errors.New("transient store failure")
+	}
+	return s.testInMemStore.GetLatestSnapshot(ctx, sessionID)
+}

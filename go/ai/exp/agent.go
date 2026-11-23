@@ -999,16 +999,18 @@ func (a *Agent[State]) DeleteSession(ctx context.Context, sessionID string) (boo
 	if !ok {
 		return false, status.Errorf(status.ErrFailedPrecondition, "agent %q: the session store does not support DeleteSession", a.Name())
 	}
-	// Stop an in-flight detached run first. Best effort: the store also tells
-	// the run's subscription its row is gone, and rejects writers that continue
-	// the deleted chain.
+	// Stop an in-flight detached run first. Best effort: a failure here is
+	// logged and the delete goes on, because the store also tells the run's
+	// subscription its row is gone and rejects writers that continue the
+	// deleted chain.
 	latest, err := getLatestSnapshotMetadata(ctx, a.store, sessionID)
 	if err != nil {
-		return false, err
-	}
-	if latest != nil && latest.Status == SnapshotStatusPending {
+		logger.Warn(ctx, "agent: could not look up the session's latest snapshot before deleting it",
+			"sessionId", sessionID, "error", err)
+	} else if latest != nil && latest.Status == SnapshotStatusPending {
 		if _, err := abortPendingSnapshot(ctx, a.store, latest.SnapshotID); err != nil {
-			return false, err
+			logger.Warn(ctx, "agent: could not abort the session's pending snapshot before deleting it",
+				"snapshotId", latest.SnapshotID, "error", err)
 		}
 	}
 	return deleter.DeleteSession(ctx, sessionID)
@@ -2287,7 +2289,8 @@ func (rt *agentRuntime[State]) finalizePendingSnapshot(
 				UpdatedAt:    now,
 			}, nil
 		})
-	if err != nil {
+	// A deleted session is not a failure: the run simply stops persisting.
+	if err != nil && !errors.Is(err, ErrSessionDeleted) {
 		logger.Error(ctx, "agent: failed to finalize pending snapshot",
 			"snapshotId", pending.SnapshotID, "error", err)
 	}

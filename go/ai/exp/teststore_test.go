@@ -42,8 +42,11 @@ type testInMemStore[State any] struct {
 	mu        sync.RWMutex
 	snapshots map[string]*SessionSnapshot[State]
 	subs      map[string][]chan SnapshotStatus
-	// deleted mirrors localstore: sessions removed by DeleteSession.
+	// deleted mirrors localstore: IDs of snapshots removed by DeleteSession.
 	deleted map[string]struct{}
+	// saved, when set, receives the ID of every SaveSnapshot attempt after it
+	// completes, so a test can wait for a background write instead of sleeping.
+	saved chan string
 }
 
 func newTestInMemStore[State any]() *testInMemStore[State] {
@@ -104,6 +107,15 @@ func (s *testInMemStore[State]) SaveSnapshot(
 	id string,
 	fn func(existing *SessionSnapshot[State]) (*SessionSnapshot[State], error),
 ) (*SessionSnapshot[State], error) {
+	if s.saved != nil {
+		// Registered before the lock's defer, so it runs after the unlock.
+		defer func() {
+			select {
+			case s.saved <- id:
+			default:
+			}
+		}()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -142,11 +154,10 @@ func (s *testInMemStore[State]) SaveSnapshot(
 	if next.Status == "" {
 		next.Status = SnapshotStatusCompleted
 	}
-	if _, gone := s.deleted[next.SessionID]; gone && next.SessionID != "" {
-		if existing != nil || next.ParentID != "" {
-			return nil, fmt.Errorf("session %q was deleted: %w", next.SessionID, ErrSessionDeleted)
-		}
-		delete(s.deleted, next.SessionID)
+	_, rowGone := s.deleted[id]
+	_, parentGone := s.deleted[next.ParentID]
+	if rowGone || (next.ParentID != "" && parentGone) {
+		return nil, fmt.Errorf("session %q was deleted: %w", next.SessionID, ErrSessionDeleted)
 	}
 
 	copied, err := testCopySnapshot(next)
@@ -188,15 +199,13 @@ func (s *testInMemStore[State]) DeleteSession(_ context.Context, sessionID strin
 			continue
 		}
 		delete(s.snapshots, id)
+		s.deleted[id] = struct{}{}
 		removed = true
 		s.notifyLocked(id, SnapshotStatusAborted)
 		for _, ch := range s.subs[id] {
 			close(ch)
 		}
 		delete(s.subs, id)
-	}
-	if removed {
-		s.deleted[sessionID] = struct{}{}
 	}
 	return removed, nil
 }

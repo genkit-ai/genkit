@@ -467,8 +467,8 @@ func TestDeleteSession(t *testing.T) {
 			t.Errorf("DeleteSession(missing) = %v, %v; want false, nil", removed, err)
 		}
 		// A session that never existed leaves nothing behind, not even a tombstone.
-		if snap, err := store.pointerRef(defaultPrefix, "never-existed").Get(ctx); err == nil && snap.Exists() {
-			t.Error("DeleteSession of a missing session left a pointer document behind")
+		if snap, err := store.tombstoneRef(defaultPrefix, "never-existed").Get(ctx); err == nil && snap.Exists() {
+			t.Error("DeleteSession of a missing session left a tombstone behind")
 		}
 		chain(t, store, "sess-b", 2)
 		if removed, err := store.DeleteSession(ctx, "sess-b"); err != nil || !removed {
@@ -551,11 +551,26 @@ func TestDeleteSession(t *testing.T) {
 		saveRow(t, store, "again-child", "sess-again", "again-root", aix.SnapshotStatusCompleted, 10)
 	})
 
-	t.Run("can be re-run after an interrupted delete", func(t *testing.T) {
-		store := newStore(t)
-		chain(t, store, "sess-retry", 3)
-		// Simulate a crash after the shards were removed but before the
-		// snapshots were.
+	// interrupt performs step 1 of DeleteSession (tombstone the pointer) and
+	// removes the shards, as a delete that crashed before removing the snapshot
+	// documents would leave things.
+	interrupt := func(t *testing.T, store *FirestoreSessionStore[testState], sessionID string) {
+		t.Helper()
+		p, err := store.readPointer(directGet(ctx), defaultPrefix, sessionID)
+		if err != nil || p == nil {
+			t.Fatalf("readPointer = %v, %v", p, err)
+		}
+		tomb := tombstoneDoc{
+			DeletedAt:   time.Now(),
+			ChainIDs:    append([]string{p.CurrentSnapshotID, p.CheckpointID}, p.SegmentPath...),
+			Checkpoints: map[string]int{p.CheckpointID: p.CheckpointShardCount},
+		}
+		if _, err := store.tombstoneRef(defaultPrefix, sessionID).Set(ctx, tomb); err != nil {
+			t.Fatalf("tombstone: %v", err)
+		}
+		if _, err := store.pointerRef(defaultPrefix, sessionID).Delete(ctx); err != nil {
+			t.Fatalf("delete pointer: %v", err)
+		}
 		shards, err := store.client.Collection(store.collection + "-shards").Doc(defaultPrefix).Collection("shards").Documents(ctx).GetAll()
 		if err != nil {
 			t.Fatalf("list shards: %v", err)
@@ -565,16 +580,71 @@ func TestDeleteSession(t *testing.T) {
 				t.Fatalf("delete shard: %v", err)
 			}
 		}
-		now := time.Now()
-		if _, err := store.pointerRef(defaultPrefix, "sess-retry").Set(ctx, pointerDoc{DeletedAt: &now}); err != nil {
-			t.Fatalf("tombstone: %v", err)
-		}
+	}
+
+	t.Run("can be re-run after an interrupted delete", func(t *testing.T) {
+		store := newStore(t)
+		chain(t, store, "sess-retry", 3)
+		interrupt(t, store, "sess-retry")
 
 		if removed, err := store.DeleteSession(ctx, "sess-retry"); err != nil || !removed {
 			t.Fatalf("DeleteSession = %v, %v; want true, nil", removed, err)
 		}
 		if n := countDocs(t, store, store.collection, "snapshots"); n != 0 {
 			t.Errorf("%d snapshot docs left, want 0", n)
+		}
+	})
+
+	t.Run("a re-run finds chain rows that carry no sessionId", func(t *testing.T) {
+		// Rows written before snapshots carried a sessionId are found through the
+		// chain the tombstone kept, not through the query. The tombstone must
+		// therefore survive an interruption.
+		store := newStore(t)
+		chain(t, store, "sess-legacy", 3)
+		refs, err := store.client.Collection(store.collection).Doc(defaultPrefix).Collection("snapshots").Documents(ctx).GetAll()
+		if err != nil {
+			t.Fatalf("list snapshots: %v", err)
+		}
+		for _, d := range refs {
+			if _, err := d.Ref.Update(ctx, []firestore.Update{{Path: "sessionId", Value: firestore.Delete}}); err != nil {
+				t.Fatalf("clear sessionId: %v", err)
+			}
+		}
+		interrupt(t, store, "sess-legacy")
+
+		if _, err := store.DeleteSession(ctx, "sess-legacy"); err != nil {
+			t.Fatalf("DeleteSession: %v", err)
+		}
+		// Only the chain the pointer named (latest, checkpoint, segment) is
+		// recoverable once sessionId is gone; the rest is documented as unfound.
+		tomb, err := store.readTombstone(directGet(ctx), defaultPrefix, "sess-legacy")
+		if err != nil || tomb == nil || len(tomb.ChainIDs) == 0 {
+			t.Fatalf("tombstone = %+v, %v; want the deleted chain", tomb, err)
+		}
+		for _, id := range tomb.ChainIDs {
+			if snap, err := store.snapshotRef(defaultPrefix, id).Get(ctx); err == nil && snap.Exists() {
+				t.Errorf("chain row %q survived the delete", id)
+			}
+		}
+	})
+
+	t.Run("a late writer is rejected after a fresh root reuses the ID", func(t *testing.T) {
+		store := newStore(t)
+		chain(t, store, "sess-late2", 2)
+		if _, err := store.DeleteSession(ctx, "sess-late2"); err != nil {
+			t.Fatalf("DeleteSession: %v", err)
+		}
+		saveRow(t, store, "late2-root", "sess-late2", "", aix.SnapshotStatusCompleted, 7)
+		now := time.Now()
+		_, err := store.SaveSnapshot(ctx, "late2-straggler", func(_ *aix.SessionSnapshot[testState]) (*aix.SessionSnapshot[testState], error) {
+			return &aix.SessionSnapshot[testState]{SessionID: "sess-late2", ParentID: "sess-late2-1", CreatedAt: now, UpdatedAt: now}, nil
+		})
+		if !errors.Is(err, aix.ErrSessionDeleted) {
+			t.Errorf("straggler error = %v, want ErrSessionDeleted", err)
+		}
+		got, err := store.GetLatestSnapshot(ctx, "sess-late2")
+		if err != nil || got == nil || got.SnapshotID != "late2-root" {
+			t.Errorf("latest = %+v, %v; want late2-root", got, err)
 		}
 	})
 

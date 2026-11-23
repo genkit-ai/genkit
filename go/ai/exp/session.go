@@ -245,9 +245,10 @@ type SnapshotSubscriber interface {
 // ones.
 //
 // Once a session is deleted, SaveSnapshot must reject (with
-// [ErrSessionDeleted]) any write that continues its chain: a row whose
-// ParentID is set, or a rewrite of a row of the deleted session. A write with
-// no parent and no existing row is a fresh session under the same ID and is
+// [ErrSessionDeleted]) any write that continues its chain: a write whose
+// ParentID is a deleted snapshot, or a rewrite of a deleted snapshot, even
+// after a new root snapshot has started a session under the same ID. A write
+// with no parent that rewrites nothing deleted is a fresh session and is
 // accepted. A store should also report the removal to
 // [SnapshotSubscriber.OnSnapshotStatusChange] subscribers of each deleted
 // snapshot as [SnapshotStatusAborted] before closing their channels, so a
