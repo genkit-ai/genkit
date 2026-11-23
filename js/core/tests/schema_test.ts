@@ -29,6 +29,103 @@ import {
 } from '../src/schema.js';
 
 describe('validate()', () => {
+  it('accepts unknown formats while enforcing other schema constraints', () => {
+    const warnSpy = mock.method(console, 'warn', () => {});
+    try {
+      const jsonSchema = {
+        type: 'object',
+        properties: {
+          depth: { type: 'integer', format: 'uint', minimum: 0 },
+          tag: { type: 'string', format: 'custom-tag', minLength: 3 },
+        },
+        required: ['depth', 'tag'],
+      };
+
+      assert.strictEqual(
+        validateSchema({ depth: 1, tag: 'abc' }, { jsonSchema }).valid,
+        true
+      );
+      assert.strictEqual(
+        validateSchema({ depth: -1, tag: 'abc' }, { jsonSchema }).valid,
+        false
+      );
+      assert.strictEqual(
+        validateSchema({ depth: 1, tag: 'ab' }, { jsonSchema }).valid,
+        false
+      );
+      const warnings = warnSpy.mock.calls.map((call) =>
+        String(call.arguments[0])
+      );
+      assert.ok(
+        warnings.some((msg) => msg.includes('unknown format "uint"')),
+        'Expected unknown format warning for uint'
+      );
+      assert.ok(
+        warnings.some((msg) => msg.includes('unknown format "custom-tag"')),
+        'Expected unknown format warning for custom-tag'
+      );
+    } finally {
+      warnSpy.mock.restore();
+    }
+  });
+
+  it('continues to validate known formats', () => {
+    const emailSchema = { type: 'string', format: 'email' };
+    assert.strictEqual(
+      validateSchema('user@example.com', { jsonSchema: emailSchema }).valid,
+      true
+    );
+    assert.strictEqual(
+      validateSchema('invalid', { jsonSchema: emailSchema }).valid,
+      false
+    );
+
+    const dateSchema = {
+      type: 'string',
+      format: 'date',
+      formatMinimum: '2025-01-01',
+    };
+    assert.strictEqual(
+      validateSchema('2025-06-01', { jsonSchema: dateSchema }).valid,
+      true
+    );
+    assert.strictEqual(
+      validateSchema('2024-06-01', { jsonSchema: dateSchema }).valid,
+      false
+    );
+  });
+
+  it('treats Object.prototype property names as unknown formats with format limits', () => {
+    const warnSpy = mock.method(console, 'warn', () => {});
+    try {
+      const jsonSchema = {
+        type: 'string',
+        format: 'toString',
+        formatMinimum: 'a',
+        minLength: 2,
+      };
+      assert.strictEqual(validateSchema('ok', { jsonSchema }).valid, true);
+      assert.strictEqual(validateSchema('x', { jsonSchema }).valid, false);
+      const warnings = warnSpy.mock.calls.map((call) =>
+        String(call.arguments[0])
+      );
+      assert.ok(
+        warnings.some((msg) => msg.includes('unknown format "toString"')),
+        'Expected unknown format warning for toString'
+      );
+    } finally {
+      warnSpy.mock.restore();
+    }
+  });
+
+  it('still rejects unknown keywords under strict schema mode', () => {
+    const jsonSchema = { type: 'integer', minimun: 0 };
+    assert.throws(
+      () => validateSchema(-1, { jsonSchema }),
+      /unknown keyword: "minimun"/
+    );
+  });
+
   const tests = [
     {
       it: 'should return true for a valid json schema',
