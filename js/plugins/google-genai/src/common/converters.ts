@@ -41,15 +41,31 @@ import {
   isObject,
 } from './types.js';
 
+function isParameterlessObjectSchema(
+  schema?: ToolDefinition['inputSchema']
+): boolean {
+  if (!schema) {
+    return false;
+  }
+  const isObjectType =
+    schema.type === 'object' ||
+    (Array.isArray(schema.type) &&
+      schema.type.length === 1 &&
+      schema.type[0] === 'object');
+  return (
+    isObjectType &&
+    Object.keys(schema.properties ?? {}).length === 0 &&
+    (!schema.required ||
+      (Array.isArray(schema.required) && schema.required.length === 0)) &&
+    !schema.additionalProperties
+  );
+}
+
 export function toGeminiTool(tool: ToolDefinition): FunctionDeclaration {
-  const isParameterless =
-    tool.inputSchema?.type === 'object' &&
-    Object.keys(tool.inputSchema.properties ?? {}).length === 0 &&
-    !tool.inputSchema.additionalProperties;
   const declaration: FunctionDeclaration = {
     name: tool.name.replace(/\//g, '__'), // Gemini throws on '/' in tool name
     description: tool.description,
-    parameters: isParameterless
+    parameters: isParameterlessObjectSchema(tool.inputSchema)
       ? undefined
       : (toGeminiSchemaProperty(tool.inputSchema) as
           FunctionDeclarationSchema | undefined),
