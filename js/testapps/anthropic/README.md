@@ -53,7 +53,7 @@ Each source file defines flows that can be invoked from the Dev UI or the Genkit
 - `anthropic-stable-stream` – Streaming response example
 - `anthropic-beta-hello` – Simple greeting using beta API
 - `anthropic-beta-stream` – Streaming response with beta API
-- `anthropic-beta-opus41` – Test Opus 4.1 model with beta API
+- `anthropic-beta-opus55` – Test Opus 5.5 model with beta API
 
 ### Text/Plain Handling
 - `stable-text-plain-error` – Demonstrates the helpful error when using text/plain as media

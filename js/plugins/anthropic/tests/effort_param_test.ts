@@ -19,7 +19,7 @@ import * as assert from 'assert';
 import { genkit } from 'genkit';
 import { describe, test } from 'node:test';
 import { anthropic } from '../src/index.js';
-import { __testClient } from '../src/types.js';
+import { AnthropicConfigSchema, __testClient } from '../src/types.js';
 import {
   createMockAnthropicClient,
   createMockAnthropicMessage,
@@ -168,6 +168,46 @@ describe('Effort Parameter Tests', () => {
       apiRequest.output_config.effort,
       'low',
       'effort should be set to low'
+    );
+  });
+
+  test('should pass output_config.effort with max value', async () => {
+    const mockClient = createMockAnthropicClient({
+      messageResponse: createMockAnthropicMessage({
+        text: 'Response with max effort',
+      }),
+    });
+
+    const plugin = createPlugin({
+      apiVersion: 'beta',
+      mockClient,
+    });
+
+    const ai = createGenkitInstance(plugin);
+
+    await ai.generate({
+      model: 'anthropic/claude-opus-5-5',
+      prompt: 'Generate the most thorough response',
+      config: {
+        output_config: {
+          effort: 'max',
+        },
+      },
+    });
+
+    verifyApiCalled(mockClient, 'beta');
+    const apiRequest = getApiRequest(mockClient, 'beta');
+
+    assert.ok(apiRequest.output_config, 'Request should have output_config');
+    assert.strictEqual(
+      apiRequest.output_config.effort,
+      'max',
+      'effort should be set to max'
+    );
+    assert.ok(
+      AnthropicConfigSchema.safeParse({ output_config: { effort: 'max' } })
+        .success,
+      'config schema should accept effort max'
     );
   });
 

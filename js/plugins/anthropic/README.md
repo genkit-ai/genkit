@@ -15,10 +15,30 @@ It supersedes the earlier community package `genkitx-anthropic` and is now maint
 
 ## Supported models
 
-The plugin supports the most recent Anthropic models like **Claude Haiku 4.5**,
-**Claude Sonnet 4.5**, and **Claude Opus 4.5**. Additionally, the plugin
-supports all of the
-[non-retired older models](https://platform.claude.com/docs/en/about-claude/model-deprecations#model-status).
+The plugin ships model definitions for every generally available Claude model
+on the Claude API. (The Claude Mythos models, which are limited to verified
+organizations, aren't listed; you can still use them by ID.)
+
+| Family | Model IDs |
+| ------ | --------- |
+| Claude Fable | `claude-fable-5-2`, `claude-fable-5-1`, `claude-fable-5` |
+| Claude Opus | `claude-opus-5-5`, `claude-opus-5`, `claude-opus-4-8`, `claude-opus-4-7`, `claude-opus-4-6`, `claude-opus-4-5` |
+| Claude Sonnet | `claude-sonnet-5-5`, `claude-sonnet-5`, `claude-sonnet-4-6`, `claude-sonnet-4-5` (deprecated, retires 2026-11-30) |
+| Claude Haiku | `claude-haiku-5-5`, `claude-haiku-4-5` |
+
+All of them accept text and image input, tools, system prompts and multi-turn
+conversations. Native structured (JSON) output needs the beta API surface
+(`apiVersion: 'beta'`); on the stable surface, asking a listed model for JSON or
+schema output throws an error. Deprecated models are marked with
+`stage: 'deprecated'` in their model info.
+
+Retired models (Claude Opus 4.1, Claude Opus 4, Claude Sonnet 4 and older) are
+no longer listed. You can still pass any other model ID, for example
+`anthropic.model("claude-some-new-model")`; IDs the plugin doesn't know are
+treated as text-only, so schema output for them is done through prompt
+instructions. See
+[model deprecations](https://platform.claude.com/docs/en/about-claude/model-deprecations#model-status)
+for lifecycle dates.
 
 ## Installation
 
@@ -39,7 +59,7 @@ import { anthropic } from "@genkit-ai/anthropic";
 const ai = genkit({
   plugins: [anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })],
   // specify a default model for generate here if you wish:
-  model: anthropic.model("claude-sonnet-4-5"),
+  model: anthropic.model("claude-sonnet-5-5"),
 });
 ```
 
@@ -49,7 +69,7 @@ The simplest way to generate text is by using the `generate` method:
 
 ```typescript
 const response = await ai.generate({
-  model: anthropic.model("claude-haiku-4-5"),
+  model: anthropic.model("claude-haiku-5-5"),
   prompt: "Tell me a joke.",
 });
 
@@ -70,19 +90,26 @@ const response = await ai.generate({
 console.log(response.text);
 ```
 
-### Extended thinking
+### Thinking
 
-Claude 4.5 models can expose their internal reasoning. Enable it per-request
-with the Anthropic thinking config and read the reasoning from the response:
+Claude models can expose a summary of their reasoning. On current models
+(Claude Opus 4.6 and later, Claude Sonnet 4.6 and later, the Fable models and
+Claude Haiku 5.5) use adaptive thinking, and steer how much the model thinks
+with `output_config.effort`: `low`, `medium`, `high` or `max`, plus `xhigh`
+on Claude Opus 4.7 and later, Claude Sonnet 5 and later, the Fable models and
+Claude Haiku 5.5. See
+[effort](https://platform.claude.com/docs/en/build-with-claude/effort) for
+per-model support.
 
 ```typescript
 const response = await ai.generate({
   prompt: "Walk me through your reasoning for Fermat’s little theorem.",
   config: {
     thinking: {
-      enabled: true,
-      budgetTokens: 4096, // Must be >= 1024 and less than max_tokens
+      adaptive: true,
+      display: "summarized", // return a readable summary of the reasoning
     },
+    output_config: { effort: "high" },
   },
 });
 
@@ -90,10 +117,13 @@ console.log(response.text); // Final assistant answer
 console.log(response.reasoning); // Summarized thinking steps
 ```
 
-When thinking is enabled, request bodies sent through the plugin include the
-`thinking` payload (`{ type: 'enabled', budget_tokens: … }`) that Anthropic's
-API expects, and streamed responses deliver `reasoning` parts as they arrive so
-you can render the chain-of-thought incrementally.
+Older models (Claude Sonnet 4.5, Claude Haiku 4.5, Claude Opus 4.5) use a
+fixed thinking budget instead: `thinking: { enabled: true, budgetTokens: 2048 }`
+(at least 1024 and less than `max_tokens`). Claude Opus 4.7, Claude Sonnet 5
+and every later model reject `budgetTokens`.
+
+Streamed responses deliver `reasoning` parts as they arrive so you can render
+the reasoning incrementally.
 
 ### Document Citations
 
@@ -106,7 +136,7 @@ helper to create citable documents. For more details, see the
 import { anthropic, anthropicDocument } from "@genkit-ai/anthropic";
 
 const response = await ai.generate({
-  model: anthropic.model("claude-sonnet-4-5"),
+  model: anthropic.model("claude-sonnet-5-5"),
   messages: [
     {
       role: "user",
@@ -161,7 +191,7 @@ messages, user messages, tools, and media.
 import { anthropic, cacheControl } from "@genkit-ai/anthropic";
 
 const response = await ai.generate({
-  model: anthropic.model("claude-sonnet-4-5"),
+  model: anthropic.model("claude-sonnet-5-5"),
   system: {
     text: longSystemPrompt,
     metadata: { ...cacheControl() }, // default: ephemeral
@@ -234,7 +264,7 @@ directly without initializing the full Genkit framework:
 import { anthropic } from "@genkit-ai/anthropic";
 
 // Create a model reference directly
-const claude = anthropic.model("claude-sonnet-4-5");
+const claude = anthropic.model("claude-sonnet-5-5");
 
 // Use the model directly
 const response = await claude({
@@ -255,12 +285,12 @@ You can also create model references using the plugin's `model()` method:
 import { anthropic } from "@genkit-ai/anthropic";
 
 // Create model references
-const claudeHaiku45 = anthropic.model("claude-haiku-4-5");
-const claudeSonnet45 = anthropic.model("claude-sonnet-4-5");
-const claudeOpus45 = anthropic.model("claude-opus-4-5");
+const claudeHaiku = anthropic.model("claude-haiku-5-5");
+const claudeSonnet = anthropic.model("claude-sonnet-5-5");
+const claudeOpus = anthropic.model("claude-opus-5-5");
 
 // Use the model reference directly
-const response = await claudeSonnet45({
+const response = await claudeSonnet({
   messages: [
     {
       role: "user",

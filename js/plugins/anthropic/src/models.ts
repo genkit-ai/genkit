@@ -61,8 +61,23 @@ function parseRetryAfterMs(value: string): number | undefined {
 type ConfigSchemaType = AnthropicConfigSchemaType;
 
 /**
- * Generic Claude model info for unknown/unsupported models.
- * Used when a model name is not in KNOWN_CLAUDE_MODELS.
+ * Model info for the models in KNOWN_MODELS: text and image input, tool use,
+ * system prompts, multi-turn, and native structured (JSON) output.
+ */
+export const ADVANCED_MODEL_INFO: ModelInfo = {
+  supports: {
+    multiturn: true,
+    tools: true,
+    media: true,
+    systemRole: true,
+    output: ['text', 'json'],
+    constrained: 'all',
+  },
+};
+
+/**
+ * Model info for model names that are not in KNOWN_MODELS. Output is text
+ * only, so Genkit puts any output schema into the prompt as instructions.
  */
 export const GENERIC_MODEL_INFO: ModelInfo = {
   supports: {
@@ -75,17 +90,11 @@ export const GENERIC_MODEL_INFO: ModelInfo = {
 };
 
 /**
- * Advanced Claude model info for models that support JSON output.
+ * Model info for models that are deprecated but not yet retired.
  */
-export const ADVANCED_MODEL_INFO: ModelInfo = {
-  supports: {
-    multiturn: true,
-    tools: true,
-    media: true,
-    systemRole: true,
-    output: ['text', 'json'],
-    constrained: 'all',
-  },
+const DEPRECATED_MODEL_INFO: ModelInfo = {
+  supports: { ...ADVANCED_MODEL_INFO.supports },
+  stage: 'deprecated',
 };
 
 /**
@@ -104,18 +113,22 @@ function commonRef(
 }
 
 const KNOWN_MODELS = {
+  'claude-fable-5-2': commonRef('claude-fable-5-2', ADVANCED_MODEL_INFO),
+  'claude-fable-5-1': commonRef('claude-fable-5-1', ADVANCED_MODEL_INFO),
   'claude-fable-5': commonRef('claude-fable-5', ADVANCED_MODEL_INFO),
+  'claude-opus-5-5': commonRef('claude-opus-5-5', ADVANCED_MODEL_INFO),
+  'claude-opus-5': commonRef('claude-opus-5', ADVANCED_MODEL_INFO),
   'claude-opus-4-8': commonRef('claude-opus-4-8', ADVANCED_MODEL_INFO),
   'claude-opus-4-7': commonRef('claude-opus-4-7', ADVANCED_MODEL_INFO),
   'claude-opus-4-6': commonRef('claude-opus-4-6', ADVANCED_MODEL_INFO),
   'claude-opus-4-5': commonRef('claude-opus-4-5', ADVANCED_MODEL_INFO),
-  'claude-haiku-4-5': commonRef('claude-haiku-4-5', ADVANCED_MODEL_INFO),
+  'claude-sonnet-5-5': commonRef('claude-sonnet-5-5', ADVANCED_MODEL_INFO),
   'claude-sonnet-5': commonRef('claude-sonnet-5', ADVANCED_MODEL_INFO),
   'claude-sonnet-4-6': commonRef('claude-sonnet-4-6', ADVANCED_MODEL_INFO),
-  'claude-sonnet-4-5': commonRef('claude-sonnet-4-5', ADVANCED_MODEL_INFO),
-  'claude-opus-4-1': commonRef('claude-opus-4-1', ADVANCED_MODEL_INFO),
-  'claude-sonnet-4': commonRef('claude-sonnet-4'),
-  'claude-opus-4': commonRef('claude-opus-4'),
+  // Deprecated 2026-09-30, retires 2026-11-30. Replacement: claude-sonnet-5-5.
+  'claude-sonnet-4-5': commonRef('claude-sonnet-4-5', DEPRECATED_MODEL_INFO),
+  'claude-haiku-5-5': commonRef('claude-haiku-5-5', ADVANCED_MODEL_INFO),
+  'claude-haiku-4-5': commonRef('claude-haiku-4-5', ADVANCED_MODEL_INFO),
 } as const;
 export type KnownClaudeModels = keyof typeof KNOWN_MODELS;
 export type ClaudeModelName = `claude-${string}`;

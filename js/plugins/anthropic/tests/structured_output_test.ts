@@ -29,8 +29,9 @@ import {
  * Test constants for consistent test setup
  */
 const TEST_API_KEY = 'test-key';
-const SUPPORTING_MODEL = 'anthropic/claude-sonnet-4-5';
-const NON_SUPPORTING_MODEL = 'anthropic/claude-sonnet-4';
+const SUPPORTING_MODEL = 'anthropic/claude-sonnet-5-5';
+// Not in KNOWN_MODELS, so it resolves through the generic fallback.
+const UNLISTED_MODEL = 'anthropic/claude-unlisted-6';
 
 /**
  * Options for creating a plugin with a mock client
@@ -122,7 +123,7 @@ describe('Structured Output Tests', () => {
 
     const ai = createGenkitInstance(plugin);
 
-    // Call generate with sonnet 4.5 (supports native constrained output)
+    // Call generate with sonnet 5.5 (supports native constrained output)
     await ai.generate({
       model: SUPPORTING_MODEL,
       prompt:
@@ -281,14 +282,13 @@ describe('Structured Output Tests', () => {
     );
   });
 
-  test('should NOT pass output_format to API when model does not support structured output and using beta API', async () => {
+  test('should NOT pass output_format to API for a model ID that is not in the known list', async () => {
     const mockClient = createMockAnthropicClient({
       messageResponse: createMockAnthropicMessage({
         text: '{"name":"Alice"}',
       }),
     });
 
-    // Set up plugin with beta API enabled
     const plugin = createPlugin({
       apiVersion: 'beta',
       mockClient,
@@ -296,26 +296,64 @@ describe('Structured Output Tests', () => {
 
     const ai = createGenkitInstance(plugin);
 
-    // Call generate with model that does not support structured output
     await ai.generate({
-      model: NON_SUPPORTING_MODEL,
+      model: UNLISTED_MODEL,
       prompt: 'Generate JSON',
       output: {
+        schema: z.object({ name: z.string() }),
         format: 'json',
         constrained: true,
       },
     });
 
-    // Verify the beta API was called
     verifyApiCalled(mockClient, 'beta');
 
-    // Verify output_format was NOT included when model does not support structured output
     const apiRequest = getApiRequest(mockClient, 'beta');
     assert.strictEqual(
       apiRequest.output_format,
       undefined,
-      'Request should NOT have output_format when model does not support structured output'
+      'Request should NOT have output_format for an unlisted model'
     );
+    assert.ok(
+      JSON.stringify(apiRequest.messages).includes(
+        'Output should be in JSON format'
+      ),
+      'Prompt should carry the schema instructions'
+    );
+  });
+
+  test('should return schema output for a model ID that is not in the known list on the stable API', async () => {
+    const mockClient = createMockAnthropicClient({
+      messageResponse: createMockAnthropicMessage({
+        text: '{"name":"Alice"}',
+      }),
+    });
+
+    const plugin = createPlugin({
+      apiVersion: 'stable',
+      mockClient,
+    });
+
+    const ai = createGenkitInstance(plugin);
+
+    const response = await ai.generate({
+      model: UNLISTED_MODEL,
+      prompt: 'Generate JSON',
+      output: {
+        schema: z.object({ name: z.string() }),
+      },
+    });
+
+    verifyApiCalled(mockClient, 'stable');
+
+    const apiRequest = getApiRequest(mockClient, 'stable');
+    assert.ok(
+      JSON.stringify(apiRequest.messages).includes(
+        'Output should be in JSON format'
+      ),
+      'Prompt should carry the schema instructions'
+    );
+    assert.deepStrictEqual(response.output, { name: 'Alice' });
   });
 
   test('should throw an error when using stable API with non-text output format', async () => {

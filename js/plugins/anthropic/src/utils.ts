@@ -28,7 +28,7 @@ import type { CacheControlEphemeral } from '@anthropic-ai/sdk/resources/messages
  * import { anthropic, cacheControl } from '@genkit-ai/anthropic';
  *
  * const response = await ai.generate({
- *   model: anthropic.model('claude-sonnet-4-5'),
+ *   model: anthropic.model('claude-sonnet-5-5'),
  *   system: {
  *     text: longSystemPrompt,
  *     metadata: { ...cacheControl() }  // default ephemeral

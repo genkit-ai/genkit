@@ -134,7 +134,7 @@ describe('Anthropic Plugin', () => {
           display_name: 'Claude 4.5 Haiku Latest',
         },
         { id: 'claude-sonnet-4-5', display_name: 'Claude 4.5 Sonnet' },
-        { id: 'claude-sonnet-4', display_name: 'Claude 4 Sonnet' },
+        { id: 'claude-opus-5-5', display_name: 'Claude Opus 5.5' },
         { id: 'claude-new-5-20251212', display_name: 'Claude New 5' },
         { id: 'claude-experimental-latest' },
       ],
@@ -160,11 +160,11 @@ describe('Anthropic Plugin', () => {
     );
     assert.ok(
       names.includes('anthropic/claude-sonnet-4-5'),
-      'Unknown Claude 4.5 Sonnet should be listed with full model ID'
+      'Known Claude Sonnet 4.5 model should be listed with full model ID'
     );
     assert.ok(
-      names.includes('anthropic/claude-sonnet-4'),
-      'Known Claude Sonnet 4 model should be listed with full model ID'
+      names.includes('anthropic/claude-opus-5-5'),
+      'Known Claude Opus 5.5 model should be listed with full model ID'
     );
     assert.ok(
       names.includes('anthropic/claude-new-5-20251212'),
@@ -186,6 +186,13 @@ describe('Anthropic Plugin', () => {
       (model) => model.name === 'anthropic/claude-new-5-20251212'
     );
     assert.ok(newModelMetadata, 'New model metadata should exist');
+    const newModelInfo = getModelInfo(newModelMetadata);
+    assert.deepStrictEqual(
+      newModelInfo?.supports?.output,
+      ['text'],
+      'Unknown models should fall back to text-only output'
+    );
+    assert.strictEqual(newModelInfo?.supports?.constrained, undefined);
 
     const experimentalMetadata = models.find(
       (model) => model.name === 'anthropic/claude-experimental-latest'
@@ -231,6 +238,44 @@ describe('Anthropic Plugin', () => {
       1,
       'beta.models.list should only be called once due to caching'
     );
+  });
+});
+
+describe('Known model list', () => {
+  const CURRENT_MODELS = [
+    'claude-fable-5-2',
+    'claude-fable-5-1',
+    'claude-fable-5',
+    'claude-opus-5-5',
+    'claude-opus-5',
+    'claude-opus-4-8',
+    'claude-opus-4-7',
+    'claude-opus-4-6',
+    'claude-opus-4-5',
+    'claude-sonnet-5-5',
+    'claude-sonnet-5',
+    'claude-sonnet-4-6',
+    'claude-haiku-5-5',
+    'claude-haiku-4-5',
+  ];
+  const DEPRECATED_MODELS = ['claude-sonnet-4-5'];
+
+  it('lists exactly the current and deprecated models', () => {
+    assert.deepStrictEqual(
+      Object.keys(KNOWN_MODELS).sort(),
+      [...CURRENT_MODELS, ...DEPRECATED_MODELS].sort()
+    );
+  });
+
+  it('marks deprecated models with the deprecated stage', () => {
+    for (const name of DEPRECATED_MODELS) {
+      const info = KNOWN_MODELS[name as keyof typeof KNOWN_MODELS].info;
+      assert.strictEqual(info?.stage, 'deprecated', name);
+    }
+    for (const name of CURRENT_MODELS) {
+      const info = KNOWN_MODELS[name as keyof typeof KNOWN_MODELS].info;
+      assert.strictEqual(info?.stage, undefined, name);
+    }
   });
 });
 
