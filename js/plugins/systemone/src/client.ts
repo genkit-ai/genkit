@@ -182,16 +182,22 @@ export class Client {
       const routed = hook(endpoint.name, 'route', () =>
         endpoint.route!(model, body as Record<string, unknown>)
       );
+      // A promise is refused; its own rejection is caught, so it is not
+      // reported as unhandled after the call has failed.
+      if (isThenable(routed)) {
+        (routed as unknown as Promise<unknown>).then(undefined, () => {});
+      }
       if (
         !routed ||
         typeof routed !== 'object' ||
         isThenable(routed) ||
         routed.body === undefined ||
-        routed.body === null
+        routed.body === null ||
+        (routed.path !== undefined && typeof routed.path !== 'string')
       ) {
         throw new GenkitError({
           status: 'INVALID_ARGUMENT',
-          message: `${endpoint.name}: route must return {path, body} with a body, not a promise`,
+          message: `${endpoint.name}: route must return {path, body}, with a string path if any and a body, not a promise`,
         });
       }
       suffix = routed.path ?? '';
@@ -227,6 +233,7 @@ export class Client {
       const parsed = raw;
       raw = hook(endpoint.name, 'unwrap', () => endpoint.unwrap!(parsed));
       if (isThenable(raw)) {
+        (raw as Promise<unknown>).then(undefined, () => {});
         throw new GenkitError({
           status: 'UNKNOWN',
           message: `${endpoint.name}: unwrap must return the response, not a promise`,
@@ -394,10 +401,17 @@ export class Client {
           -1
         );
       }
+      // The cause says what failed, such as ECONNREFUSED; fetch's own
+      // message is only "fetch failed".
+      const cause = (e as Error)?.cause;
+      const reason =
+        cause instanceof Error && cause.message
+          ? `${(e as Error).message}: ${cause.message}`
+          : ((e as Error)?.message ?? String(e));
       throw new AttemptFailure(
         new GenkitError({
           status: 'UNAVAILABLE',
-          message: `${endpoint.name}: ${(e as Error)?.message ?? String(e)}`,
+          message: `${endpoint.name}: ${reason}`,
         }),
         true,
         -1
@@ -407,7 +421,13 @@ export class Client {
     }
     if (resp.ok) return { text };
     const code = resp.status;
-    if (code >= 300 && code < 400) {
+    // A browser's fetch reports a refused redirect as an opaque response
+    // with status 0, where Node's reports the 3xx.
+    if (
+      (code >= 300 && code < 400) ||
+      resp.type === 'opaqueredirect' ||
+      code === 0
+    ) {
       throw new AttemptFailure(
         new GenkitError({
           status: 'FAILED_PRECONDITION',
@@ -715,9 +735,19 @@ function bodyMessage(body: string): string {
  */
 function validationErrors(value: unknown): string {
   if (!Array.isArray(value) || value.length === 0) return '';
+  // As Go decodes the list: a record that is not an object (null aside)
+  // makes the body not such a list.
+  if (
+    value.some(
+      (record) =>
+        record !== null && (typeof record !== 'object' || Array.isArray(record))
+    )
+  ) {
+    return '';
+  }
   const messages: string[] = [];
   for (const record of value) {
-    if (!record || typeof record !== 'object') continue;
+    if (!record) continue;
     let message: string = record.message || record.msg || '';
     if (typeof message !== 'string' || message === '') continue;
     const path = [

@@ -317,7 +317,7 @@ describe('client', () => {
     }
   });
 
-  it('does not follow a redirect, which would carry the key away', async () => {
+  it('does not follow a redirect, and does not retry it', async () => {
     server.failures = [{ status: 302, headers: { Location: '/elsewhere' } }];
     const before = server.requests.length;
     await assert.rejects(
@@ -355,7 +355,7 @@ describe('client', () => {
         'jev',
         request
       ),
-      /route must return \{path, body\} with a body/
+      /route must return \{path, body\}, with a string path if any and a body/
     );
     await assert.rejects(
       client(server, { unwrap: async (body) => body }).decide('jev', request),
@@ -435,6 +435,82 @@ describe('client', () => {
     }
   });
 
+  it('says what a network error was', async () => {
+    const down = new Client({
+      fetch: async () => {
+        throw new TypeError('fetch failed', {
+          cause: new Error('connect ECONNREFUSED 127.0.0.1:9'),
+        });
+      },
+      baseUrl: 'http://unused',
+      endpoint: { name: 'test', path: '', modelsPath: '' },
+      sleep: async () => {},
+    });
+    await assert.rejects(
+      down.decide('jev', request),
+      (e: GenkitError) =>
+        e.originalMessage ===
+        'test: fetch failed: connect ECONNREFUSED 127.0.0.1:9'
+    );
+  });
+
+  it('refuses a promise from a hook without leaving its rejection unhandled', async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      await assert.rejects(
+        client(server, {
+          route: () => Promise.reject(new Error('route failed')) as any,
+        }).decide('jev', request),
+        (e: GenkitError) => e.status === 'INVALID_ARGUMENT'
+      );
+      await assert.rejects(
+        client(server, {
+          unwrap: () => Promise.reject(new Error('unwrap failed')),
+        }).decide('jev', request),
+        /unwrap must return the response, not a promise/
+      );
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.deepStrictEqual(unhandled, []);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+
+  it('refuses a route path that is not a string', async () => {
+    await assert.rejects(
+      client(server, {
+        route: (_model, body) => ({ path: 42 as any, body }),
+      }).decide('jev', request),
+      (e: GenkitError) =>
+        e.status === 'INVALID_ARGUMENT' && /with a string path/.test(e.message)
+    );
+  });
+
+  it("treats a browser's opaque redirect as a redirect", async () => {
+    const browser = new Client({
+      fetch: async () =>
+        ({
+          type: 'opaqueredirect',
+          status: 0,
+          ok: false,
+          statusText: '',
+          headers: new Headers(),
+          body: null,
+        }) as unknown as Response,
+      baseUrl: 'http://unused',
+      endpoint: { name: 'test', path: '', modelsPath: '' },
+      sleep: async () => {},
+    });
+    await assert.rejects(
+      browser.decide('jev', request),
+      (e: GenkitError) =>
+        e.status === 'FAILED_PRECONDITION' &&
+        /redirects are not followed/.test(e.message)
+    );
+  });
+
   it('lists models from a bare array or an envelope', async () => {
     const c = client(server, { modelsPath: '/v1/models' });
     server.models = '[{"name":"jev-1.13.0"}]';
@@ -490,6 +566,8 @@ describe('errors', () => {
       ],
       ['{"detail":"Not authenticated"}', 'Not authenticated'],
       ['[{"path":["state"],"message":"Required"}]', 'state: Required'],
+      // As in Go, a list with a record that is not an object is no list.
+      ['[{"message":"a"},"oops"]', '[{"message":"a"},"oops"]'],
       ['  upstream exploded  ', 'upstream exploded'],
       ['', ''],
     ];
