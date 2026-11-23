@@ -130,7 +130,8 @@ const ai = genkit({
 ### `createMcpClient()` Options
 
 The `createMcpClient` function takes an `McpClientOptions` object:
--   **`name`**: (required, string) A unique name for this client instance. This name will be used as the namespace for its tools and prompts.
+-   **`name`**: (required, string) The client identity advertised to the MCP server.
+-   **`serverName`**: (optional, string) Overrides the namespace prefix used for this server's tools and resources. Defaults to the server's advertised name.
 -   **`version`**: (optional, string) Version for this client instance. Defaults to "1.0.0".
 -   **`mcpServer`**: (required, object) The server connection configuration. For HTTP, provide `url` and optionally `requestInit` for headers. It also accepts the stdio and custom transport configurations described under `createMcpHost`.
 -   **`rawToolResponses`**: (optional, boolean) Return raw MCP tool responses instead of Genkit's processed result.
@@ -146,7 +147,10 @@ import { genkit } from 'genkit';
 
 const ai = genkit({ plugins: [googleAI()] });
 
-async function generateWithMcpToken(accessToken: string, prompt: string) {
+export async function generateWithMcpToken(
+  accessToken: string,
+  prompt: string
+) {
   const client = createMcpClient({
     name: 'slides',
     mcpServer: {
@@ -172,7 +176,7 @@ async function generateWithMcpToken(accessToken: string, prompt: string) {
 }
 ```
 
-This reuses `ai` while making the MCP connection for the current token. Keep a client for longer only when its connection and credentials belong to the same user, and close it when that user's session ends.
+This reuses `ai` while making the MCP connection for the current token. Keep a client for longer only when its connection and credentials belong to the same user, and close it when that user's session ends. For stateful MCP servers that retain sessions until explicitly deleted, pass your own `StreamableHTTPClientTransport` via `mcpServer: { transport }`, call `await transport.terminateSession()` before `await client.disable()`, and keep `await client.disable()` in `finally` so the local transport always closes.
 
 ### Using MCP Actions (Tools, Prompts)
 
@@ -180,9 +184,9 @@ Both `GenkitMcpHost` (via `getActiveTools()`) and `GenkitMcpClient` (via `getAct
 
 MCP prompts can be fetched using `McpHost.getPrompt(serverName, promptName)` or `mcpClient.getPrompt(promptName)`. These return an `ExecutablePrompt`.
 
-All MCP actions (tools, prompts, resources) are namespaced.
+MCP tools and resources are namespaced (fetched prompts keep the server's original prompt name):
 - For `createMcpHost`, the namespace is the key you provide for that server in the `mcpServers` configuration (e.g., `localFs/read_file`).
-- For `createMcpClient`, the namespace is the `name` you provide in its options (e.g., `myFileSystemClient/list_resources`).
+- For `createMcpClient`, the namespace is `serverName` if provided, or the server's advertised name (e.g., `filesystem/read_file`).
 
 ### Tool Responses
 
