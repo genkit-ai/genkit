@@ -36,13 +36,19 @@ import (
 
 // TestModelOptionsKnownModels verifies the curated Claude models resolve through
 // the shared modelOptions helper (used by both ListActions and ResolveAction)
-// with JS ADVANCED_MODEL_INFO-equivalent supports (JSON output) and a stable
-// stage. The set mirrors the JS plugin's ADVANCED entries in KNOWN_MODELS.
+// with supports that include JSON output, tools and the system role, and a
+// stable stage, or a deprecated one for claude-sonnet-4-5. The set is
+// Anthropic's current catalog, less the Mythos models.
 func TestModelOptionsKnownModels(t *testing.T) {
-	advancedModels := []string{
+	knownModels := []string{
+		"claude-fable-5-2",
+		"claude-fable-5-1",
 		"claude-fable-5",
+		"claude-opus-5-5",
 		"claude-opus-5",
+		"claude-sonnet-5-5",
 		"claude-sonnet-5",
+		"claude-haiku-5-5",
 		"claude-opus-4-8",
 		"claude-opus-4-7",
 		"claude-opus-4-6",
@@ -51,7 +57,7 @@ func TestModelOptionsKnownModels(t *testing.T) {
 		"claude-sonnet-4-5",
 		"claude-haiku-4-5",
 	}
-	for _, name := range advancedModels {
+	for _, name := range knownModels {
 		opts := (&Anthropic{}).modelOptions(name)
 		if opts.Supports == nil {
 			t.Errorf("modelOptions(%q): Supports is nil", name)

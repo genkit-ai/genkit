@@ -80,9 +80,9 @@ func TestModelConfigSchema(t *testing.T) {
 	a := &Anthropic{}
 	g := genkit.Init(context.Background(), genkit.WithPlugins(a))
 
-	m := genkit.LookupModel(g, "anthropic/claude-3-5-haiku-20241022")
+	m := genkit.LookupModel(g, "anthropic/claude-haiku-4-5-20251001")
 	if m == nil {
-		t.Fatal("claude-3-5-haiku-20241022 not registered by Init")
+		t.Fatal("claude-haiku-4-5-20251001 not registered by Init")
 	}
 	model, ok := m.(*ai.ModelAction).Desc().Metadata["model"].(map[string]any)
 	if !ok {
@@ -154,7 +154,7 @@ func TestThinkingBudgetFloorRejected(t *testing.T) {
 	g := genkit.Init(ctx, genkit.WithPlugins(plugin))
 
 	_, err := genkit.Generate(ctx, g,
-		ai.WithModel(ModelRef("claude-3-5-haiku-20241022", &ChatConfig{
+		ai.WithModel(ModelRef("claude-haiku-4-5-20251001", &ChatConfig{
 			Thinking: &ThinkingConfig{Type: "enabled", BudgetTokens: 512},
 		})),
 		ai.WithPrompt("hi"),
@@ -197,9 +197,9 @@ func TestDocumentRejected(t *testing.T) {
 func TestModelRef(t *testing.T) {
 	cfg := &ChatConfig{MaxOutputTokens: 1024}
 
-	for _, name := range []string{"claude-3-5-haiku-20241022", "anthropic/claude-3-5-haiku-20241022"} {
+	for _, name := range []string{"claude-haiku-4-5-20251001", "anthropic/claude-haiku-4-5-20251001"} {
 		ref := ModelRef(name, cfg)
-		if want := "anthropic/claude-3-5-haiku-20241022"; ref.Name() != want {
+		if want := "anthropic/claude-haiku-4-5-20251001"; ref.Name() != want {
 			t.Errorf("ModelRef(%q).Name() = %q, want %q", name, ref.Name(), want)
 		}
 		if ref.Config() != cfg {
@@ -331,7 +331,7 @@ func TestPluginConfigPrecedence(t *testing.T) {
 		chatAuth = r.Header.Get("Authorization")
 		mu.Unlock()
 		_, _ = io.WriteString(w, `{
-			"id":"c1","object":"chat.completion","created":1,"model":"claude-3-5-haiku-20241022",
+			"id":"c1","object":"chat.completion","created":1,"model":"claude-haiku-4-5-20251001",
 			"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],
 			"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}
 		}`)
@@ -347,7 +347,7 @@ func TestPluginConfigPrecedence(t *testing.T) {
 
 	plugin.ListActions(ctx)
 	if _, err := genkit.Generate(ctx, g,
-		ai.WithModelName("anthropic/claude-3-5-haiku-20241022"),
+		ai.WithModelName("anthropic/claude-haiku-4-5-20251001"),
 		ai.WithPrompt("hi"),
 	); err != nil {
 		t.Fatalf("Generate() error = %v", err)
@@ -378,7 +378,7 @@ func TestExtraPassthroughRidesTheWire(t *testing.T) {
 		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{
-			"id":"c1","object":"chat.completion","created":1,"model":"claude-3-5-haiku-20241022",
+			"id":"c1","object":"chat.completion","created":1,"model":"claude-haiku-4-5-20251001",
 			"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],
 			"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}
 		}`)
@@ -392,7 +392,7 @@ func TestExtraPassthroughRidesTheWire(t *testing.T) {
 	g := genkit.Init(ctx, genkit.WithPlugins(&Anthropic{}))
 
 	_, err := genkit.Generate(ctx, g,
-		ai.WithModelName("anthropic/claude-3-5-haiku-20241022"),
+		ai.WithModelName("anthropic/claude-haiku-4-5-20251001"),
 		ai.WithPrompt("hi"),
 		ai.WithConfig(map[string]any{
 			"thinking": map[string]any{"type": "enabled", "budgetTokens": 2048},

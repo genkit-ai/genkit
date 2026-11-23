@@ -56,7 +56,7 @@ response, err := genkit.Generate(ctx, g, ai.WithPrompt("Explain constitutional A
 
 ## Models
 
-A catalog of dated Claude releases is registered at Init, and the catalog is
+A catalog of well-known Claude models is registered at Init, and the catalog is
 not a ceiling: any Claude model ID resolves on demand, and the plugin lists
 what Anthropic's native models API reports (paged, authenticated with
 `x-api-key`, since listing is not part of the compatible surface). Use the
@@ -65,12 +65,12 @@ after this plugin:
 
 ```go
 plugin := &anthropic.Anthropic{Models: map[string]ai.ModelOptions{
-    "claude-opus-5": {Label: "Claude Opus 5", Supports: &compat_oai.Multimodal},
+    "claude-opus-6": {Label: "Claude Opus 6"},
 }}
 ```
 
 The current model list is at
-https://platform.claude.com/docs/en/about-claude/models/overview.
+https://platform.claude.com/docs/en/models/overview.
 
 ## Config
 
@@ -81,7 +81,7 @@ caps it. `anthropic.ModelRef` carries the config with the model ID:
 
 ```go
 response, err := genkit.Generate(ctx, g,
-    ai.WithModel(anthropic.ModelRef("claude-sonnet-4-5-20250929", &anthropic.ChatConfig{
+    ai.WithModel(anthropic.ModelRef("claude-haiku-4-5-20251001", &anthropic.ChatConfig{
         MaxOutputTokens: 2048,
         Thinking:        &anthropic.ThinkingConfig{Type: "enabled", BudgetTokens: 2000},
     })),
@@ -101,8 +101,10 @@ body fields the config does not declare, keyed by Anthropic's wire names.
 
 ## Live tests
 
-Live tests are skipped unless `ANTHROPIC_API_KEY` is set:
+Live tests are skipped unless `GENKIT_LIVE` and `ANTHROPIC_API_KEY` are set.
+`GENKIT_LIVE=1` runs the standard cases, and `GENKIT_LIVE=all` adds the
+expensive ones, such as a request to every curated model:
 
 ```bash
-go test -v ./plugins/compat_oai/anthropic
+GENKIT_LIVE=1 go test -v ./plugins/compat_oai/anthropic
 ```

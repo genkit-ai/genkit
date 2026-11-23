@@ -73,26 +73,34 @@ func deprecatedModel(opts ai.ModelOptions) ai.ModelOptions {
 	return opts
 }
 
-// supportedModels curates capabilities for well-known Claude models, mirroring
-// the JS plugin's KNOWN_MODELS. It is not the set of usable models: any Claude
-// model resolves on demand and takes [dynamicModelOptions], so an ID absent
-// here still works. Both ListActions and ResolveAction look it up through
-// modelOptions.
+// supportedModels curates capabilities for well-known Claude models. It is
+// not the set of usable models: any Claude model resolves on demand and takes
+// [dynamicModelOptions], so an ID absent here still works. Both ListActions
+// and ResolveAction look it up through modelOptions.
 //
-// Catalog: https://docs.anthropic.com/en/docs/about-claude/models/all-models
+// Claude Mythos models are not curated: they are open only to verified
+// organizations. An account with access lists and resolves them like any
+// other uncurated ID, with [dynamicModelOptions].
+//
+// Catalog: https://platform.claude.com/docs/en/models/overview
 // Retirements: https://platform.claude.com/docs/en/about-claude/model-deprecations
 var supportedModels = map[string]ai.ModelOptions{
+	"claude-fable-5-2":  structuredModel("Claude Fable 5.2"),
+	"claude-fable-5-1":  structuredModel("Claude Fable 5.1"),
 	"claude-fable-5":    structuredModel("Claude Fable 5"),
+	"claude-opus-5-5":   structuredModel("Claude Opus 5.5"),
 	"claude-opus-5":     structuredModel("Claude Opus 5"),
-	"claude-sonnet-5":   structuredModel("Claude Sonnet 5"),
 	"claude-opus-4-8":   structuredModel("Claude Opus 4.8"),
 	"claude-opus-4-7":   structuredModel("Claude Opus 4.7"),
 	"claude-opus-4-6":   structuredModel("Claude Opus 4.6"),
 	"claude-opus-4-5":   structuredModel("Claude Opus 4.5"),
+	"claude-sonnet-5-5": structuredModel("Claude Sonnet 5.5"),
+	"claude-sonnet-5":   structuredModel("Claude Sonnet 5"),
 	"claude-sonnet-4-6": structuredModel("Claude Sonnet 4.6"),
 	// Deprecated September 30, 2026; retires November 30, 2026, replaced by
 	// claude-sonnet-5-5.
 	"claude-sonnet-4-5": deprecatedModel(structuredModel("Claude Sonnet 4.5")),
+	"claude-haiku-5-5":  structuredModel("Claude Haiku 5.5"),
 	"claude-haiku-4-5":  structuredModel("Claude Haiku 4.5"),
 }
 

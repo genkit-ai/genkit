@@ -75,7 +75,7 @@ func TestConfigSchemaConformance(t *testing.T) {
 		plugin api.DynamicPlugin
 		id     string
 	}{
-		{&anthropic.Anthropic{}, "claude-sonnet-4-5-20250929"},
+		{&anthropic.Anthropic{}, "claude-haiku-4-5-20251001"},
 		{&dashscope.DashScope{}, "qwen-plus"},
 		{&deepseek.DeepSeek{}, "deepseek-v4-pro"},
 		{&kimi.Kimi{}, "kimi-k3"},
@@ -180,7 +180,7 @@ func TestModelsOverrideConformance(t *testing.T) {
 
 	g := genkit.Init(context.Background(), genkit.WithPlugins(
 		&anthropic.Anthropic{Models: map[string]ai.ModelOptions{
-			"anthropic/claude-sonnet-4-5-20250929": pinned}},
+			"anthropic/claude-haiku-4-5-20251001": pinned}},
 		&dashscope.DashScope{Models: map[string]ai.ModelOptions{"qwen-plus": pinned}},
 		&deepseek.DeepSeek{Models: map[string]ai.ModelOptions{
 			"deepseek/deepseek-v4-pro": pinned}},
@@ -190,7 +190,7 @@ func TestModelsOverrideConformance(t *testing.T) {
 	))
 
 	for _, name := range []string{
-		"anthropic/claude-sonnet-4-5-20250929",
+		"anthropic/claude-haiku-4-5-20251001",
 		"dashscope/qwen-plus",
 		"deepseek/deepseek-v4-pro",
 		"kimi/kimi-k3",

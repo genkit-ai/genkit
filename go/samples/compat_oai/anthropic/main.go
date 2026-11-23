@@ -63,7 +63,7 @@ type JokeRequest struct {
 // one-line change. The thinking config spends a reasoning budget before
 // answering; the compatible endpoint keeps the thinking content itself
 // server-side.
-var model = anthropic.ModelRef("claude-sonnet-4-5-20250929", &anthropic.ChatConfig{
+var model = anthropic.ModelRef("claude-haiku-4-5-20251001", &anthropic.ChatConfig{
 	MaxOutputTokens: 2048,
 	Thinking:        &anthropic.ThinkingConfig{Type: "enabled", BudgetTokens: 2000},
 })
