@@ -221,7 +221,7 @@ type Info struct {
 var answerFields = map[string][]string{
 	KindChoice: {"choice", "probabilities", "confidence"},
 	KindScore:  {"score", "probabilities", "confidence", "legend"},
-	KindNoul:   {"noul"},
+	KindNoul:   {"noul", "confidence"},
 }
 
 // AnswersText renders the answers as the message text: for the enum
