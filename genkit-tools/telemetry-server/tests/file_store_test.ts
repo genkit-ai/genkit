@@ -15,12 +15,11 @@
  */
 
 import type { TraceData, TraceQueryFilter } from '@genkit-ai/tools-common';
-import * as assert from 'assert';
 import fs from 'fs';
 import getPort from 'get-port';
-import { afterEach, beforeEach, describe, it } from 'node:test';
 import os from 'os';
 import path from 'path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Index } from '../src/file-trace-store.js';
 import {
   LocalFileLogStore,
@@ -84,7 +83,7 @@ describe('local-file-store', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(traceData),
     });
-    assert.strictEqual(res.status, 200);
+    expect(res.status).toBe(200);
 
     await assertTraceData(TRACE_ID, traceData);
   });
@@ -100,7 +99,7 @@ describe('local-file-store', () => {
         spans: { [SPAN_A]: spanA },
       } as TraceData),
     });
-    assert.strictEqual(res1.status, 200);
+    expect(res1.status).toBe(200);
     const res2 = await fetch(`${url}/api/traces`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -109,7 +108,7 @@ describe('local-file-store', () => {
         spans: { [SPAN_B]: spanB },
       } as TraceData),
     });
-    assert.strictEqual(res2.status, 200);
+    expect(res2.status).toBe(200);
 
     await assertTraceData(TRACE_ID, {
       traceId: TRACE_ID,
@@ -165,7 +164,7 @@ describe('local-file-store', () => {
         spans: { [SPAN_A]: spanA },
       }),
     });
-    assert.strictEqual(res1.status, 200);
+    expect(res1.status).toBe(200);
 
     await assertTraceData(TRACE_ID, {
       traceId: TRACE_ID,
@@ -185,7 +184,7 @@ describe('local-file-store', () => {
         spans: { [SPAN_B]: spanB },
       }),
     });
-    assert.strictEqual(res2.status, 200);
+    expect(res2.status).toBe(200);
 
     await assertTraceData(TRACE_ID, {
       traceId: TRACE_ID,
@@ -217,14 +216,14 @@ describe('local-file-store', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(trace),
       });
-      assert.strictEqual(res.status, 200);
+      expect(res.status).toBe(200);
       await sleep(1); // sleep a little to ensure consistent chronological ordering
     }
 
     const getResp = await fetch(`${url}/api/traces`);
-    assert.strictEqual(getResp.status, 200);
+    expect(getResp.status).toBe(200);
     const tracesResponse = await getResp.json();
-    assert.deepStrictEqual(tracesResponse.traces, wantTraces.reverse());
+    expect(tracesResponse.traces).toEqual(wantTraces.reverse());
   });
 
   it('lists filtered trace data', async () => {
@@ -250,7 +249,7 @@ describe('local-file-store', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(trace),
       });
-      assert.strictEqual(res.status, 200);
+      expect(res.status).toBe(200);
       await sleep(1); // sleep a little to ensure consistent chronological ordering
     }
 
@@ -258,9 +257,9 @@ describe('local-file-store', () => {
     const getResp = await fetch(
       `${url}/api/traces?filter=${encodeURI(JSON.stringify(filter))}`
     );
-    assert.strictEqual(getResp.status, 200);
+    expect(getResp.status).toBe(200);
     const tracesResponse = await getResp.json();
-    assert.deepStrictEqual(tracesResponse.traces, wantTraces.reverse());
+    expect(tracesResponse.traces).toEqual(wantTraces.reverse());
   });
 
   it('lists trace data with pagination', async () => {
@@ -281,16 +280,15 @@ describe('local-file-store', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(trace),
       });
-      assert.strictEqual(res.status, 200);
+      expect(res.status).toBe(200);
       await sleep(1); // sleep a little to ensure consistent chronological ordering
     }
     const pageSize = 4;
 
     const respP1 = await fetch(`${url}/api/traces?limit=${pageSize}`);
-    assert.strictEqual(respP1.status, 200);
+    expect(respP1.status).toBe(200);
     const tracesResponseP1 = await respP1.json();
-    assert.deepStrictEqual(
-      tracesResponseP1.traces,
+    expect(tracesResponseP1.traces).toEqual(
       wantTraces.slice(wantTraces.length - pageSize).reverse()
     );
 
@@ -298,10 +296,9 @@ describe('local-file-store', () => {
     const respP2 = await fetch(
       `${url}/api/traces?limit=${pageSize}&continuationToken=${tracesResponseP1.continuationToken}`
     );
-    assert.strictEqual(respP2.status, 200);
+    expect(respP2.status).toBe(200);
     const tracesResponseP2 = await respP2.json();
-    assert.deepStrictEqual(
-      tracesResponseP2.traces,
+    expect(tracesResponseP2.traces).toEqual(
       wantTraces
         .slice(wantTraces.length - pageSize * 2, wantTraces.length - pageSize)
         .reverse()
@@ -310,8 +307,8 @@ describe('local-file-store', () => {
 
   async function assertTraceData(traceId: string, traceData: TraceData) {
     const getResp = await fetch(`${url}/api/traces/${traceId}`);
-    assert.strictEqual(getResp.status, 200);
-    assert.deepStrictEqual(await getResp.json(), traceData);
+    expect(getResp.status).toBe(200);
+    expect(await getResp.json()).toEqual(traceData);
   }
 });
 
@@ -358,21 +355,20 @@ describe('local-file-store path traversal', () => {
 
   for (const id of maliciousIds) {
     it(`rejects save with malicious id ${JSON.stringify(id)}`, async () => {
-      await assert.rejects(() => store.save(id, trace), /Invalid trace id/);
+      await expect(store.save(id, trace)).rejects.toThrow(/Invalid trace id/);
     });
 
     it(`rejects load with malicious id ${JSON.stringify(id)}`, async () => {
-      await assert.rejects(() => store.load(id), /Invalid trace id/);
+      await expect(store.load(id)).rejects.toThrow(/Invalid trace id/);
     });
   }
 
   it('does not write outside of storeRoot on traversal save', async () => {
     const outside = path.resolve(storeRoot, '..', 'pwned');
-    await assert.rejects(
-      () => store.save('../pwned', trace),
+    await expect(store.save('../pwned', trace)).rejects.toThrow(
       /Invalid trace id/
     );
-    assert.strictEqual(fs.existsSync(outside), false);
+    expect(fs.existsSync(outside)).toBe(false);
   });
 
   it('does not read outside of storeRoot on traversal load', async () => {
@@ -380,7 +376,7 @@ describe('local-file-store path traversal', () => {
     const secretPath = path.resolve(storeRoot, '..', 'secret');
     fs.writeFileSync(secretPath, JSON.stringify({ hello: 'world' }));
     try {
-      await assert.rejects(() => store.load('../secret'), /Invalid trace id/);
+      await expect(store.load('../secret')).rejects.toThrow(/Invalid trace id/);
     } finally {
       fs.rmSync(secretPath, { force: true });
     }
@@ -394,12 +390,12 @@ describe('local-file-store path traversal', () => {
     } as TraceData;
     await store.save('valid_1234', validTrace);
     const loaded = await store.load('valid_1234');
-    assert.ok(loaded);
-    assert.strictEqual(loaded?.traceId, 'valid_1234');
+    expect(loaded).toBeTruthy();
+    expect(loaded?.traceId).toBe('valid_1234');
     // The store writes trace files under `<storeRoot>/.genkit/traces`.
-    assert.ok(
+    expect(
       fs.existsSync(path.resolve(storeRoot, '.genkit/traces', 'valid_1234'))
-    );
+    ).toBeTruthy();
   });
 });
 
@@ -444,7 +440,7 @@ describe('index', () => {
       },
     } as TraceData);
 
-    assert.deepStrictEqual(index.search({ limit: 5 }).data, [
+    expect(index.search({ limit: 5 }).data).toEqual([
       {
         id: TRACE_ID_2,
         type: 'flow',
@@ -494,71 +490,68 @@ describe('index', () => {
       },
     } as TraceData);
 
-    assert.deepStrictEqual(
+    expect(
       index.search({
         limit: 5,
         filter: {
           eq: { name: 'flowA' },
         },
-      }).data,
-      [
-        {
-          id: TRACE_ID_2,
-          type: 'flow',
-          name: 'flowA',
-          start: 1,
-          end: 2,
-          status: 0,
-        },
-        {
-          id: TRACE_ID_1,
-          type: 'banana',
-          name: 'flowA',
-          start: 1,
-          end: 2,
-          status: 0,
-        },
-      ]
-    );
+      }).data
+    ).toEqual([
+      {
+        id: TRACE_ID_2,
+        type: 'flow',
+        name: 'flowA',
+        start: 1,
+        end: 2,
+        status: 0,
+      },
+      {
+        id: TRACE_ID_1,
+        type: 'banana',
+        name: 'flowA',
+        start: 1,
+        end: 2,
+        status: 0,
+      },
+    ]);
 
-    assert.deepStrictEqual(
+    expect(
       index.search({
         limit: 5,
         filter: {
           eq: { name: 'flowA', type: 'banana' },
         },
-      }).data,
-      [
-        {
-          id: TRACE_ID_1,
-          type: 'banana',
-          name: 'flowA',
-          start: 1,
-          end: 2,
-          status: 0,
-        },
-      ]
-    );
+      }).data
+    ).toEqual([
+      {
+        id: TRACE_ID_1,
+        type: 'banana',
+        name: 'flowA',
+        start: 1,
+        end: 2,
+        status: 0,
+      },
+    ]);
 
-    assert.deepStrictEqual(
+    expect(
       index.search({
         limit: 5,
         filter: {
           eq: { name: 'flowA' },
           neq: { type: 'banana' },
         },
-      }).data,
-      [
-        {
-          id: TRACE_ID_2,
-          type: 'flow',
-          name: 'flowA',
-          start: 1,
-          end: 2,
-          status: 0,
-        },
-      ]
-    );
+      }).data
+    ).toEqual([
+      {
+        id: TRACE_ID_2,
+        type: 'flow',
+        name: 'flowA',
+        start: 1,
+        end: 2,
+        status: 0,
+      },
+    ]);
   });
 
   it('should index and filter by sessionId', () => {
@@ -586,45 +579,43 @@ describe('index', () => {
       spans: { [SPAN_C]: spanC },
     } as TraceData);
 
-    assert.deepStrictEqual(
+    expect(
       index.search({
         limit: 5,
         filter: {
           eq: { sessionId: 'session-1' },
         },
-      }).data,
-      [
-        {
-          id: TRACE_ID_1,
-          type: 'flow',
-          name: 'agentA',
-          start: 1,
-          end: 2,
-          status: 0,
-          sessionId: 'session-1',
-        },
-      ]
-    );
+      }).data
+    ).toEqual([
+      {
+        id: TRACE_ID_1,
+        type: 'flow',
+        name: 'agentA',
+        start: 1,
+        end: 2,
+        status: 0,
+        sessionId: 'session-1',
+      },
+    ]);
 
-    assert.deepStrictEqual(
+    expect(
       index.search({
         limit: 5,
         filter: {
           eq: { sessionId: 'session-2' },
         },
-      }).data,
-      [
-        {
-          id: TRACE_ID_2,
-          type: 'flow',
-          name: 'agentA',
-          start: 1,
-          end: 2,
-          status: 0,
-          sessionId: 'session-2',
-        },
-      ]
-    );
+      }).data
+    ).toEqual([
+      {
+        id: TRACE_ID_2,
+        type: 'flow',
+        name: 'agentA',
+        start: 1,
+        end: 2,
+        status: 0,
+        sessionId: 'session-2',
+      },
+    ]);
   });
 
   it('can filter out unknown types', () => {
@@ -659,24 +650,23 @@ describe('index', () => {
       },
     } as TraceData);
 
-    assert.deepStrictEqual(
+    expect(
       index.search({
         limit: 5,
         filter: {
           neq: { type: 'UNKNOWN' },
         },
-      }).data,
-      [
-        {
-          id: TRACE_ID_1,
-          type: 'banana',
-          name: 'flowA',
-          start: 1,
-          end: 2,
-          status: 0,
-        },
-      ]
-    );
+      }).data
+    ).toEqual([
+      {
+        id: TRACE_ID_1,
+        type: 'banana',
+        name: 'flowA',
+        start: 1,
+        end: 2,
+        status: 0,
+      },
+    ]);
   });
 
   it('should support array filters (IN/NOT IN)', () => {
@@ -712,52 +702,50 @@ describe('index', () => {
     } as TraceData);
 
     // Test array filters (IN)
-    assert.deepStrictEqual(
+    expect(
       index.search({
         limit: 5,
         filter: {
           eq: { name: ['flowA', 'flowC'] },
         },
-      }).data,
-      [
-        {
-          id: TRACE_ID_3,
-          type: 'UNKNOWN',
-          name: 'flowC',
-          start: 1,
-          end: 2,
-          status: 0,
-        },
-        {
-          id: TRACE_ID_1,
-          type: 'banana',
-          name: 'flowA',
-          start: 1,
-          end: 2,
-          status: 0,
-        },
-      ]
-    );
+      }).data
+    ).toEqual([
+      {
+        id: TRACE_ID_3,
+        type: 'UNKNOWN',
+        name: 'flowC',
+        start: 1,
+        end: 2,
+        status: 0,
+      },
+      {
+        id: TRACE_ID_1,
+        type: 'banana',
+        name: 'flowA',
+        start: 1,
+        end: 2,
+        status: 0,
+      },
+    ]);
 
     // Test array filters (NOT IN)
-    assert.deepStrictEqual(
+    expect(
       index.search({
         limit: 5,
         filter: {
           neq: { name: ['flowB', 'flowC'] },
         },
-      }).data,
-      [
-        {
-          id: TRACE_ID_1,
-          type: 'banana',
-          name: 'flowA',
-          start: 1,
-          end: 2,
-          status: 0,
-        },
-      ]
-    );
+      }).data
+    ).toEqual([
+      {
+        id: TRACE_ID_1,
+        type: 'banana',
+        name: 'flowA',
+        start: 1,
+        end: 2,
+        status: 0,
+      },
+    ]);
   });
 
   it('should support contains filters (case-insensitive)', () => {
@@ -787,7 +775,7 @@ describe('index', () => {
     } as TraceData);
 
     // Test basic contains (case-insensitive)
-    assert.deepStrictEqual(
+    expect(
       index
         .search({
           limit: 5,
@@ -795,12 +783,11 @@ describe('index', () => {
             contains: { name: 'apple' },
           },
         })
-        .data.map((d) => d.id),
-      [TRACE_ID_2]
-    );
+        .data.map((d) => d.id)
+    ).toEqual([TRACE_ID_2]);
 
     // Test contains with array (OR behavior)
-    assert.deepStrictEqual(
+    expect(
       index
         .search({
           limit: 5,
@@ -808,12 +795,11 @@ describe('index', () => {
             contains: { name: ['BANANA', 'cherry'] },
           },
         })
-        .data.map((d) => d.id),
-      [TRACE_ID_3, TRACE_ID_1]
-    );
+        .data.map((d) => d.id)
+    ).toEqual([TRACE_ID_3, TRACE_ID_1]);
 
     // Test contains on type
-    assert.deepStrictEqual(
+    expect(
       index
         .search({
           limit: 5,
@@ -821,9 +807,8 @@ describe('index', () => {
             contains: { type: 'FRUIT' },
           },
         })
-        .data.map((d) => d.id),
-      [TRACE_ID_2, TRACE_ID_1]
-    );
+        .data.map((d) => d.id)
+    ).toEqual([TRACE_ID_2, TRACE_ID_1]);
   });
 
   it('should support mixed type array filters (number and string)', () => {
@@ -861,7 +846,7 @@ describe('index', () => {
       },
     } as TraceData);
 
-    assert.deepStrictEqual(
+    expect(
       index
         .search({
           limit: 5,
@@ -869,12 +854,11 @@ describe('index', () => {
             eq: { status: [1, 'UNKNOWN'] },
           },
         })
-        .data.map((d) => ({ id: d.id, status: d.status })),
-      [
-        { id: TRACE_ID_3, status: 1 },
-        { id: TRACE_ID_2, status: 'UNKNOWN' },
-      ]
-    );
+        .data.map((d) => ({ id: d.id, status: d.status }))
+    ).toEqual([
+      { id: TRACE_ID_3, status: 1 },
+      { id: TRACE_ID_2, status: 'UNKNOWN' },
+    ]);
   });
 
   it('should support numeric comparison filters (gt/gte/lt/lte)', () => {
@@ -901,59 +885,54 @@ describe('index', () => {
     index.add({ traceId: 't4', spans: { s4: span4 } } as TraceData);
 
     // gt: start > 200 -> t3 (300), t4 (400)
-    assert.deepStrictEqual(
+    expect(
       index
         .search({
           limit: 10,
           filter: { gt: { start: 200 } },
         })
-        .data.map((d) => d.id),
-      ['t4', 't3']
-    );
+        .data.map((d) => d.id)
+    ).toEqual(['t4', 't3']);
 
     // gte: start >= 200 -> t2 (200), t3 (300), t4 (400)
-    assert.deepStrictEqual(
+    expect(
       index
         .search({
           limit: 10,
           filter: { gte: { start: 200 } },
         })
-        .data.map((d) => d.id),
-      ['t4', 't3', 't2']
-    );
+        .data.map((d) => d.id)
+    ).toEqual(['t4', 't3', 't2']);
 
     // lt: start < 300 -> t1 (100), t2 (200)
-    assert.deepStrictEqual(
+    expect(
       index
         .search({
           limit: 10,
           filter: { lt: { start: 300 } },
         })
-        .data.map((d) => d.id),
-      ['t2', 't1']
-    );
+        .data.map((d) => d.id)
+    ).toEqual(['t2', 't1']);
 
     // lte: start <= 300 -> t1 (100), t2 (200), t3 (300)
-    assert.deepStrictEqual(
+    expect(
       index
         .search({
           limit: 10,
           filter: { lte: { start: 300 } },
         })
-        .data.map((d) => d.id),
-      ['t3', 't2', 't1']
-    );
+        .data.map((d) => d.id)
+    ).toEqual(['t3', 't2', 't1']);
 
     // Combined: start > 100 AND start < 400 -> t2 (200), t3 (300)
-    assert.deepStrictEqual(
+    expect(
       index
         .search({
           limit: 10,
           filter: { gt: { start: 100 }, lt: { start: 400 } },
         })
-        .data.map((d) => d.id),
-      ['t3', 't2']
-    );
+        .data.map((d) => d.id)
+    ).toEqual(['t3', 't2']);
   });
 
   it('should paginate search', () => {
@@ -974,37 +953,37 @@ describe('index', () => {
     }
 
     const result1 = index.search({ limit: 3 });
-    assert.deepStrictEqual(
-      result1.data.map((d) => d.id),
-      ['trace_19', 'trace_18', 'trace_17']
-    );
-    assert.strictEqual(result1.pageLastIndex, 3);
+    expect(result1.data.map((d) => d.id)).toEqual([
+      'trace_19',
+      'trace_18',
+      'trace_17',
+    ]);
+    expect(result1.pageLastIndex).toBe(3);
 
     const result2 = index.search({
       limit: 3,
       startFromIndex: result1.pageLastIndex,
     });
-    assert.deepStrictEqual(
-      result2.data.map((d) => d.id),
-      ['trace_16', 'trace_15', 'trace_14']
-    );
-    assert.strictEqual(result2.pageLastIndex, 6);
+    expect(result2.data.map((d) => d.id)).toEqual([
+      'trace_16',
+      'trace_15',
+      'trace_14',
+    ]);
+    expect(result2.pageLastIndex).toBe(6);
 
     // check edge conditions
 
     const result3 = index.search({ limit: 3, startFromIndex: 17 });
-    assert.deepStrictEqual(
-      result3.data.map((d) => d.id),
-      ['trace_2', 'trace_1', 'trace_0']
-    );
-    assert.strictEqual(result3.pageLastIndex, undefined);
+    expect(result3.data.map((d) => d.id)).toEqual([
+      'trace_2',
+      'trace_1',
+      'trace_0',
+    ]);
+    expect(result3.pageLastIndex).toBe(undefined);
 
     const result4 = index.search({ limit: 10, startFromIndex: 18 });
-    assert.deepStrictEqual(
-      result4.data.map((d) => d.id),
-      ['trace_1', 'trace_0']
-    );
-    assert.strictEqual(result4.pageLastIndex, undefined);
+    expect(result4.data.map((d) => d.id)).toEqual(['trace_1', 'trace_0']);
+    expect(result4.pageLastIndex).toBe(undefined);
   });
 
   it('should deduplicate when root span is posted twice (start then end)', () => {
@@ -1032,16 +1011,16 @@ describe('index', () => {
 
     const result = index.search({ limit: 10 });
 
-    assert.strictEqual(result.data.length, 1);
-    assert.strictEqual(result.data[0].id, TRACE_ID_1);
-    assert.strictEqual(result.data[0].start, 1000);
-    assert.strictEqual(result.data[0].end, 2000);
+    expect(result.data.length).toBe(1);
+    expect(result.data[0].id).toBe(TRACE_ID_1);
+    expect(result.data[0].start).toBe(1000);
+    expect(result.data[0].end).toBe(2000);
   });
 
   it('should return empty array for empty index', () => {
     const result = index.search({ limit: 10 });
-    assert.deepStrictEqual(result.data, []);
-    assert.strictEqual(result.pageLastIndex, undefined);
+    expect(result.data).toEqual([]);
+    expect(result.pageLastIndex).toBe(undefined);
   });
 
   it('should apply pagination correctly after deduplication', () => {
@@ -1069,19 +1048,19 @@ describe('index', () => {
 
     // After dedup: TRACE_ID_1 (5000), trace_4 (4000), TRACE_ID_3 (3000), TRACE_ID_2 (2000), trace_5 (1000)
     const result = index.search({ limit: 2 });
-    assert.strictEqual(result.data.length, 2);
-    assert.strictEqual(result.data[0].id, TRACE_ID_1);
-    assert.strictEqual(result.data[0].start, 5000);
-    assert.strictEqual(result.data[0].end, 5500); // has endTime from second post
-    assert.strictEqual(result.data[1].id, 'trace_4');
-    assert.strictEqual(result.pageLastIndex, 2);
+    expect(result.data.length).toBe(2);
+    expect(result.data[0].id).toBe(TRACE_ID_1);
+    expect(result.data[0].start).toBe(5000);
+    expect(result.data[0].end).toBe(5500); // has endTime from second post
+    expect(result.data[1].id).toBe('trace_4');
+    expect(result.pageLastIndex).toBe(2);
 
     // Page 2 - get remaining 3
     const result2 = index.search({ limit: 3, startFromIndex: 2 });
-    assert.strictEqual(result2.data.length, 3);
-    assert.strictEqual(result2.data[0].id, TRACE_ID_3);
-    assert.strictEqual(result2.data[1].id, TRACE_ID_2);
-    assert.strictEqual(result2.data[2].id, 'trace_5');
+    expect(result2.data.length).toBe(3);
+    expect(result2.data[0].id).toBe(TRACE_ID_3);
+    expect(result2.data[1].id).toBe(TRACE_ID_2);
+    expect(result2.data[2].id).toBe('trace_5');
   });
 
   it('should sort entries by start time descending', () => {
@@ -1100,10 +1079,10 @@ describe('index', () => {
     const result = index.search({ limit: 10 });
 
     // Should be sorted by start time descending: 300, 200, 100
-    assert.strictEqual(result.data.length, 3);
-    assert.strictEqual(result.data[0].id, TRACE_ID_2); // start: 300
-    assert.strictEqual(result.data[1].id, TRACE_ID_3); // start: 200
-    assert.strictEqual(result.data[2].id, TRACE_ID_1); // start: 100
+    expect(result.data.length).toBe(3);
+    expect(result.data[0].id).toBe(TRACE_ID_2); // start: 300
+    expect(result.data[1].id).toBe(TRACE_ID_3); // start: 200
+    expect(result.data[2].id).toBe(TRACE_ID_1); // start: 100
   });
 
   it('should handle spans with only startTime (in-progress spans)', () => {
@@ -1119,11 +1098,11 @@ describe('index', () => {
 
     const result = index.search({ limit: 10 });
 
-    assert.strictEqual(result.data.length, 1);
-    assert.strictEqual(result.data[0].id, TRACE_ID_1);
-    assert.strictEqual(result.data[0].start, 1000);
+    expect(result.data.length).toBe(1);
+    expect(result.data[0].id).toBe(TRACE_ID_1);
+    expect(result.data[0].start).toBe(1000);
     // end should not be set for in-progress spans
-    assert.strictEqual(result.data[0].end, undefined);
+    expect(result.data[0].end).toBe(undefined);
   });
 
   it('should deduplicate when span updates from start to end', () => {
@@ -1150,11 +1129,11 @@ describe('index', () => {
     const result = index.search({ limit: 10 });
 
     // Should only have one entry
-    assert.strictEqual(result.data.length, 1);
-    assert.strictEqual(result.data[0].id, TRACE_ID_1);
-    assert.strictEqual(result.data[0].start, 1000);
+    expect(result.data.length).toBe(1);
+    expect(result.data[0].id).toBe(TRACE_ID_1);
+    expect(result.data[0].start).toBe(1000);
     // Should have the end time from the completed span
-    assert.strictEqual(result.data[0].end, 2000);
+    expect(result.data[0].end).toBe(2000);
   });
 
   it('should handle mix of in-progress and completed spans', () => {
@@ -1180,11 +1159,11 @@ describe('index', () => {
     const result = index.search({ limit: 10 });
 
     // Both should be returned, sorted by start time descending
-    assert.strictEqual(result.data.length, 2);
-    assert.strictEqual(result.data[0].id, TRACE_ID_2); // start: 3000 (in-progress)
-    assert.strictEqual(result.data[0].end, undefined);
-    assert.strictEqual(result.data[1].id, TRACE_ID_1); // start: 1000 (completed)
-    assert.strictEqual(result.data[1].end, 2000);
+    expect(result.data.length).toBe(2);
+    expect(result.data[0].id).toBe(TRACE_ID_2); // start: 3000 (in-progress)
+    expect(result.data[0].end).toBe(undefined);
+    expect(result.data[1].id).toBe(TRACE_ID_1); // start: 1000 (completed)
+    expect(result.data[1].end).toBe(2000);
   });
 });
 
@@ -1258,16 +1237,16 @@ describe('otlp-endpoint', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(otlpPayload),
     });
-    assert.strictEqual(res.status, 200);
+    expect(res.status).toBe(200);
 
     const getResp = await fetch(`${url}/api/traces/${traceId}`);
-    assert.strictEqual(getResp.status, 200);
+    expect(getResp.status).toBe(200);
     const trace = await getResp.json();
-    assert.strictEqual(trace.traceId, traceId);
-    assert.strictEqual(Object.keys(trace.spans).length, 1);
+    expect(trace.traceId).toBe(traceId);
+    expect(Object.keys(trace.spans).length).toBe(1);
     const span = Object.values(trace.spans)[0] as any;
-    assert.strictEqual(span.traceId, traceId);
-    assert.strictEqual(span.spanId, 'childSpanId1');
+    expect(span.traceId).toBe(traceId);
+    expect(span.spanId).toBe('childSpanId1');
   });
 
   it('saves a trace with multiple spans', async () => {
@@ -1314,17 +1293,17 @@ describe('otlp-endpoint', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(otlpPayload),
     });
-    assert.strictEqual(res.status, 200);
+    expect(res.status).toBe(200);
 
     const getResp = await fetch(`${url}/api/traces/${traceId}`);
-    assert.strictEqual(getResp.status, 200);
+    expect(getResp.status).toBe(200);
     const trace = await getResp.json();
-    assert.strictEqual(trace.traceId, traceId);
-    assert.strictEqual(Object.keys(trace.spans).length, 2);
+    expect(trace.traceId).toBe(traceId);
+    expect(Object.keys(trace.spans).length).toBe(2);
     const span1 = trace.spans['childSpanId1'];
-    assert.strictEqual(span1.traceId, traceId);
+    expect(span1.traceId).toBe(traceId);
     const span2 = trace.spans['childSpanId2'];
-    assert.strictEqual(span2.traceId, traceId);
+    expect(span2.traceId).toBe(traceId);
   });
 
   it('handles errors', async () => {
@@ -1333,7 +1312,7 @@ describe('otlp-endpoint', () => {
       headers: { 'Content-Type': 'application/json' },
       body: 'invalid json',
     });
-    assert.strictEqual(res.status, 500);
+    expect(res.status).toBe(500);
   });
 });
 
@@ -1411,18 +1390,18 @@ describe('otlp-endpoint (with parent)', () => {
         body: JSON.stringify(otlpPayload),
       }
     );
-    assert.strictEqual(res.status, 200);
+    expect(res.status).toBe(200);
 
     const getResp = await fetch(`${url}/api/traces/${parentTraceId}`);
-    assert.strictEqual(getResp.status, 200);
+    expect(getResp.status).toBe(200);
     const trace = await getResp.json();
-    assert.strictEqual(trace.traceId, parentTraceId);
-    assert.strictEqual(Object.keys(trace.spans).length, 1);
+    expect(trace.traceId).toBe(parentTraceId);
+    expect(Object.keys(trace.spans).length).toBe(1);
     const span = Object.values(trace.spans)[0] as any;
-    assert.strictEqual(span.traceId, parentTraceId);
-    assert.strictEqual(span.parentSpanId, parentSpanId);
-    assert.strictEqual(span.spanId, 'childSpanId1');
-    assert.strictEqual(span.attributes['genkit:otlp-traceId'], 'childTraceId');
+    expect(span.traceId).toBe(parentTraceId);
+    expect(span.parentSpanId).toBe(parentSpanId);
+    expect(span.spanId).toBe('childSpanId1');
+    expect(span.attributes['genkit:otlp-traceId']).toBe('childTraceId');
   });
 
   it('saves a trace with multiple spans', async () => {
@@ -1473,19 +1452,19 @@ describe('otlp-endpoint (with parent)', () => {
         body: JSON.stringify(otlpPayload),
       }
     );
-    assert.strictEqual(res.status, 200);
+    expect(res.status).toBe(200);
 
     const getResp = await fetch(`${url}/api/traces/${parentTraceId}`);
-    assert.strictEqual(getResp.status, 200);
+    expect(getResp.status).toBe(200);
     const trace = await getResp.json();
-    assert.strictEqual(trace.traceId, parentTraceId);
-    assert.strictEqual(Object.keys(trace.spans).length, 2);
+    expect(trace.traceId).toBe(parentTraceId);
+    expect(Object.keys(trace.spans).length).toBe(2);
     const span1 = trace.spans['childSpanId1'];
-    assert.strictEqual(span1.traceId, parentTraceId);
-    assert.strictEqual(span1.parentSpanId, parentSpanId);
+    expect(span1.traceId).toBe(parentTraceId);
+    expect(span1.parentSpanId).toBe(parentSpanId);
     const span2 = trace.spans['childSpanId2'];
-    assert.strictEqual(span2.traceId, parentTraceId);
-    assert.strictEqual(span2.parentSpanId, parentSpanId);
+    expect(span2.traceId).toBe(parentTraceId);
+    expect(span2.parentSpanId).toBe(parentSpanId);
   });
 
   it('saves multiple batches of traces', async () => {
@@ -1554,7 +1533,7 @@ describe('otlp-endpoint (with parent)', () => {
         body: JSON.stringify(otlpPayload1),
       }
     );
-    assert.strictEqual(res1.status, 200);
+    expect(res1.status).toBe(200);
 
     const res2 = await fetch(
       `${url}/api/otlp/${parentTraceId}/${parentSpanId}`,
@@ -1564,15 +1543,15 @@ describe('otlp-endpoint (with parent)', () => {
         body: JSON.stringify(otlpPayload2),
       }
     );
-    assert.strictEqual(res2.status, 200);
+    expect(res2.status).toBe(200);
 
     const getResp = await fetch(`${url}/api/traces/${parentTraceId}`);
-    assert.strictEqual(getResp.status, 200);
+    expect(getResp.status).toBe(200);
     const trace = await getResp.json();
-    assert.strictEqual(trace.traceId, parentTraceId);
-    assert.strictEqual(Object.keys(trace.spans).length, 2);
-    assert.ok(trace.spans['childSpanId1']);
-    assert.ok(trace.spans['childSpanId2']);
+    expect(trace.traceId).toBe(parentTraceId);
+    expect(Object.keys(trace.spans).length).toBe(2);
+    expect(trace.spans['childSpanId1']).toBeTruthy();
+    expect(trace.spans['childSpanId2']).toBeTruthy();
   });
 
   it('handles errors', async () => {
@@ -1586,6 +1565,6 @@ describe('otlp-endpoint (with parent)', () => {
         body: 'invalid json',
       }
     );
-    assert.strictEqual(res.status, 500);
+    expect(res.status).toBe(500);
   });
 });
