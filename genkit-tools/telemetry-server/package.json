@@ -47,7 +47,6 @@
     "genversion": "catalog:",
     "get-port": "catalog:",
     "rimraf": "catalog:",
-    "tsx": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   },

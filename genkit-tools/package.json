@@ -27,7 +27,7 @@
     "eslint-config-prettier": "^10.1.8",
     "json-schema": "catalog:",
     "only-allow": "^1.2.2",
-    "tsx": "catalog:",
+    "tsx": "^4.23.15",
     "typescript-eslint": "^8.72.1",
     "zod": "catalog:",
     "zod-to-json-schema": "catalog:"
