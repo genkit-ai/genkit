@@ -747,7 +747,9 @@ describe('systemOne', () => {
           output: { schema: urgent },
           abortSignal: signal,
         });
-      // The global fetch, looked up when a request is made, and 30 s.
+      // The global fetch, looked up when a request is made rather than when
+      // the plugin is created, and 30 s.
+      const plugin = typeSafe();
       const original = globalThis.fetch;
       let globalCalls = 0;
       globalThis.fetch = (input, init) => {
@@ -755,7 +757,7 @@ describe('systemOne', () => {
         return original(input, init);
       };
       try {
-        await ask(typeSafe());
+        await ask(plugin);
       } finally {
         globalThis.fetch = original;
       }

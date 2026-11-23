@@ -151,7 +151,10 @@ export class Client {
        * and no authorization header is sent without one.
        */
       apiKey?: string;
-      /** Sent on every request, after the authorization header. */
+      /**
+       * Sent on every request; the key's Authorization header replaces one
+       * given here, in any case.
+       */
       headers?: Record<string, string>;
       endpoint: Endpoint;
       /** Bounds one attempt; unset leaves it unbounded. */
@@ -235,7 +238,7 @@ export class Client {
       if (isThenable(raw)) {
         (raw as Promise<unknown>).then(undefined, () => {});
         throw new GenkitError({
-          status: 'UNKNOWN',
+          status: 'INVALID_ARGUMENT',
           message: `${endpoint.name}: unwrap must return the response, not a promise`,
         });
       }
@@ -571,10 +574,13 @@ function isThenable(value: unknown): boolean {
 }
 
 /**
- * Runs a caller's hook. An error it throws is reported under the endpoint's
- * name, as UNKNOWN unless it is a GenkitError, whose status is kept, since
- * neither the request nor the server is known to be at fault. A GenkitError
- * from `route` goes out as it is, as Genkit Go returns a route's error.
+ * Runs a caller's hook. An error `unwrap` throws is reported under the
+ * endpoint's name, as UNKNOWN unless it is a GenkitError, whose status is
+ * kept, since the server answered with a success code and neither the request
+ * nor the server is known to be at fault; Go does the same. From `route`, a
+ * GenkitError goes out as it is, as Go returns a route's error, but any other
+ * error is wrapped the same way, which Go does not do: a plain error here
+ * carries no status for Genkit to report.
  */
 function hook<T>(name: string, which: 'route' | 'unwrap', run: () => T): T {
   try {

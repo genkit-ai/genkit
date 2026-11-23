@@ -469,7 +469,9 @@ describe('client', () => {
         client(server, {
           unwrap: () => Promise.reject(new Error('unwrap failed')),
         }).decide('jev', request),
-        /unwrap must return the response, not a promise/
+        (e: GenkitError) =>
+          e.status === 'INVALID_ARGUMENT' &&
+          /unwrap must return the response, not a promise/.test(e.message)
       );
       await new Promise((resolve) => setTimeout(resolve, 20));
       assert.deepStrictEqual(unhandled, []);
