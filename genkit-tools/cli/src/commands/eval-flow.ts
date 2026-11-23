@@ -266,20 +266,24 @@ async function readInputs(
       try {
         return await loadInferenceDatasetFile(input!);
       } catch (e) {
-        throw new Error(`Error parsing the input from file. Error: ${e}`);
+        throw new Error(`Error parsing the input from file. Error: ${e}`, {
+          cause: e,
+        });
       }
-    case SourceType.DATASET:
+    case SourceType.DATASET: {
       const datasetStore = await getDatasetStore();
       const data = await datasetStore.getDataset(input!);
       parsedData = data;
       break;
+    }
   }
 
   try {
     return DatasetSchema.parse(parsedData);
   } catch (e) {
     throw new Error(
-      `Error parsing the input. Please provide an array of inputs for the flow or a ${EVAL_FLOW_SCHEMA} object. Error: ${e}`
+      `Error parsing the input. Please provide an array of inputs for the flow or a ${EVAL_FLOW_SCHEMA} object. Error: ${e}`,
+      { cause: e }
     );
   }
 }

@@ -264,10 +264,6 @@ describe('localFileDatasetStore', () => {
         Promise.resolve(JSON.stringify({}) as any)
       );
       fs.existsSync = vi.fn(() => false);
-      const dataset: Dataset = SAMPLE_DATASET_1_V1.map((s) => ({
-        testCaseId: TEST_CASE_ID,
-        ...s,
-      }));
 
       const datasetMetadata = await DatasetStore.createDataset({
         ...CREATE_DATASET_REQUEST_WITH_SCHEMA,
@@ -295,10 +291,6 @@ describe('localFileDatasetStore', () => {
         Promise.resolve(JSON.stringify({}) as any)
       );
       fs.existsSync = vi.fn(() => false);
-      const dataset: Dataset = SAMPLE_DATASET_1_V1.map((s) => ({
-        testCaseId: TEST_CASE_ID,
-        ...s,
-      }));
 
       const datasetMetadata = await DatasetStore.createDataset({
         ...CREATE_DATASET_REQUEST,

@@ -359,7 +359,7 @@ export class Index {
       return JSON.parse(
         fs.readFileSync(this.metadataFileName(), { encoding: 'utf8' })
       );
-    } catch (e) {
+    } catch {
       return undefined;
     }
   }

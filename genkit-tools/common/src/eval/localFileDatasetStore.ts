@@ -200,14 +200,9 @@ export class LocalFileDatasetStore implements DatasetStore {
   }
 
   async listDatasets(): Promise<DatasetMetadata[]> {
-    return this.getMetadataMap().then((metadataMap) => {
-      const metadatas = [];
-
-      for (var key in metadataMap) {
-        metadatas.push(metadataMap[key]);
-      }
-      return metadatas;
-    });
+    return this.getMetadataMap().then((metadataMap) =>
+      Object.values(metadataMap)
+    );
   }
 
   async deleteDataset(datasetId: string): Promise<void> {

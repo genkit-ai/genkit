@@ -357,7 +357,7 @@ export async function startTelemetryServer(params: {
     }
   );
 
-  api.use((err: any, req: any, res: any, next: any) => {
+  api.use((err: any, req: any, res: any, _next: any) => {
     logger.error(err.stack);
     const error = err as Error;
     const { message, stack } = error;

@@ -215,7 +215,7 @@ export async function waitUntilHealthy(
       if (response.status === 200) {
         return true;
       }
-    } catch (error) {
+    } catch {
       // Ignore errors and continue retrying
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
@@ -233,7 +233,7 @@ export async function waitUntilUnresponsive(
   const startTime = Date.now();
   while (Date.now() - startTime < maxTimeout) {
     try {
-      const health = await fetch(`${url}/api/__health`);
+      await fetch(`${url}/api/__health`);
     } catch (error) {
       if (isConnectionRefusedError(error)) {
         return true;

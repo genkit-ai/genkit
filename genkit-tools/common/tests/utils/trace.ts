@@ -143,7 +143,7 @@ export class MockTrace {
           'genkit:state': 'success',
         } as Record<string, unknown>,
       };
-      if (!!retrieverConfig) {
+      if (retrieverConfig) {
         const retrieverInput = {
           query: { content: [{ text: retrieverConfig.query }] },
           options: { k: 3 },
