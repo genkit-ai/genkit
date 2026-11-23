@@ -1851,6 +1851,122 @@ describe('toGeminiTool', () => {
     });
   });
 
+  it('should not treat a $defs entry named $id as a nested schema resource', () => {
+    const got = toGeminiTool({
+      name: 'defs_named_id',
+      description: 'Tool with a $defs entry named $id',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          alias: { $ref: '#/$defs/Alias' },
+          idValue: { $ref: '#/$defs/$id' },
+        },
+        $defs: {
+          $id: { type: 'string' },
+          Alias: { $ref: '#/$defs/Name' },
+          Name: { type: 'string' },
+        },
+      },
+    });
+    assert.deepStrictEqual(got.parameters?.properties, {
+      alias: { type: SchemaType.STRING },
+      idValue: { type: SchemaType.STRING },
+    });
+  });
+
+  it('should decode percent-encoded pointer separators and escaped keys', () => {
+    const got = toGeminiTool({
+      name: 'encoded_pointers',
+      description: 'Tool with percent-encoded and escaped JSON Pointers',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          encoded: { $ref: '#%2F$defs%2FName' },
+          escaped: { $ref: '#/$defs/a~1b~0c' },
+        },
+        $defs: {
+          Name: { type: 'string' },
+          'a/b~c': { type: 'integer' },
+        },
+      },
+    });
+    assert.deepStrictEqual(got.parameters?.properties, {
+      encoded: { type: SchemaType.STRING },
+      escaped: { type: SchemaType.INTEGER },
+    });
+  });
+
+  it('should reject malformed JSON Pointer tilde escapes even if literal key exists', () => {
+    assert.throws(
+      () =>
+        toGeminiTool({
+          name: 'bad_escape',
+          description: 'Tool with malformed ~2 escape',
+          inputSchema: {
+            type: 'object',
+            properties: { value: { $ref: '#/$defs/a~2b' } },
+            $defs: { 'a~2b': { type: 'string' } },
+          },
+        }),
+      /Invalid tool schema reference #\/\$defs\/a~2b/
+    );
+  });
+
+  it('should reject recursive references across encoded and unencoded pointer spellings', () => {
+    assert.throws(
+      () =>
+        toGeminiTool({
+          name: 'encoded_recursive_ref',
+          description: 'Tool with an encoded recursive reference',
+          inputSchema: {
+            type: 'object',
+            properties: { node: { $ref: '#/$defs/Node' } },
+            $defs: {
+              Node: {
+                type: 'object',
+                properties: { next: { $ref: '#%2F$defs%2FNode' } },
+              },
+            },
+          },
+        }),
+      /Recursive tool schema reference/
+    );
+  });
+
+  it('should resolve referenced nullable primitives and reject null-only type arrays', () => {
+    const got = toGeminiTool({
+      name: 'nullable_primitive_ref',
+      description: 'Tool with a referenced nullable primitive',
+      inputSchema: {
+        type: 'object',
+        properties: { label: { $ref: '#/$defs/NullableString' } },
+        $defs: { NullableString: { type: ['string', 'null'] } },
+      },
+    });
+    assert.deepStrictEqual(got.parameters?.properties?.label, {
+      type: SchemaType.STRING,
+      nullable: true,
+    });
+
+    assert.throws(
+      () =>
+        toGeminiTool({
+          name: 'null_only_ref',
+          description: 'Tool with a referenced null-only type array',
+          inputSchema: {
+            type: 'object',
+            properties: { nothing: { $ref: '#/$defs/NullOnly' } },
+            $defs: { NullOnly: { type: ['null'] } },
+          },
+        }),
+      {
+        name: 'GenkitError',
+        status: 'INVALID_ARGUMENT',
+        message: /Referenced tool schema has no type supported by Gemini/,
+      }
+    );
+  });
+
   it('should preserve the fallback for boolean item schemas', () => {
     const got = toGeminiTool({
       name: 'boolean_item',
@@ -1866,22 +1982,75 @@ describe('toGeminiTool', () => {
     });
   });
 
-  it('should preserve the fallback for a reference to a boolean-true schema', () => {
-    const got = toGeminiTool({
-      name: 'boolean_ref',
-      description: 'Tool with an unconstrained referenced item',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          items: { type: 'array', items: { $ref: '#/$defs/Any' } },
-        },
-        $defs: { Any: true },
-      },
-    });
-    assert.deepStrictEqual(got.parameters?.properties?.items, {
-      type: SchemaType.ARRAY,
-      items: undefined,
-    });
+  it('should reject a reference to a boolean schema', () => {
+    assert.throws(
+      () =>
+        toGeminiTool({
+          name: 'boolean_true_ref',
+          description: 'Tool with an unconstrained referenced item',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              items: { type: 'array', items: { $ref: '#/$defs/Any' } },
+            },
+            $defs: { Any: true },
+          },
+        }),
+      {
+        name: 'GenkitError',
+        status: 'INVALID_ARGUMENT',
+        message: /resolves to an unsupported true schema/,
+      }
+    );
+
+    assert.throws(
+      () =>
+        toGeminiTool({
+          name: 'boolean_false_ref',
+          description: 'Tool with a false referenced item',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              items: { type: 'array', items: { $ref: '#/$defs/Never' } },
+            },
+            $defs: { Never: false },
+          },
+        }),
+      {
+        name: 'GenkitError',
+        status: 'INVALID_ARGUMENT',
+        message: /resolves to an unsupported false schema/,
+      }
+    );
+  });
+
+  it('should bound nested-resource scans on wide schemas without overflowing the stack', () => {
+    const properties: Record<string, any> = {};
+    for (let i = 0; i < 150000; i++) {
+      properties[`p${i}`] = { type: 'string' };
+    }
+    assert.throws(
+      () =>
+        toGeminiTool({
+          name: 'wide_nested_id',
+          description: 'Tool with a wide schema under a nested $id',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              wide: {
+                $id: 'https://example.test/wide',
+                type: 'object',
+                properties,
+              },
+            },
+          },
+        }),
+      {
+        name: 'GenkitError',
+        status: 'INVALID_ARGUMENT',
+        message: /Tool schema is too large to convert/,
+      }
+    );
   });
 
   it('should bound expansion of referenced tool schemas', () => {
