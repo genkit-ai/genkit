@@ -1801,6 +1801,26 @@ describe('toGeminiTool', () => {
         }),
       /nested schema resource/i
     );
+    assert.throws(
+      () =>
+        toGeminiTool({
+          name: 'inline_nested_resource',
+          description: 'Tool with an inline nested schema resource',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              item: {
+                $id: 'https://example.test/item',
+                type: 'object',
+                properties: { name: { $ref: '#/$defs/Name' } },
+                $defs: { Name: { type: 'string' } },
+              },
+            },
+            $defs: { Name: { type: 'integer' } },
+          },
+        }),
+      /Nested tool schema resources cannot be converted/
+    );
   });
 
   it('should reject pointers that cross nested schema resource boundaries', () => {
@@ -2024,7 +2044,90 @@ describe('toGeminiTool', () => {
     );
   });
 
-  it('should bound nested-resource scans on wide schemas without overflowing the stack', () => {
+  it('should reject empty-string sibling keywords alongside a tool schema reference', () => {
+    assert.throws(
+      () =>
+        toGeminiTool({
+          name: 'empty_sibling_ref',
+          description: 'Tool with an empty-string keyword alongside a $ref',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              value: { $ref: '#/$defs/S', '': 0, type: 'integer' },
+            },
+            $defs: { S: { type: 'string' } },
+          },
+        }),
+      {
+        name: 'GenkitError',
+        status: 'INVALID_ARGUMENT',
+        message:
+          /Unsupported sibling keyword "" alongside tool schema reference/,
+      }
+    );
+  });
+
+  it('should allow nested schema IDs with unused items and without double-charging node budget', () => {
+    const unusedItemsGot = toGeminiTool({
+      name: 'nested_id_unused_items',
+      description: 'Object with nested $id and ignored items keyword',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          item: {
+            $id: 'https://example.test/item',
+            type: 'object',
+            properties: { name: { type: 'string' } },
+            items: { $ref: '#/$defs/T' },
+          },
+        },
+        $defs: { T: { type: 'string' } },
+      },
+    });
+    assert.deepStrictEqual(unusedItemsGot.parameters?.properties?.item, {
+      type: SchemaType.OBJECT,
+      properties: { name: { type: SchemaType.STRING } },
+      required: undefined,
+    });
+
+    const leafProperties: Record<string, any> = {};
+    for (let i = 0; i < 1400; i++) {
+      leafProperties[`p${i}`] = { type: 'string' };
+    }
+    const nestedGot = toGeminiTool({
+      name: 'nested_ids_budget',
+      description: 'Three nested $id objects over 1400 reference-free leaves',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          outer: {
+            $id: 'https://example.test/outer',
+            type: 'object',
+            properties: {
+              middle: {
+                $id: 'https://example.test/middle',
+                type: 'object',
+                properties: {
+                  inner: {
+                    $id: 'https://example.test/inner',
+                    type: 'object',
+                    properties: leafProperties,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    const innerProps =
+      nestedGot.parameters?.properties?.outer?.properties?.middle?.properties
+        ?.inner?.properties;
+    assert.strictEqual(Object.keys(innerProps ?? {}).length, 1400);
+    assert.deepStrictEqual(innerProps?.p1399, { type: SchemaType.STRING });
+  });
+
+  it('should bound wide schemas under nested IDs without overflowing the stack', () => {
     const properties: Record<string, any> = {};
     for (let i = 0; i < 150000; i++) {
       properties[`p${i}`] = { type: 'string' };
