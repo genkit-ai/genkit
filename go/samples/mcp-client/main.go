@@ -114,9 +114,11 @@ func managerExample() {
 		return
 	}
 	defer func() {
-		if err := host.Disconnect(ctx, "time"); err == nil {
-			logger.FromContext(ctx).Info("Disconnected from MCP server", "server", "time")
+		if err := host.Disconnect(ctx, "time"); err != nil {
+			logger.FromContext(ctx).Error("Failed to disconnect from MCP server", "server", "time", "error", err)
+			return
 		}
+		logger.FromContext(ctx).Info("Disconnected from MCP server", "server", "time")
 	}()
 
 	// Get tools and resources from MCP servers
