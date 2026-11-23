@@ -41,6 +41,14 @@ import {
   isObject,
 } from './types.js';
 
+function isEmptyObjectRecord(value: unknown): boolean {
+  return (
+    value === undefined ||
+    value === null ||
+    (isObject(value) && Object.keys(value).length === 0)
+  );
+}
+
 function isParameterlessObjectSchema(
   schema?: ToolDefinition['inputSchema']
 ): boolean {
@@ -52,12 +60,38 @@ function isParameterlessObjectSchema(
     (Array.isArray(schema.type) &&
       schema.type.length === 1 &&
       schema.type[0] === 'object');
+  if (!isObjectType) {
+    return false;
+  }
+  const hasRequired =
+    schema.required !== undefined &&
+    schema.required !== null &&
+    (!Array.isArray(schema.required) || schema.required.length > 0);
+  const hasMinProperties =
+    typeof schema.minProperties === 'number' && schema.minProperties > 0;
+  const hasCombinatorOrRef = Boolean(
+    schema.anyOf ||
+    schema.oneOf ||
+    schema.allOf ||
+    schema.$ref ||
+    schema.if ||
+    schema.then ||
+    schema.else ||
+    schema.not ||
+    schema.dependencies ||
+    schema.dependentRequired ||
+    schema.dependentSchemas
+  );
   return (
-    isObjectType &&
-    Object.keys(schema.properties ?? {}).length === 0 &&
-    (!schema.required ||
-      (Array.isArray(schema.required) && schema.required.length === 0)) &&
-    !schema.additionalProperties
+    isEmptyObjectRecord(schema.properties) &&
+    isEmptyObjectRecord(schema.patternProperties) &&
+    !hasRequired &&
+    !hasMinProperties &&
+    !schema.additionalProperties &&
+    !schema.unevaluatedProperties &&
+    !schema.nullable &&
+    !schema.enum &&
+    !hasCombinatorOrRef
   );
 }
 

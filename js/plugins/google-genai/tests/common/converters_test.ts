@@ -1540,6 +1540,18 @@ describe('toGeminiTool', () => {
         properties: {},
         additionalProperties: { type: 'string' },
       },
+      {
+        type: 'object',
+        patternProperties: { '^tag_': { type: 'string' } },
+        minProperties: 1,
+        additionalProperties: false,
+      },
+      {
+        type: 'object',
+        patternProperties: { '^tag_': { type: 'string' } },
+        additionalProperties: false,
+      },
+      { type: 'object', minProperties: 1 },
     ]) {
       assert.deepStrictEqual(
         toGeminiTool({
@@ -1558,6 +1570,31 @@ describe('toGeminiTool', () => {
         }
       );
     }
+  });
+
+  it('retains nullable parameters consistently for empty object schemas', () => {
+    const nullableKeyword = toGeminiTool({
+      name: 'nullable_tool',
+      description: 'Accepts null or an empty object',
+      inputSchema: { type: 'object', nullable: true, properties: {} },
+    });
+    const nullableTypeArray = toGeminiTool({
+      name: 'nullable_tool',
+      description: 'Accepts null or an empty object',
+      inputSchema: { type: ['object', 'null'], properties: {} },
+    });
+    const want = {
+      name: 'nullable_tool',
+      description: 'Accepts null or an empty object',
+      parameters: {
+        nullable: true,
+        type: SchemaType.OBJECT,
+        properties: {},
+        required: undefined,
+      },
+    };
+    assert.deepStrictEqual(nullableKeyword, want);
+    assert.deepStrictEqual(nullableTypeArray, want);
   });
 
   it('should convert Genkit tool to Gemini FunctionDeclaration', async () => {
