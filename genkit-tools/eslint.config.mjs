@@ -35,6 +35,18 @@ export default defineConfig(
     },
     rules: {
       'vitest/no-focused-tests': 'error',
+      'vitest/consistent-test-it': [
+        'error',
+        { fn: 'it', withinDescribe: 'it' },
+      ],
+      'vitest/require-top-level-describe': 'error',
+      'vitest/no-identical-title': 'error',
+      'vitest/expect-expect': [
+        'error',
+        { assertFunctionNames: ['expect', 'assert*'] },
+      ],
+      'vitest/prefer-to-be': 'error',
+      'vitest/prefer-to-have-length': 'error',
     },
   }
 );

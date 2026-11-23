@@ -52,7 +52,7 @@ describe('RuntimeManagerV2', () => {
           try {
             expect(runtime.id).toBe('test-runtime-1');
             expect(runtime.pid).toBe(1234);
-            expect(manager.listRuntimes().length).toBe(1);
+            expect(manager.listRuntimes()).toHaveLength(1);
             unsubscribe();
             resolve();
           } catch (err) {
