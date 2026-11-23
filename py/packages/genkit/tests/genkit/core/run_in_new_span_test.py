@@ -13,8 +13,7 @@ from collections.abc import Generator, Sequence
 import pytest
 from pydantic import BaseModel
 
-from genkit import Genkit, Message, ModelResponse, Part, Role
-from genkit._ai._tools import Interrupt, ToolRunContext
+from genkit import Genkit, Interrupt, Message, ModelResponse, Part, Role, ToolContext
 from genkit._core._action import Action, ActionRunContext
 from genkit._core._telemetry._attrs import metadata_key
 from genkit._core._telemetry._http import ActiveSpan
@@ -157,9 +156,9 @@ async def test_dev_ui_action_span_attributes_unchanged(exporter) -> None:
     span = _by_name(exporter.get_finished_spans(), 'getWeather')
     attrs = dict(span.attributes or {})
     assert attrs['genkit:type'] == 'action'
-    assert attrs['genkit:metadata:subtype'] == 'tool.v2'
-    assert attrs['genkit:path'] == '/{getWeather,t:action,s:tool.v2}'
-    assert attrs['genkit:qualifiedPath'] == '/{getWeather,t:action,s:tool.v2}'
+    assert attrs['genkit:metadata:subtype'] == 'tool'
+    assert attrs['genkit:path'] == '/{getWeather,t:action,s:tool}'
+    assert attrs['genkit:qualifiedPath'] == '/{getWeather,t:action,s:tool}'
 
 
 @pytest.mark.asyncio
@@ -267,7 +266,7 @@ async def test_tool_interrupt_is_not_recorded_as_span_error(exporter, caplog: py
     ai = Genkit()
 
     @ai.tool(name='transfer')
-    async def transfer(inp: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+    async def transfer(inp: dict, ctx: ToolContext) -> str:  # noqa: ARG001
         raise Interrupt({'reason': 'needs_approval'})
 
     action = await ai._registry.resolve_action(kind=ActionKind.TOOL, name='transfer')

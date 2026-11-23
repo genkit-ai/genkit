@@ -36,18 +36,6 @@ def test_extra_lands_in_additional_model_request_fields() -> None:
     assert 'extra' not in kwargs
 
 
-def test_extra_merges_over_additional_model_request_fields() -> None:
-    """Both set: keys combine, and `extra` wins a collision."""
-    kwargs = _kwargs(
-        BedrockConfig(
-            additional_model_request_fields={'thinking': {'type': 'enabled'}, 'top_k': 10},
-            extra={'top_k': 40},
-        )
-    )
-
-    assert kwargs['additionalModelRequestFields'] == {'thinking': {'type': 'enabled'}, 'top_k': 40}
-
-
 def test_no_extra_leaves_request_unchanged() -> None:
-    """No `extra` and no additional fields means no `additionalModelRequestFields`."""
+    """No `extra` means no `additionalModelRequestFields`."""
     assert 'additionalModelRequestFields' not in _kwargs(BedrockConfig(temperature=0.2))

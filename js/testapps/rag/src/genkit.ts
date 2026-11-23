@@ -82,7 +82,7 @@ export const ai = genkit({
       },
     ]),
     genkitEval({
-      judge: googleAI.model('gemini-2.5-flash'),
+      judge: googleAI.model('gemini-flash-latest'),
       judgeConfig: {
         safetySettings: [
           {

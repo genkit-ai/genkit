@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-export * from './analytics';
-export * from './configstore';
-export * from './eval';
-export * from './logger';
-export * from './package';
-export * from './prompt';
-export * from './trace';
-export * from './utils';
+export * from './analytics.js';
+export * from './configstore.js';
+export * from './eval.js';
+export * from './logger.js';
+export * from './package.js';
+export * from './prompt.js';
+export * from './trace.js';
+export * from './utils.js';

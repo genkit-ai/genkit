@@ -339,9 +339,8 @@ export class GenkitMcpServer {
    */
   async start(transport?: Transport) {
     if (!transport) {
-      const { StdioServerTransport } = await import(
-        '@modelcontextprotocol/sdk/server/stdio.js'
-      );
+      const { StdioServerTransport } =
+        await import('@modelcontextprotocol/sdk/server/stdio.js');
       transport = new StdioServerTransport();
     }
     await this.setup();

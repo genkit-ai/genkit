@@ -16,14 +16,14 @@
 
 import type { JSONSchema7 } from 'json-schema';
 import { z } from 'zod';
-import zodToJsonSchema from 'zod-to-json-schema';
+import { zodToJsonSchema } from 'zod-to-json-schema';
 import type {
   CreateDatasetRequest,
   ListEvalKeysRequest,
   ListEvalKeysResponse,
   UpdateDatasetRequest,
-} from './apis';
-import { GenerateActionOptionsSchema, GenerateRequestSchema } from './model';
+} from './apis.js';
+import { GenerateActionOptionsSchema, GenerateRequestSchema } from './model.js';
 
 /**
  * This file defines schema and types that are used by the Eval store.

@@ -20,25 +20,25 @@ import {
   getEvalStore,
   runNewEvaluation,
   validateSchema,
-} from '../eval';
-import type { BaseRuntimeManager } from '../manager/manager';
-import { AppProcessStatus } from '../manager/process-manager';
-import { GenkitToolsError, type RuntimeInfo } from '../manager/types';
-import { TraceDataSchema } from '../types';
-import type { Action } from '../types/action';
-import * as apis from '../types/apis';
-import { CancelActionRequestSchema } from '../types/apis';
-import type { EnvironmentVariable } from '../types/env';
-import * as evals from '../types/eval';
+} from '../eval/index.js';
+import type { BaseRuntimeManager } from '../manager/manager.js';
+import { AppProcessStatus } from '../manager/process-manager.js';
+import { GenkitToolsError, type RuntimeInfo } from '../manager/types.js';
+import type { Action } from '../types/action.js';
+import * as apis from '../types/apis.js';
+import { CancelActionRequestSchema } from '../types/apis.js';
+import type { EnvironmentVariable } from '../types/env.js';
+import * as evals from '../types/eval.js';
+import { TraceDataSchema } from '../types/index.js';
 import {
   PageViewEvent,
   SelectContentEvent,
   createToolsRequestEvent,
   record,
   recordRequestEvent,
-} from '../utils/analytics';
-import { toolsPackage } from '../utils/package';
-import { toPromptFile } from '../utils/prompt';
+} from '../utils/analytics.js';
+import { toolsPackage } from '../utils/package.js';
+import { toPromptFile } from '../utils/prompt.js';
 
 const t = initTRPC.create({
   errorFormatter(opts) {
