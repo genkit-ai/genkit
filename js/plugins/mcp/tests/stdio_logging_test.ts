@@ -19,6 +19,7 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { genkit, z } from 'genkit/beta';
 import { logger } from 'genkit/logging';
 import * as assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
 import { PassThrough } from 'node:stream';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { createMcpServer } from '../src/index.js';
@@ -192,6 +193,94 @@ describe('MCP stdio logging', () => {
 
       assert.deepEqual(stdoutLogs, []);
       assert.ok(stderrLogs.includes('duplicate sdk info sentinel'));
+    } finally {
+      await server.server?.close();
+      await ai.stopServers();
+      logger.setDefaultLogOutput(originalOutput);
+      logger.setLogLevel(originalLevel as 'error' | 'warn' | 'info' | 'debug');
+      console.debug = originalDebug;
+      console.info = originalInfo;
+      console.error = originalError;
+    }
+  });
+
+  it('selects stderr synchronously when start() omits transport', async () => {
+    const originalDebug = console.debug;
+    const originalInfo = console.info;
+    const originalError = console.error;
+    const originalLevel = logger.defaultLogger.level;
+    const originalOutput = logger.defaultLogger.output;
+    const stdoutLogs: string[] = [];
+    const stderrLogs: string[] = [];
+    const ai = genkit({});
+    const server = createMcpServer(ai, { name: 'default-stdio-sync-test' });
+
+    console.debug = (...args: unknown[]) => stdoutLogs.push(args.join(' '));
+    console.info = (...args: unknown[]) => stdoutLogs.push(args.join(' '));
+    console.error = (...args: unknown[]) => stderrLogs.push(args.join(' '));
+    logger.setDefaultLogOutput('stdout');
+    logger.setLogLevel('debug');
+
+    try {
+      const ready = server.start();
+      logger.info('booting before await');
+      await ready;
+      logger.info('running after await');
+
+      assert.deepEqual(stdoutLogs, []);
+      assert.ok(stderrLogs.includes('booting before await'));
+      assert.ok(stderrLogs.includes('running after await'));
+    } finally {
+      await server.server?.close();
+      await ai.stopServers();
+      logger.setDefaultLogOutput(originalOutput);
+      logger.setLogLevel(originalLevel as 'error' | 'warn' | 'info' | 'debug');
+      console.debug = originalDebug;
+      console.info = originalInfo;
+      console.error = originalError;
+    }
+  });
+
+  it('redirects logs to stderr for CommonJS StdioServerTransport subclasses', async () => {
+    const originalDebug = console.debug;
+    const originalInfo = console.info;
+    const originalError = console.error;
+    const originalLevel = logger.defaultLogger.level;
+    const originalOutput = logger.defaultLogger.output;
+    const stdoutLogs: string[] = [];
+    const stderrLogs: string[] = [];
+    const ai = genkit({});
+    const server = createMcpServer(ai, { name: 'cjs-stdio-subclass-test' });
+
+    const require = createRequire(import.meta.url);
+    const { StdioServerTransport: CjsStdioServerTransport } =
+      require('@modelcontextprotocol/sdk/server/stdio.js') as {
+        StdioServerTransport: typeof StdioServerTransport;
+      };
+    class CustomCjsStdioTransport extends CjsStdioServerTransport {}
+    const transport = new CustomCjsStdioTransport(
+      new PassThrough(),
+      new PassThrough()
+    );
+
+    assert.equal(transport instanceof StdioServerTransport, false);
+    assert.equal(transport.constructor.name, 'CustomCjsStdioTransport');
+
+    console.debug = (...args: unknown[]) => stdoutLogs.push(args.join(' '));
+    console.info = (...args: unknown[]) => stdoutLogs.push(args.join(' '));
+    console.error = (...args: unknown[]) => stderrLogs.push(args.join(' '));
+    logger.setDefaultLogOutput('stdout');
+    logger.setLogLevel('debug');
+
+    try {
+      const ready = server.start(transport);
+      logger.info('cjs subclass before await');
+      await ready;
+      logger.info('cjs subclass after await');
+
+      assert.deepEqual(stdoutLogs, []);
+      assert.ok(stderrLogs.includes('cjs subclass before await'));
+      assert.ok(stderrLogs.includes('cjs subclass after await'));
     } finally {
       await server.server?.close();
       await ai.stopServers();

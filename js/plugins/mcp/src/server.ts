@@ -350,16 +350,15 @@ export class GenkitMcpServer {
    * StdioServerTransport will be created and used.
    */
   async start(transport?: Transport) {
+    if (!transport || hasStdioTransportInPrototypeChain(transport)) {
+      // Stdout carries MCP messages, including during setup and shutdown.
+      logger.setDefaultLogOutput('stderr');
+    }
     const { StdioServerTransport } =
       await import('@modelcontextprotocol/sdk/server/stdio.js');
     if (!transport) {
       transport = new StdioServerTransport();
-    }
-    if (
-      transport instanceof StdioServerTransport ||
-      transport.constructor?.name === 'StdioServerTransport'
-    ) {
-      // Stdout carries MCP messages, including during setup and shutdown.
+    } else if (transport instanceof StdioServerTransport) {
       logger.setDefaultLogOutput('stderr');
     }
     await this.setup();
@@ -368,6 +367,17 @@ export class GenkitMcpServer {
       `[MCP Server] MCP server '${this.options.name}' started successfully.`
     );
   }
+}
+
+function hasStdioTransportInPrototypeChain(transport: Transport): boolean {
+  let proto = Object.getPrototypeOf(transport);
+  while (proto && proto !== Object.prototype) {
+    if (proto.constructor?.name === 'StdioServerTransport') {
+      return true;
+    }
+    proto = Object.getPrototypeOf(proto);
+  }
+  return false;
 }
 
 /**
