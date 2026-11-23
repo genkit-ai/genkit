@@ -1490,6 +1490,7 @@ describe('toGeminiTool', () => {
     for (const inputSchema of [
       { type: 'object', properties: {}, required: [] },
       { type: 'object' },
+      { type: 'object', properties: {}, additionalProperties: false },
     ]) {
       assert.deepStrictEqual(
         toGeminiTool({
@@ -1501,6 +1502,34 @@ describe('toGeminiTool', () => {
           name: 'read_graph',
           description: 'Read the entire knowledge graph',
           parameters: undefined,
+        }
+      );
+    }
+  });
+
+  it('retains parameters for an object tool schema that allows additional properties', () => {
+    for (const inputSchema of [
+      { type: 'object', properties: {}, additionalProperties: true },
+      {
+        type: 'object',
+        properties: {},
+        additionalProperties: { type: 'string' },
+      },
+    ]) {
+      assert.deepStrictEqual(
+        toGeminiTool({
+          name: 'dynamic_tool',
+          description: 'Accepts arbitrary key-value arguments',
+          inputSchema,
+        }),
+        {
+          name: 'dynamic_tool',
+          description: 'Accepts arbitrary key-value arguments',
+          parameters: {
+            type: SchemaType.OBJECT,
+            properties: {},
+            required: undefined,
+          },
         }
       );
     }
