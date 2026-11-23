@@ -765,7 +765,7 @@ export class RuntimeManager extends BaseRuntimeManager {
         (error.data as any).statusCode = 404;
         throw error;
       }
-      throw this.httpErrorHandler(axiosError);
+      this.httpErrorHandler(axiosError);
     }
   }
 
@@ -942,7 +942,7 @@ export class RuntimeManager extends BaseRuntimeManager {
           )
         ) {
           if (
-            runtimeInfo.reflectionApiSpecVersion !=
+            runtimeInfo.reflectionApiSpecVersion !==
             GENKIT_REFLECTION_API_SPEC_VERSION
           ) {
             if (

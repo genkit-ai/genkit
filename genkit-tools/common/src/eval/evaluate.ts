@@ -243,7 +243,7 @@ export async function getMatchingEvaluatorActions(
     evaluators.includes(action.key)
   );
   if (filteredEvaluatorActions.length === 0) {
-    if (allEvaluatorActions.length == 0) {
+    if (allEvaluatorActions.length === 0) {
       throw new Error('No evaluators installed');
     }
   }
