@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-import { execFileSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
@@ -22,66 +21,69 @@ import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
 const ts = require('typescript');
-const tscBin = require.resolve('typescript/bin/tsc');
 const pkgDir = realpathSync(fileURLToPath(new URL('..', import.meta.url)));
 const configPath = resolve(pkgDir, 'tsconfig.public-types.json');
 
-function main() {
-  let stdout;
-  try {
-    stdout = execFileSync(
-      process.execPath,
-      [tscBin, '-p', configPath, '--noEmit', '--listFiles'],
-      {
-        cwd: pkgDir,
-        encoding: 'utf8',
-        maxBuffer: 10 * 1024 * 1024,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      }
-    );
-  } catch (err) {
-    if (err && typeof err === 'object') {
-      if ('stdout' in err && err.stdout) {
-        process.stdout.write(err.stdout);
-      }
-      if ('stderr' in err && err.stderr) {
-        process.stderr.write(err.stderr);
-      }
-      if ('status' in err && typeof err.status === 'number') {
-        process.exitCode = err.status;
-        return;
-      }
+const formatHost = {
+  getCanonicalFileName: (fileName) => fileName,
+  getCurrentDirectory: () => pkgDir,
+  getNewLine: () => ts.sys.newLine,
+};
+
+function reportDiagnostics(diagnostics) {
+  const formatted = process.stderr.isTTY
+    ? ts.formatDiagnosticsWithColorAndContext(diagnostics, formatHost)
+    : ts.formatDiagnostics(diagnostics, formatHost);
+  process.stderr.write(formatted);
+}
+
+function getModuleSpecifiers(sourceFile) {
+  const specifiers = [];
+  for (const statement of sourceFile.statements) {
+    if (
+      (ts.isImportDeclaration(statement) ||
+        ts.isExportDeclaration(statement)) &&
+      statement.moduleSpecifier &&
+      ts.isStringLiteral(statement.moduleSpecifier)
+    ) {
+      specifiers.push(statement.moduleSpecifier);
     }
-    throw err;
   }
+  return specifiers;
+}
 
-  const loadedFiles = new Set(
-    stdout
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .map((filePath) => resolve(filePath))
-  );
-
+function main() {
   const readResult = ts.readConfigFile(configPath, ts.sys.readFile);
   if (readResult.error) {
-    console.error(
-      ts.flattenDiagnosticMessageText(readResult.error.messageText, '\n')
-    );
+    reportDiagnostics([readResult.error]);
     process.exitCode = 1;
     return;
   }
+
   const parsed = ts.parseJsonConfigFileContent(
     readResult.config,
     ts.sys,
-    pkgDir
+    pkgDir,
+    undefined,
+    configPath
   );
   if (parsed.errors.length > 0) {
-    for (const diagnostic of parsed.errors) {
-      console.error(
-        ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n')
-      );
-    }
+    reportDiagnostics(parsed.errors);
+    process.exitCode = 1;
+    return;
+  }
+
+  const host = ts.createCompilerHost(parsed.options);
+  host.getCurrentDirectory = () => pkgDir;
+  const program = ts.createProgram({
+    rootNames: parsed.fileNames,
+    options: parsed.options,
+    host,
+  });
+
+  const diagnostics = ts.getPreEmitDiagnostics(program);
+  if (diagnostics.length > 0) {
+    reportDiagnostics(diagnostics);
     process.exitCode = 1;
     return;
   }
@@ -90,37 +92,56 @@ function main() {
     {
       fixture: 'tests/public-types.mts',
       expectedDts: 'lib/index.d.mts',
-      mode: ts.ModuleKind.ESNext,
     },
     {
       fixture: 'tests/public-types.cts',
       expectedDts: 'lib/index.d.ts',
-      mode: ts.ModuleKind.CommonJS,
     },
   ];
 
+  const checker = program.getTypeChecker();
   const failures = [];
-  for (const { fixture, expectedDts, mode } of checks) {
+
+  for (const { fixture, expectedDts } of checks) {
+    const fixturePath = resolve(pkgDir, fixture);
     const expectedPath = resolve(pkgDir, expectedDts);
-    if (!loadedFiles.has(expectedPath)) {
-      failures.push(`program did not load ${expectedDts}`);
+    const sourceFile = program.getSourceFile(fixturePath);
+    if (!sourceFile) {
+      failures.push(`program did not include fixture ${fixture}`);
+      continue;
     }
-    const resolution = ts.resolveModuleName(
-      '@genkit-ai/mcp',
-      resolve(pkgDir, fixture),
-      parsed.options,
-      ts.sys,
-      undefined,
-      undefined,
-      mode
+
+    const specifiers = getModuleSpecifiers(sourceFile);
+    for (const specifier of specifiers) {
+      if (specifier.text.startsWith('.')) {
+        failures.push(
+          `${fixture} uses relative specifier '${specifier.text}' instead of package exports`
+        );
+      }
+    }
+
+    const mcpSpecifiers = specifiers.filter(
+      (specifier) => specifier.text === '@genkit-ai/mcp'
     );
-    const resolvedFile = resolution.resolvedModule?.resolvedFileName
-      ? resolve(resolution.resolvedModule.resolvedFileName)
-      : null;
-    if (resolvedFile !== expectedPath) {
-      failures.push(
-        `${fixture} resolved '@genkit-ai/mcp' to ${resolvedFile ?? '<unresolved>'} instead of ${expectedPath}`
-      );
+    if (mcpSpecifiers.length === 0) {
+      failures.push(`${fixture} does not import '@genkit-ai/mcp'`);
+      continue;
+    }
+
+    for (const specifier of mcpSpecifiers) {
+      const symbol = checker.getSymbolAtLocation(specifier);
+      const resolvedFiles = [
+        ...new Set(
+          (symbol?.declarations ?? []).map((decl) =>
+            resolve(decl.getSourceFile().fileName)
+          )
+        ),
+      ];
+      if (resolvedFiles.length !== 1 || resolvedFiles[0] !== expectedPath) {
+        failures.push(
+          `${fixture} resolved '@genkit-ai/mcp' to ${resolvedFiles.join(', ') || '<unresolved>'} instead of ${expectedPath}`
+        );
+      }
     }
   }
 
