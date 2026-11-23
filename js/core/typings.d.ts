@@ -18,6 +18,7 @@ declare global {
   var __genkit_AsyncContext: any;
   var __genkit_ClientHeader: any;
   var __genkit_logger: any;
+  var __genkit_default_log_output: 'stdout' | 'stderr' | undefined;
   var __genkit_disableRootSpanDetection: any;
   var __GENKIT_RUNTIME_CONFIG__: any;
   var __GENKIT_PENDING_TELEMETRY_POSTS: any;

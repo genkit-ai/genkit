@@ -21,19 +21,33 @@ import { activeInstrumentations } from './tracing/instrumentation.js';
 const LOG_LEVELS = ['debug', 'info', 'warn', 'error'];
 
 const loggerKey = '__genkit_logger';
+const defaultLogOutputKey = '__genkit_default_log_output';
+
+function getDefaultLogOutput(): 'stdout' | 'stderr' {
+  return global[defaultLogOutputKey] ?? 'stdout';
+}
 
 const _defaultLogger = {
-  output: 'stdout' as 'stdout' | 'stderr',
+  get output(): 'stdout' | 'stderr' {
+    return getDefaultLogOutput();
+  },
+  set output(output: 'stdout' | 'stderr') {
+    global[defaultLogOutputKey] = output;
+  },
   shouldLog(targetLevel: string) {
     return LOG_LEVELS.indexOf(this.level) <= LOG_LEVELS.indexOf(targetLevel);
   },
   debug(...args: any) {
     this.shouldLog('debug') &&
-      (this.output === 'stderr' ? console.error : console.debug)(...args);
+      (getDefaultLogOutput() === 'stderr' ? console.error : console.debug)(
+        ...args
+      );
   },
   info(...args: any) {
     this.shouldLog('info') &&
-      (this.output === 'stderr' ? console.error : console.info)(...args);
+      (getDefaultLogOutput() === 'stderr' ? console.error : console.info)(
+        ...args
+      );
   },
   warn(...args: any) {
     this.shouldLog('warn') && console.warn(...args);
@@ -207,18 +221,15 @@ class Logger {
     getLogger().level = level;
   }
 
-  /** Select the output stream for the default logger's debug and info messages. */
+  /**
+   * Select the output stream for the default logger's debug and info messages.
+   *
+   * Stored on `global` so multiple instances of `@genkit-ai/core` at a version
+   * supporting this setting share the selected stream without mutating custom
+   * loggers installed via `logger.init(...)`.
+   */
   setDefaultLogOutput(output: 'stdout' | 'stderr') {
-    _defaultLogger.output = output;
-    const activeLogger = getLogger();
-    if (
-      activeLogger &&
-      typeof activeLogger === 'object' &&
-      'output' in activeLogger &&
-      typeof activeLogger.shouldLog === 'function'
-    ) {
-      activeLogger.output = output;
-    }
+    global[defaultLogOutputKey] = output;
   }
 
   private _mergeErrorMetadata(metadata: any, err?: any): any {

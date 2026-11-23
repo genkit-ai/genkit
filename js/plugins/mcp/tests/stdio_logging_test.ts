@@ -16,14 +16,104 @@
 
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
-import { genkit } from 'genkit';
+import { genkit, z } from 'genkit/beta';
 import { logger } from 'genkit/logging';
 import * as assert from 'node:assert/strict';
 import { PassThrough } from 'node:stream';
-import { describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 import { createMcpServer } from '../src/index.js';
 
 describe('MCP stdio logging', () => {
+  let originalReflectionEnabled: string | undefined;
+
+  beforeEach(() => {
+    originalReflectionEnabled = process.env.GENKIT_REFLECTION_ENABLED;
+    process.env.GENKIT_REFLECTION_ENABLED = 'false';
+  });
+
+  afterEach(() => {
+    if (originalReflectionEnabled === undefined) {
+      delete process.env.GENKIT_REFLECTION_ENABLED;
+    } else {
+      process.env.GENKIT_REFLECTION_ENABLED = originalReflectionEnabled;
+    }
+  });
+  it('keeps startup registration and runtime logs off stdout when configured before genkit()', async () => {
+    const originalDebug = console.debug;
+    const originalInfo = console.info;
+    const originalError = console.error;
+    const originalLevel = logger.defaultLogger.level;
+    const originalOutput = logger.defaultLogger.output;
+    const stdoutLogs: string[] = [];
+    const stderrLogs: string[] = [];
+
+    console.debug = (...args: unknown[]) => stdoutLogs.push(args.join(' '));
+    console.info = (...args: unknown[]) => stdoutLogs.push(args.join(' '));
+    console.error = (...args: unknown[]) => stderrLogs.push(args.join(' '));
+    logger.setLogLevel('debug');
+    logger.setDefaultLogOutput('stderr');
+
+    let ai: ReturnType<typeof genkit> | undefined;
+    let server: ReturnType<typeof createMcpServer> | undefined;
+
+    try {
+      ai = genkit({});
+      ai.defineTool(
+        {
+          name: 'add',
+          description: 'add two numbers together',
+          inputSchema: z.object({ a: z.number(), b: z.number() }),
+          outputSchema: z.number(),
+        },
+        async ({ a, b }) => a + b
+      );
+      ai.definePrompt(
+        {
+          name: 'happy',
+          description: 'everybody together now',
+        },
+        'hello'
+      );
+      ai.defineResource(
+        {
+          name: 'my resource',
+          uri: 'my://resource',
+        },
+        async () => ({ content: [{ text: 'my resource' }] })
+      );
+
+      server = createMcpServer(ai, {
+        name: 'example_server',
+        version: '0.0.1',
+      });
+      await server.start(
+        new StdioServerTransport(new PassThrough(), new PassThrough())
+      );
+      logger.info('stdio runtime info');
+      logger.debug('stdio runtime debug');
+
+      assert.deepEqual(stdoutLogs, []);
+      assert.ok(stderrLogs.includes('registering /tool/add'));
+      assert.ok(
+        stderrLogs.some((line) =>
+          line.includes(
+            "[MCP Server] MCP server 'example_server' started successfully."
+          )
+        )
+      );
+      assert.ok(stderrLogs.includes('stdio runtime info'));
+      assert.ok(stderrLogs.includes('stdio runtime debug'));
+    } finally {
+      await server?.server?.close();
+      await ai?.stopServers();
+      logger.setDefaultLogOutput(originalOutput);
+      logger.setLogLevel(originalLevel as 'error' | 'warn' | 'info' | 'debug');
+      console.debug = originalDebug;
+      console.info = originalInfo;
+      console.error = originalError;
+    }
+  });
+
   it('keeps Genkit logs off the MCP stdio protocol stream', async () => {
     const originalDebug = console.debug;
     const originalInfo = console.info;
@@ -32,7 +122,8 @@ describe('MCP stdio logging', () => {
     const originalOutput = logger.defaultLogger.output;
     const stdoutLogs: string[] = [];
     const stderrLogs: string[] = [];
-    const server = createMcpServer(genkit({}), { name: 'stdio-logging-test' });
+    const ai = genkit({});
+    const server = createMcpServer(ai, { name: 'stdio-logging-test' });
 
     console.debug = (...args: unknown[]) => stdoutLogs.push(args.join(' '));
     console.info = (...args: unknown[]) => stdoutLogs.push(args.join(' '));
@@ -59,6 +150,7 @@ describe('MCP stdio logging', () => {
       assert.ok(stderrLogs.includes('stdio debug sentinel'));
     } finally {
       await server.server?.close();
+      await ai.stopServers();
       logger.setDefaultLogOutput(originalOutput);
       logger.setLogLevel(originalLevel as 'error' | 'warn' | 'info' | 'debug');
       console.debug = originalDebug;
@@ -75,7 +167,8 @@ describe('MCP stdio logging', () => {
     const originalOutput = logger.defaultLogger.output;
     const stdoutLogs: string[] = [];
     const stderrLogs: string[] = [];
-    const server = createMcpServer(genkit({}), { name: 'dup-stdio-test' });
+    const ai = genkit({});
+    const server = createMcpServer(ai, { name: 'dup-stdio-test' });
 
     // Simulate a StdioServerTransport constructed from a duplicate SDK package.
     class DuplicateSdkStdioTransport implements Transport {
@@ -101,6 +194,7 @@ describe('MCP stdio logging', () => {
       assert.ok(stderrLogs.includes('duplicate sdk info sentinel'));
     } finally {
       await server.server?.close();
+      await ai.stopServers();
       logger.setDefaultLogOutput(originalOutput);
       logger.setLogLevel(originalLevel as 'error' | 'warn' | 'info' | 'debug');
       console.debug = originalDebug;
@@ -117,7 +211,8 @@ describe('MCP stdio logging', () => {
     const originalOutput = logger.defaultLogger.output;
     const stdoutLogs: string[] = [];
     const stderrLogs: string[] = [];
-    const server = createMcpServer(genkit({}), { name: 'non-stdio-test' });
+    const ai = genkit({});
+    const server = createMcpServer(ai, { name: 'non-stdio-test' });
 
     class FakeHttpTransport implements Transport {
       async start() {}
@@ -141,6 +236,7 @@ describe('MCP stdio logging', () => {
       assert.deepEqual(stderrLogs, []);
     } finally {
       await server.server?.close();
+      await ai.stopServers();
       logger.setDefaultLogOutput(originalOutput);
       logger.setLogLevel(originalLevel as 'error' | 'warn' | 'info' | 'debug');
       console.debug = originalDebug;

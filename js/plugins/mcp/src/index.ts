@@ -199,7 +199,14 @@ export function defineMcpClient<M extends boolean = false>(
  * Creates an MCP server based on the supplied Genkit instance. All tools and prompts
  * will be automatically converted to MCP compatibility.
  *
+ * When serving MCP over stdio, call `logger.setDefaultLogOutput('stderr')` from
+ * `genkit/logging` before initializing `genkit(...)` if debug logging or startup
+ * logs may run prior to `mcpServer.start()`.
+ *
  * ```ts
+ * import { logger } from 'genkit/logging';
+ *
+ * logger.setDefaultLogOutput('stderr');
  * const mcpServer = createMcpServer(ai, {name: 'my-mcp-server', version: '0.1.0'});
  *
  * await mcpServer.start(); // starts a stdio transport, OR

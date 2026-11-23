@@ -185,7 +185,7 @@ describe('default logger output', () => {
   let originalError: typeof console.error;
   let originalLogger: any;
   let originalLevel: string;
-  let originalOutput: 'stdout' | 'stderr';
+  let originalGlobalOutput: 'stdout' | 'stderr' | undefined;
   let calls: Array<[string, ...unknown[]]>;
 
   beforeEach(() => {
@@ -195,7 +195,7 @@ describe('default logger output', () => {
     originalError = console.error;
     originalLogger = global.__genkit_logger;
     originalLevel = logger.defaultLogger.level;
-    originalOutput = logger.defaultLogger.output;
+    originalGlobalOutput = global.__genkit_default_log_output;
     calls = [];
 
     logger.init(logger.defaultLogger);
@@ -213,7 +213,7 @@ describe('default logger output', () => {
     console.info = originalInfo;
     console.warn = originalWarn;
     console.error = originalError;
-    logger.defaultLogger.output = originalOutput;
+    global.__genkit_default_log_output = originalGlobalOutput;
     logger.defaultLogger.level = originalLevel;
     global.__genkit_logger = originalLogger;
   });
@@ -248,9 +248,11 @@ describe('default logger output', () => {
     ]);
   });
 
-  it('updates an active default logger from another module instance', () => {
+  it('shares output selection across default logger instances via global state', () => {
     const otherCopyDefaultLogger = {
-      output: 'stdout' as 'stdout' | 'stderr',
+      get output() {
+        return global.__genkit_default_log_output ?? 'stdout';
+      },
       level: 'debug',
       shouldLog() {
         return true;
@@ -281,9 +283,20 @@ describe('default logger output', () => {
     ]);
   });
 
-  it('does not mutate custom loggers while keeping defaultLogger updated', () => {
-    const customLogger: Record<string, any> = {
+  it('does not throw on a frozen custom logger or mutate writable custom loggers', () => {
+    const frozenCustomLogger = Object.freeze({ ...logger.defaultLogger });
+    logger.init(frozenCustomLogger);
+
+    assert.doesNotThrow(() => logger.setDefaultLogOutput('stderr'));
+    assert.strictEqual(frozenCustomLogger.output, 'stdout');
+    assert.strictEqual(logger.defaultLogger.output, 'stderr');
+
+    const writableCustomLogger = {
+      output: 'custom-stream',
       level: 'debug',
+      shouldLog() {
+        return true;
+      },
       debug(...args: unknown[]) {
         calls.push(['custom-debug', ...args]);
       },
@@ -293,10 +306,11 @@ describe('default logger output', () => {
       warn() {},
       error() {},
     };
-    logger.init(customLogger);
+    logger.init(writableCustomLogger);
 
+    logger.setDefaultLogOutput('stdout');
     logger.setDefaultLogOutput('stderr');
-    assert.strictEqual('output' in customLogger, false);
+    assert.strictEqual(writableCustomLogger.output, 'custom-stream');
     assert.strictEqual(logger.defaultLogger.output, 'stderr');
 
     logger.init(logger.defaultLogger);

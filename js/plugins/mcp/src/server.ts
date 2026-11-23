@@ -339,6 +339,13 @@ export class GenkitMcpServer {
    * Starts the MCP server with the specified transport or a default
    * StdioServerTransport. Ensures the server is set up before connecting the
    * transport.
+   *
+   * When using `StdioServerTransport`, this routes Genkit's default `debug` and
+   * `info` logs to `stderr` so they do not corrupt MCP protocol messages on
+   * `stdout`. To also capture logs emitted during `genkit(...)` initialization
+   * or action registration, call `logger.setDefaultLogOutput('stderr')` before
+   * creating the Genkit instance.
+   *
    * @param transport Optional MCP transport instance. If not provided, a
    * StdioServerTransport will be created and used.
    */

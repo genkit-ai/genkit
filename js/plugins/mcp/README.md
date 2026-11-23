@@ -160,8 +160,12 @@ You can also expose all of the tools and prompts from a Genkit instance as an MC
 ```ts
 import { googleAI } from '@genkit-ai/google-genai';
 import { createMcpServer } from '@genkit-ai/mcp';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { genkit, z } from 'genkit/beta';
+import { logger } from 'genkit/logging';
+
+// Route Genkit debug/info logs to stderr before initializing Genkit so stdout
+// remains reserved for MCP stdio protocol messages.
+logger.setDefaultLogOutput('stderr');
 
 const ai = genkit({
   plugins: [googleAI()],
@@ -229,15 +233,13 @@ const server = createMcpServer(ai, {
   name: 'example_server',
   version: '0.0.1',
 });
-// Setup (async) then starts with stdio transport by default
-server.setup().then(async () => {
-  await server.start();
-  const transport = new StdioServerTransport();
-  await server!.server?.connect(transport);
-});
+// Starts with stdio transport by default (calling setup() automatically)
+server.start();
 ```
 
 The `createMcpServer` function returns a `GenkitMcpServer` instance. The `start()` method on this instance will start an MCP server (using the stdio transport by default) that exposes all registered Genkit tools and prompts. To start the server with a different MCP transport, you can pass the transport instance to the `start()` method (e.g., `server.start(customMcpTransport)`).
+
+When `start()` uses `StdioServerTransport`, it automatically routes Genkit's default `debug` and `info` logs to `stderr` so they do not corrupt MCP protocol messages on `stdout`. Call `logger.setDefaultLogOutput('stderr')` before `genkit(...)` (as shown above) if you enable `debug` logging or register plugins or actions that log prior to `server.start()`.
 
 ### `createMcpServer()` Options
 - **`name`**: (required, string) The name you want to give your server for MCP inspection.
