@@ -55,11 +55,11 @@ func (c *GenkitMCPClient) GetPrompt(ctx context.Context, g *genkit.Genkit, promp
 
 // GetDynamicPrompt registers an MCP prompt whose messages are fetched each time
 // it is rendered or executed. Supply MCP arguments as string-valued input (for
-// example, map[string]any{"topic": "Go"}) when calling Render or Execute.
+// example, map[string]string{"topic": "Go"}) when calling Render or Execute.
 // Unlike GetPrompt, it does not reuse a prompt already registered under the
 // same namespaced name.
 func (c *GenkitMCPClient) GetDynamicPrompt(ctx context.Context, g *genkit.Genkit, promptName string) (ai.Prompt, error) {
-	mcpClient := c.promptClient.Load()
+	mcpClient := c.activeClient()
 	if mcpClient == nil {
 		return nil, fmt.Errorf("mcp client is disabled or not connected")
 	}
@@ -87,24 +87,39 @@ func (c *GenkitMCPClient) GetDynamicPrompt(ctx context.Context, g *genkit.Genkit
 		return nil, fmt.Errorf("mcp prompt %q was not found", promptName)
 	}
 
-	opts := []ai.PromptOption{
+	properties := make(map[string]any, len(selected.Arguments))
+	var required []string
+	for _, arg := range selected.Arguments {
+		property := map[string]any{"type": "string"}
+		if arg.Description != "" {
+			property["description"] = arg.Description
+		}
+		properties[arg.Name] = property
+		if arg.Required {
+			required = append(required, arg.Name)
+		}
+	}
+	schema := map[string]any{
+		"type":                 "object",
+		"properties":           properties,
+		"additionalProperties": map[string]any{"type": "string"},
+	}
+	if len(required) > 0 {
+		schema["required"] = required
+	} else {
+		// Render(ctx, nil) and Execute without WithInput validate null input.
+		schema["type"] = []any{"object", "null"}
+	}
+
+	return genkit.DefinePrompt(g, namespacedPromptName,
 		ai.WithDescription(selected.Description),
 		ai.WithMetadata(map[string]any{dynamicPromptMetadataKey: true}),
-		ai.WithMessagesFn(func(renderCtx context.Context, input map[string]any) ([]*ai.Message, error) {
-			mcpClient := c.promptClient.Load()
+		ai.WithInputSchema(schema),
+		ai.WithMessagesFn(func(renderCtx context.Context, args map[string]string) ([]*ai.Message, error) {
+			// Read the connection at call time so the prompt follows Restart.
+			mcpClient := c.activeClient()
 			if mcpClient == nil {
 				return nil, fmt.Errorf("mcp client is disabled or not connected")
-			}
-			var args map[string]string
-			if len(input) > 0 {
-				args = make(map[string]string, len(input))
-				for name, value := range input {
-					arg, ok := value.(string)
-					if !ok {
-						return nil, fmt.Errorf("mcp prompt %q argument %q must be a string", promptName, name)
-					}
-					args[name] = arg
-				}
 			}
 			result, err := fetchMCPPromptFromClient(renderCtx, mcpClient, promptName, args)
 			if err != nil {
@@ -112,28 +127,7 @@ func (c *GenkitMCPClient) GetDynamicPrompt(ctx context.Context, g *genkit.Genkit
 			}
 			return c.convertMCPMessages(result.Messages), nil
 		}),
-	}
-	if len(selected.Arguments) > 0 {
-		properties := make(map[string]any, len(selected.Arguments))
-		var required []string
-		for _, arg := range selected.Arguments {
-			properties[arg.Name] = map[string]any{"type": "string", "description": arg.Description}
-			if arg.Required {
-				required = append(required, arg.Name)
-			}
-		}
-		schema := map[string]any{
-			"type":                 "object",
-			"properties":           properties,
-			"additionalProperties": map[string]any{"type": "string"},
-		}
-		if len(required) > 0 {
-			schema["required"] = required
-		}
-		opts = append(opts, ai.WithInputSchema(schema))
-	}
-
-	return genkit.DefinePrompt(g, namespacedPromptName, opts...), nil
+	), nil
 }
 
 // fetchMCPPrompt retrieves a prompt from the MCP server

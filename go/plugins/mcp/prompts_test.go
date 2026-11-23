@@ -16,26 +16,36 @@ package mcp
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
 	protocol "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/mcptest"
 	"github.com/mark3labs/mcp-go/server"
 )
 
-func testPromptClient(t *testing.T, handler server.PromptHandlerFunc) *GenkitMCPClient {
+var greetingPrompt = protocol.Prompt{
+	Name:        "greeting",
+	Description: "A greeting from the MCP server",
+	Arguments:   []protocol.PromptArgument{{Name: "name", Required: true}},
+}
+
+func textResult(text string) *protocol.GetPromptResult {
+	return &protocol.GetPromptResult{Messages: []protocol.PromptMessage{{
+		Role:    protocol.RoleUser,
+		Content: protocol.TextContent{Type: "text", Text: text},
+	}}}
+}
+
+func testPromptClient(t *testing.T, prompt protocol.Prompt, handler server.PromptHandlerFunc) *GenkitMCPClient {
 	t.Helper()
 	srv := mcptest.NewUnstartedServer(t)
-	srv.AddPrompt(protocol.Prompt{
-		Name:        "greeting",
-		Description: "A greeting from the MCP server",
-		Arguments: []protocol.PromptArgument{
-			{Name: "name", Required: true},
-		},
-	}, handler)
+	srv.AddPrompt(prompt, handler)
 	if err := srv.Start(context.Background()); err != nil {
 		t.Fatalf("start MCP server: %v", err)
 	}
@@ -44,18 +54,19 @@ func testPromptClient(t *testing.T, handler server.PromptHandlerFunc) *GenkitMCP
 		options: MCPClientOptions{Name: "demo"},
 		server:  &ServerRef{Client: srv.Client()},
 	}
-	client.promptClient.Store(srv.Client())
+	client.active.Store(srv.Client())
 	return client
+}
+
+func inputSchema(p ai.Prompt) map[string]any {
+	return p.(interface{ Desc() api.ActionDesc }).Desc().InputSchema
 }
 
 func TestGetDynamicPromptFetchesOnEveryRender(t *testing.T) {
 	var calls int
-	client := testPromptClient(t, func(_ context.Context, request protocol.GetPromptRequest) (*protocol.GetPromptResult, error) {
+	client := testPromptClient(t, greetingPrompt, func(_ context.Context, request protocol.GetPromptRequest) (*protocol.GetPromptResult, error) {
 		calls++
-		return &protocol.GetPromptResult{Messages: []protocol.PromptMessage{{
-			Role:    protocol.RoleUser,
-			Content: protocol.TextContent{Type: "text", Text: "Hello " + request.Params.Arguments["name"] + " {{literal}}"},
-		}}}, nil
+		return textResult("Hello " + request.Params.Arguments["name"] + " {{literal}}"), nil
 	})
 	ctx := context.Background()
 	g := genkit.Init(ctx)
@@ -66,6 +77,7 @@ func TestGetDynamicPromptFetchesOnEveryRender(t *testing.T) {
 	if prompt.Name() != "demo_greeting" {
 		t.Fatalf("prompt name = %q, want demo_greeting", prompt.Name())
 	}
+	type cityName string
 	for i, tc := range []struct {
 		name  string
 		input any
@@ -73,6 +85,7 @@ func TestGetDynamicPromptFetchesOnEveryRender(t *testing.T) {
 	}{
 		{"Ada", map[string]any{"name": "Ada"}, "Hello Ada {{literal}}"},
 		{"Grace", map[string]string{"name": "Grace"}, "Hello Grace {{literal}}"},
+		{"Seattle", map[string]any{"name": cityName("Seattle")}, "Hello Seattle {{literal}}"},
 	} {
 		toRender := prompt
 		if i == 1 {
@@ -92,42 +105,73 @@ func TestGetDynamicPromptFetchesOnEveryRender(t *testing.T) {
 }
 
 func TestGetDynamicPromptWithoutArguments(t *testing.T) {
-	srv := mcptest.NewUnstartedServer(t)
 	var calls int
-	srv.AddPrompt(protocol.Prompt{Name: "clock"}, func(_ context.Context, _ protocol.GetPromptRequest) (*protocol.GetPromptResult, error) {
+	client := testPromptClient(t, protocol.Prompt{Name: "clock"}, func(_ context.Context, _ protocol.GetPromptRequest) (*protocol.GetPromptResult, error) {
 		calls++
-		return &protocol.GetPromptResult{Messages: []protocol.PromptMessage{{
-			Role:    protocol.RoleUser,
-			Content: protocol.TextContent{Type: "text", Text: "reading"},
-		}}}, nil
+		return textResult("reading"), nil
 	})
-	if err := srv.Start(context.Background()); err != nil {
-		t.Fatalf("start MCP server: %v", err)
-	}
-	t.Cleanup(srv.Close)
-	client := &GenkitMCPClient{options: MCPClientOptions{Name: "demo"}, server: &ServerRef{Client: srv.Client()}}
-	client.promptClient.Store(srv.Client())
 	ctx := context.Background()
 	prompt, err := client.GetDynamicPrompt(ctx, genkit.Init(ctx), "clock")
 	if err != nil {
 		t.Fatalf("GetDynamicPrompt: %v", err)
 	}
+	if got := inputSchema(prompt)["type"]; !reflect.DeepEqual(got, []any{"object", "null"}) {
+		t.Fatalf("input schema type = %#v, want [object null]", got)
+	}
 	if _, err := prompt.Render(ctx, nil); err != nil {
 		t.Fatalf("Render without arguments: %v", err)
+	}
+	if _, err := prompt.Render(ctx, "scalar"); err == nil {
+		t.Fatal("Render with scalar input succeeded, want schema validation error")
 	}
 	if calls != 1 {
 		t.Fatalf("MCP calls = %d, want 1", calls)
 	}
 }
 
+func TestGetDynamicPromptOptionalArguments(t *testing.T) {
+	client := testPromptClient(t, protocol.Prompt{
+		Name: "summarize",
+		Arguments: []protocol.PromptArgument{
+			{Name: "style", Description: "Output style"},
+			{Name: "tone"},
+		},
+	}, func(_ context.Context, request protocol.GetPromptRequest) (*protocol.GetPromptResult, error) {
+		return textResult("style=" + request.Params.Arguments["style"]), nil
+	})
+	ctx := context.Background()
+	g := genkit.Init(ctx)
+	echo := genkit.DefineModel(g, "test/echo", &ai.ModelOptions{Supports: &ai.ModelSupports{}},
+		func(_ context.Context, req *ai.ModelRequest, _ ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			return &ai.ModelResponse{Message: ai.NewModelTextMessage(req.Messages[0].Text())}, nil
+		})
+	prompt, err := client.GetDynamicPrompt(ctx, g, "summarize")
+	if err != nil {
+		t.Fatalf("GetDynamicPrompt: %v", err)
+	}
+	wantProperties := map[string]any{
+		"style": map[string]any{"type": "string", "description": "Output style"},
+		"tone":  map[string]any{"type": "string"},
+	}
+	if got := inputSchema(prompt)["properties"]; !reflect.DeepEqual(got, wantProperties) {
+		t.Fatalf("input schema properties = %#v, want %#v", got, wantProperties)
+	}
+
+	rendered, err := prompt.Render(ctx, nil)
+	if err != nil || len(rendered.Messages) != 1 || rendered.Messages[0].Text() != "style=" {
+		t.Fatalf("Render(nil) = (%v, %v), want style=", rendered, err)
+	}
+	resp, err := prompt.Execute(ctx, ai.WithModel(echo))
+	if err != nil || resp.Text() != "style=" {
+		t.Fatalf("Execute without input = (%v, %v), want style=", resp, err)
+	}
+}
+
 func TestGetDynamicPromptRejectsInvalidInputAndCollisions(t *testing.T) {
 	var calls int
-	client := testPromptClient(t, func(_ context.Context, _ protocol.GetPromptRequest) (*protocol.GetPromptResult, error) {
+	client := testPromptClient(t, greetingPrompt, func(_ context.Context, _ protocol.GetPromptRequest) (*protocol.GetPromptResult, error) {
 		calls++
-		return &protocol.GetPromptResult{Messages: []protocol.PromptMessage{{
-			Role:    protocol.RoleUser,
-			Content: protocol.TextContent{Type: "text", Text: "Hello"},
-		}}}, nil
+		return textResult("Hello"), nil
 	})
 	ctx := context.Background()
 	g := genkit.Init(ctx)
@@ -158,11 +202,8 @@ func TestGetDynamicPromptRejectsInvalidInputAndCollisions(t *testing.T) {
 }
 
 func TestGetDynamicPromptAfterDisconnect(t *testing.T) {
-	client := testPromptClient(t, func(_ context.Context, _ protocol.GetPromptRequest) (*protocol.GetPromptResult, error) {
-		return &protocol.GetPromptResult{Messages: []protocol.PromptMessage{{
-			Role:    protocol.RoleUser,
-			Content: protocol.TextContent{Type: "text", Text: "Hello"},
-		}}}, nil
+	client := testPromptClient(t, greetingPrompt, func(_ context.Context, _ protocol.GetPromptRequest) (*protocol.GetPromptResult, error) {
+		return textResult("Hello"), nil
 	})
 	ctx := context.Background()
 	prompt, err := client.GetDynamicPrompt(ctx, genkit.Init(ctx), "greeting")
@@ -180,13 +221,10 @@ func TestGetDynamicPromptAfterDisconnect(t *testing.T) {
 func TestGetDynamicPromptDisconnectDuringRender(t *testing.T) {
 	entered := make(chan struct{}, 1)
 	release := make(chan struct{})
-	client := testPromptClient(t, func(_ context.Context, _ protocol.GetPromptRequest) (*protocol.GetPromptResult, error) {
+	client := testPromptClient(t, greetingPrompt, func(_ context.Context, _ protocol.GetPromptRequest) (*protocol.GetPromptResult, error) {
 		entered <- struct{}{}
 		<-release
-		return &protocol.GetPromptResult{Messages: []protocol.PromptMessage{{
-			Role:    protocol.RoleUser,
-			Content: protocol.TextContent{Type: "text", Text: "Hello"},
-		}}}, nil
+		return textResult("Hello"), nil
 	})
 	ctx := context.Background()
 	prompt, err := client.GetDynamicPrompt(ctx, genkit.Init(ctx), "greeting")
@@ -224,5 +262,32 @@ func TestGetDynamicPromptDisconnectDuringRender(t *testing.T) {
 	}
 	if _, err := prompt.Render(ctx, map[string]any{"name": "Grace"}); err == nil || !strings.Contains(err.Error(), "not connected") {
 		t.Fatalf("Render after disconnect error = %v, want disconnected error", err)
+	}
+}
+
+func TestGetDynamicPromptSurvivesReconnect(t *testing.T) {
+	mcpServer := server.NewMCPServer("test", "1.0.0", server.WithPromptCapabilities(true))
+	mcpServer.AddPrompt(greetingPrompt, func(_ context.Context, request protocol.GetPromptRequest) (*protocol.GetPromptResult, error) {
+		return textResult("Hello " + request.Params.Arguments["name"]), nil
+	})
+	ts := server.NewTestStreamableHTTPServer(mcpServer)
+	t.Cleanup(ts.Close)
+	client, err := NewGenkitMCPClient(MCPClientOptions{Name: "demo", StreamableHTTP: &StreamableHTTPConfig{BaseURL: ts.URL}})
+	if err != nil {
+		t.Fatalf("NewGenkitMCPClient: %v", err)
+	}
+	t.Cleanup(func() { _ = client.Disconnect() })
+	ctx := context.Background()
+	prompt, err := client.GetDynamicPrompt(ctx, genkit.Init(ctx), "greeting")
+	if err != nil {
+		t.Fatalf("GetDynamicPrompt: %v", err)
+	}
+
+	if err := client.Restart(ctx); err != nil {
+		t.Fatalf("Restart: %v", err)
+	}
+	rendered, err := prompt.Render(ctx, map[string]string{"name": "Linus"})
+	if err != nil || len(rendered.Messages) != 1 || rendered.Messages[0].Text() != "Hello Linus" {
+		t.Fatalf("Render after Restart = (%v, %v), want Hello Linus", rendered, err)
 	}
 }
