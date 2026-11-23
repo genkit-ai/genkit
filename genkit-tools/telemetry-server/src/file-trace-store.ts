@@ -31,10 +31,6 @@ import { version as currentVersion } from './utils/version.js';
 const MAX_TRACES = 1000;
 const MAX_INDEX_FILES = 10;
 const MAX_LIST_ATTR_LENGTH = 1000;
-const INDEX_FORMAT_VERSION = 1;
-const REINDEX_LOCK_WAIT_MS = 10_000;
-const REINDEX_LOCK_POLL_MS = 50;
-const REINDEX_LOCK_STALE_MS = 30_000;
 
 /**
  * Implementation of trace store that persists traces on local disk.
@@ -98,43 +94,17 @@ export class LocalFileTraceStore implements TraceStore {
     return filePath;
   }
 
-  private async withIndexLock<T>(fn: () => Promise<T>): Promise<T> {
-    const lockPath = path.resolve(this.indexRoot, '..', 'traces_idx.lock');
-    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
-    await new Promise<void>((resolve, reject) => {
-      lockfile.lock(
-        lockPath,
-        {
-          wait: REINDEX_LOCK_WAIT_MS,
-          pollPeriod: REINDEX_LOCK_POLL_MS,
-          stale: REINDEX_LOCK_STALE_MS,
-        },
-        (err) => (err ? reject(err) : resolve())
-      );
-    });
-    try {
-      return await fn();
-    } finally {
-      await new Promise<void>((resolve) => {
-        lockfile.unlock(lockPath, () => resolve());
-      });
-    }
-  }
-
   async init() {
-    await this.withIndexLock(async () => {
-      const metadata = this.index.getMetadata();
-      // if the metadata file doesn't exist or it was for the older version or if
-      // there are too many index files we recreate the index.
-      if (
-        !metadata ||
-        metadata.version !== currentVersion ||
-        metadata.formatVersion !== INDEX_FORMAT_VERSION ||
-        this.index.listIndexFiles().length > MAX_INDEX_FILES
-      ) {
-        await this.reIndex();
-      }
-    });
+    const metadata = this.index.getMetadata();
+    // if the metadata file doesn't exist or it was for the older version or if
+    // there are too many index files we recreate the index.
+    if (
+      !metadata ||
+      metadata.version !== currentVersion ||
+      this.index.listIndexFiles().length > MAX_INDEX_FILES
+    ) {
+      await this.reIndex();
+    }
   }
 
   private async reIndex() {
@@ -149,7 +119,6 @@ export class LocalFileTraceStore implements TraceStore {
       if (!hasRootSpan) continue;
       this.index.add(trace);
     }
-    this.index.writeMetadata();
     logger.info(
       `Indexed ${list.traces.length} traces in ${Date.now() - time}ms in ${this.indexRoot}`
     );
@@ -375,31 +344,17 @@ export class Index {
   clear() {
     fs.rmSync(this.indexRoot, { recursive: true, force: true });
     fs.mkdirSync(this.indexRoot, { recursive: true });
-  }
-
-  writeMetadata() {
-    const metadataPath = this.metadataFileName();
-    const tmpPath = `${metadataPath}.${process.pid}.${Date.now()}.tmp`;
-    try {
-      fs.writeFileSync(
-        tmpPath,
-        JSON.stringify({
-          version: currentVersion,
-          formatVersion: INDEX_FORMAT_VERSION,
-        })
-      );
-      fs.renameSync(tmpPath, metadataPath);
-    } catch (err) {
-      fs.rmSync(tmpPath, { force: true });
-      throw err;
-    }
+    fs.appendFileSync(
+      this.metadataFileName(),
+      JSON.stringify({ version: currentVersion })
+    );
   }
 
   metadataFileName() {
     return path.resolve(this.indexRoot, 'genkit.metadata');
   }
 
-  getMetadata(): { version: string; formatVersion?: number } | undefined {
+  getMetadata(): { version: string } | undefined {
     try {
       return JSON.parse(
         fs.readFileSync(this.metadataFileName(), { encoding: 'utf8' })
