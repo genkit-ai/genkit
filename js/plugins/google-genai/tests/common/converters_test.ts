@@ -1560,11 +1560,12 @@ describe('toGeminiTool', () => {
         additionalProperties: false,
       },
       { type: 'object', minProperties: 1 },
-      {
-        type: 'object',
-        propertyNames: { pattern: '^tag_' },
-        maxProperties: 1,
-      },
+      { type: 'object', maxProperties: 1 },
+      { type: 'object', propertyNames: { pattern: '^tag_' } },
+      { type: 'object', unevaluatedProperties: true },
+      { type: 'object', dependencies: { a: ['b'] } },
+      { type: 'object', dependentRequired: { a: ['b'] } },
+      { type: 'object', dependentSchemas: { a: { required: ['b'] } } },
       { type: 'object', const: { mode: 'fast' } },
     ]) {
       assert.deepStrictEqual(
