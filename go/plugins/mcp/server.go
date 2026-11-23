@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 
 	"github.com/firebase/genkit/go/ai"
@@ -47,7 +48,7 @@ type GenkitMCPServer struct {
 	// Discovered actions from Genkit registry
 	toolActions     []ai.Tool
 	resourceActions []api.Action
-	promptDescs     []api.ActionDesc
+	promptNames     []string
 	actionsResolved bool
 }
 
@@ -89,7 +90,6 @@ func (s *GenkitMCPServer) setup() error {
 	// Store discovered actions
 	s.toolActions = toolActions
 	s.resourceActions = resourceActions
-	s.promptDescs = genkit.ListPromptDescriptors(s.genkit)
 
 	// Register tools with the MCP server
 	for _, tool := range toolActions {
@@ -105,8 +105,12 @@ func (s *GenkitMCPServer) setup() error {
 	}
 
 	// Register prompts for discovery and on-demand rendering by MCP clients.
-	for _, desc := range s.promptDescs {
-		s.registerPromptWithMCP(desc)
+	for _, desc := range genkit.ListPromptDescriptors(s.genkit) {
+		if err := s.registerPromptWithMCP(desc); err != nil {
+			slog.Warn("failed to register prompt with the MCP server, skipping it", "prompt", desc.Name, "error", err)
+			continue
+		}
+		s.promptNames = append(s.promptNames, desc.Name)
 	}
 
 	s.actionsResolved = true
@@ -114,7 +118,7 @@ func (s *GenkitMCPServer) setup() error {
 		"name", s.options.Name,
 		"tools", len(s.toolActions),
 		"resources", len(s.resourceActions),
-		"prompts", len(s.promptDescs))
+		"prompts", len(s.promptNames))
 	return nil
 }
 
@@ -347,8 +351,9 @@ func (s *GenkitMCPServer) Close() error {
 	return nil
 }
 
-// GetServer returns the underlying MCP server instance, with the Genkit tools
-// and resources registered on it. It returns nil if they cannot be discovered.
+// GetServer returns the underlying MCP server instance, with the Genkit tools,
+// resources and prompts registered on it. It returns nil if they cannot be
+// discovered.
 func (s *GenkitMCPServer) GetServer() *server.MCPServer {
 	if err := s.setup(); err != nil {
 		slog.Error("MCP server setup failed", "name", s.options.Name, "error", err)
@@ -377,11 +382,7 @@ func (s *GenkitMCPServer) ListRegisteredResources() []string {
 	return resourceNames
 }
 
-// ListRegisteredPrompts returns the names of all discovered prompts.
+// ListRegisteredPrompts returns the names of all prompts exposed by the server.
 func (s *GenkitMCPServer) ListRegisteredPrompts() []string {
-	var names []string
-	for _, desc := range s.promptDescs {
-		names = append(names, desc.Name)
-	}
-	return names
+	return slices.Clone(s.promptNames)
 }
