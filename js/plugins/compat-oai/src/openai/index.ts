@@ -192,10 +192,12 @@ const listActions = async (client: OpenAI): Promise<ActionMetadata[]> => {
 };
 
 export function openAIPlugin(options?: OpenAIPluginOptions): GenkitPluginV2 {
+  // objectSchemaRoot is internal: it reaches the models below through
+  // pluginOptions but is not a public option.
   const pluginOptions = {
     name: 'openai',
-    jsonSchemaRoot: 'object' as const,
     ...options,
+    objectSchemaRoot: true,
   };
   return openAICompatible({
     ...pluginOptions,

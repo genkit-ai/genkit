@@ -580,16 +580,29 @@ export function fromOpenAIChunkChoice(
 }
 
 /**
+ * Settings that only the plugins in this package set on the options they pass
+ * to their models. They are not part of the public {@link PluginOptions}.
+ * @internal
+ */
+export interface InternalModelOptions {
+  /**
+   * The host only accepts a `json_schema` response format whose root is an
+   * object (OpenAI), so other roots are wrapped and the reply unwrapped.
+   */
+  objectSchemaRoot?: boolean;
+}
+
+/**
  * Whether the request's output schema must be wrapped in an object (and the
  * reply unwrapped): the host only takes object roots and the schema has none.
  */
 export function needsRootWrapper(
   request: GenerateRequest,
-  pluginOptions?: Pick<PluginOptions, 'jsonSchemaRoot'>
+  pluginOptions?: InternalModelOptions
 ): boolean {
   const schema = request.output?.schema;
   return (
-    pluginOptions?.jsonSchemaRoot === 'object' &&
+    pluginOptions?.objectSchemaRoot === true &&
     request.output?.format === 'json' &&
     !!schema &&
     !hasObjectRoot(schema)
@@ -607,7 +620,7 @@ export function toOpenAIRequestBody(
   modelName: string,
   request: GenerateRequest,
   requestBuilder?: ModelRequestBuilder,
-  pluginOptions?: Pick<PluginOptions, 'jsonSchemaRoot'>
+  pluginOptions?: InternalModelOptions
 ) {
   const messages = toOpenAIMessages(
     request.messages,
@@ -726,7 +739,7 @@ export function openAIModelRunner(
   name: string,
   defaultClient: OpenAI,
   requestBuilder?: ModelRequestBuilder,
-  pluginOptions?: Omit<PluginOptions, 'apiKey'>
+  pluginOptions?: Omit<PluginOptions, 'apiKey'> & InternalModelOptions
 ) {
   return async (
     request: GenerateRequest,

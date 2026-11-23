@@ -27,17 +27,67 @@ export const WRAPPER_KEY = 'value';
 
 type JsonSchema = Record<string, unknown>;
 
-/** Whether the schema's root is an object, which every host accepts. */
+/**
+ * Whether the schema's root is explicitly an object. Anything else, including
+ * `properties` without a `type` (which also allows non-object values), is
+ * wrapped.
+ */
 export function hasObjectRoot(schema: JsonSchema): boolean {
-  if (schema.type === 'object') return true;
-  return schema.type === undefined && schema.properties !== undefined;
+  return schema.type === 'object';
 }
 
-/** Wraps `schema` as the single required property of an object schema. */
+/** Where the caller's schema sits once wrapped, as a JSON pointer. */
+const WRAPPED_ROOT = `#/properties/${WRAPPER_KEY}`;
+
+/** Keywords whose values are data, not subschemas, so `$ref` there is not a
+ * reference. */
+const DATA_KEYWORDS = new Set(['const', 'enum', 'default', 'examples']);
+
+/**
+ * Re-points local references into the caller's schema (`#`, `#/items/...`) at
+ * its new place under the wrapper. References into `$defs` and `definitions`
+ * are left alone, because those stay at the root.
+ */
+function rewriteRefs(node: unknown): unknown {
+  if (Array.isArray(node)) return node.map(rewriteRefs);
+  if (node === null || typeof node !== 'object') return node;
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(node)) {
+    if (key === '$ref' && typeof value === 'string') {
+      out[key] = rewriteRef(value);
+    } else if (DATA_KEYWORDS.has(key)) {
+      out[key] = value;
+    } else {
+      out[key] = rewriteRefs(value);
+    }
+  }
+  return out;
+}
+
+function rewriteRef(ref: string): string {
+  if (ref === '#') return WRAPPED_ROOT;
+  if (
+    !ref.startsWith('#/') ||
+    ref === '#/$defs' ||
+    ref.startsWith('#/$defs/') ||
+    ref === '#/definitions' ||
+    ref.startsWith('#/definitions/')
+  ) {
+    return ref;
+  }
+  return WRAPPED_ROOT + ref.slice(1);
+}
+
+/**
+ * Wraps `schema` as the single required property of an object schema.
+ * Definitions stay at the root so `#/$defs/...` references resolve, `$schema`
+ * is only meaningful there, and other local references are rewritten to the
+ * schema's new place.
+ */
 export function wrapSchemaRoot(schema: JsonSchema): JsonSchema {
-  // Definitions must stay at the root so `#/$defs/...` references resolve,
-  // and `$schema` is only meaningful at the root.
-  const { $schema, $defs, definitions, ...inner } = schema as JsonSchema & {
+  const { $schema, $defs, definitions, ...inner } = rewriteRefs(
+    schema
+  ) as JsonSchema & {
     $schema?: unknown;
     $defs?: unknown;
     definitions?: unknown;
@@ -69,16 +119,41 @@ export function unwrapValue(parsed: unknown): unknown {
   return parsed;
 }
 
-const PREFIX = new RegExp(`^\\s*\\{\\s*"${WRAPPER_KEY}"\\s*:\\s*`);
+/** The wrapper's opening, as the tokens it is made of. Whitespace may sit
+ * before and between them. */
+const PREFIX_TOKENS = ['{', `"${WRAPPER_KEY}"`, ':'];
+
+/**
+ * Matches the start of `text` against the wrapper's opening. Returns the
+ * length of the opening when it is all there, `'partial'` when `text` could
+ * still become it, and `'no'` when it cannot.
+ */
+function matchPrefix(text: string): number | 'partial' | 'no' {
+  let i = 0;
+  for (const token of PREFIX_TOKENS) {
+    while (i < text.length && /\s/.test(text[i])) i++;
+    const rest = text.slice(i, i + token.length);
+    if (rest !== token) {
+      return token.startsWith(rest) && i + rest.length === text.length
+        ? 'partial'
+        : 'no';
+    }
+    i += token.length;
+  }
+  while (i < text.length && /\s/.test(text[i])) i++;
+  return i;
+}
 
 /**
  * Strips the `{"value":` prefix and the closing `}` from streamed text so
  * chunks read as the caller's value (e.g. `[{...},` for an array) and the
  * output format's chunk parser sees what it expects.
  *
- * Text is held back until the prefix is seen, and trailing whitespace and
- * braces are held until more text arrives, because the last `}` belongs to the
- * wrapper only if nothing follows it. `flush` drops that final brace.
+ * Text is held back for as long as it could still be the start of the
+ * wrapper, so the result does not depend on how the stream is split. Trailing
+ * whitespace and braces are then held until more text arrives, because the
+ * last `}` belongs to the wrapper only if nothing follows it. `flush` drops
+ * that final brace. A reply that is not a wrapper passes through unchanged.
  */
 export class WrapperStreamUnwrapper {
   private started = false;
@@ -87,28 +162,18 @@ export class WrapperStreamUnwrapper {
   private held = '';
 
   push(delta: string): string {
-    if (!this.started) {
-      this.head += delta;
-      const match = PREFIX.exec(this.head);
-      if (!match) {
-        // Not a wrapper (or not enough text yet to tell): keep buffering
-        // unless it can no longer become one.
-        const lead = this.head.trimStart();
-        if (lead && (lead[0] !== '{' || this.head.length > 40)) {
-          this.started = true;
-          const out = this.head;
-          this.head = '';
-          return this.release(out);
-        }
-        return '';
-      }
-      this.started = true;
+    if (this.started) return this.release(delta);
+    this.head += delta;
+    const match = matchPrefix(this.head);
+    if (match === 'partial') return '';
+    this.started = true;
+    let out = this.head;
+    this.head = '';
+    if (match !== 'no') {
       this.wrapped = true;
-      const rest = this.head.slice(match[0].length);
-      this.head = '';
-      return this.release(rest);
+      out = out.slice(match);
     }
-    return this.release(delta);
+    return this.release(out);
   }
 
   private release(text: string): string {

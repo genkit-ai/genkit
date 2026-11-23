@@ -14,15 +14,19 @@
  * limitations under the License.
  */
 
+import { toJsonSchema, validateSchema } from '@genkit-ai/core/schema';
 import { afterEach, beforeEach, describe, expect, it } from '@jest/globals';
+import { genkit, z } from 'genkit';
 import type { GenerateRequest } from 'genkit/model';
 import OpenAI from 'openai';
+import { openAICompatible } from '../src';
 import {
   fromOpenAIChoice,
   needsRootWrapper,
   openAIModelRunner,
   toOpenAIRequestBody,
 } from '../src/model';
+import { openAI, type OpenAIPluginOptions } from '../src/openai';
 import {
   WrapperStreamUnwrapper,
   hasObjectRoot,
@@ -51,7 +55,7 @@ function request(schema: unknown, format = 'json'): GenerateRequest {
 describe('hasObjectRoot', () => {
   it.each([
     [{ type: 'object', properties: {} }, true],
-    [{ properties: { a: { type: 'string' } } }, true],
+    [{ properties: { a: { type: 'string' } } }, false],
     [{ type: 'array', items: {} }, false],
     [{ type: 'string', enum: ['a', 'b'] }, false],
     [{ type: 'integer' }, false],
@@ -90,6 +94,82 @@ describe('wrapSchemaRoot', () => {
   });
 });
 
+describe('wrapSchemaRoot local references', () => {
+  /** Validates `value` against the wrapped schema, as Ajv resolves refs. */
+  function validWrapped(schema: Record<string, unknown>, value: unknown) {
+    const result = validateSchema(
+      { value },
+      { jsonSchema: wrapSchemaRoot(schema) }
+    );
+    return result.valid;
+  }
+
+  it('re-points refs into a reused Zod schema', () => {
+    const Inner = z.object({ n: z.number() });
+    const schema = toJsonSchema({
+      schema: z.array(z.object({ first: Inner, second: Inner })),
+    }) as Record<string, unknown>;
+    expect(JSON.stringify(schema)).toContain('"$ref":"#/items/');
+
+    const wrapped = wrapSchemaRoot(schema) as any;
+    expect(JSON.stringify(wrapped)).toContain(
+      '"$ref":"#/properties/value/items/'
+    );
+    expect(validWrapped(schema, [{ first: { n: 1 }, second: { n: 2 } }])).toBe(
+      true
+    );
+    expect(
+      validWrapped(schema, [{ first: { n: 1 }, second: { n: 'x' } }])
+    ).toBe(false);
+  });
+
+  it('re-points recursive refs to the root', () => {
+    type Tree = { name: string; kids: Tree[] };
+    const Tree: z.ZodType<Tree> = z.lazy(() =>
+      z.object({ name: z.string(), kids: z.array(Tree) })
+    );
+    const schema = toJsonSchema({ schema: z.array(Tree) }) as Record<
+      string,
+      unknown
+    >;
+    const tree = [{ name: 'a', kids: [{ name: 'b', kids: [] }] }];
+    expect(validWrapped(schema, tree)).toBe(true);
+    expect(validWrapped(schema, [{ name: 'a', kids: [{ name: 1 }] }])).toBe(
+      false
+    );
+  });
+
+  it('rewrites "#" and leaves $defs, definitions and data alone', () => {
+    const wrapped = wrapSchemaRoot({
+      type: 'array',
+      items: {
+        anyOf: [
+          { $ref: '#' },
+          { $ref: '#/$defs/A' },
+          { $ref: '#/definitions/B' },
+          { $ref: '#/items/anyOf/1' },
+          { $ref: 'https://example.com/schema' },
+        ],
+      },
+      default: [{ $ref: '#/items' }],
+      $defs: { A: { type: 'string', items: { $ref: '#/items' } } },
+    }) as any;
+    expect(wrapped.properties.value.items.anyOf).toStrictEqual([
+      { $ref: '#/properties/value' },
+      { $ref: '#/$defs/A' },
+      { $ref: '#/definitions/B' },
+      { $ref: '#/properties/value/items/anyOf/1' },
+      { $ref: 'https://example.com/schema' },
+    ]);
+    expect(wrapped.properties.value.default).toStrictEqual([
+      { $ref: '#/items' },
+    ]);
+    expect(wrapped.$defs.A.items).toStrictEqual({
+      $ref: '#/properties/value/items',
+    });
+  });
+});
+
 describe('unwrapValue', () => {
   it('returns the wrapped value', () => {
     expect(unwrapValue({ value: [1, 2] })).toStrictEqual([1, 2]);
@@ -104,11 +184,11 @@ describe('unwrapValue', () => {
 });
 
 describe('needsRootWrapper', () => {
-  const object = { jsonSchemaRoot: 'object' as const };
+  const object = { objectSchemaRoot: true };
   it('is true only for an object-only host, json format, non-object root', () => {
     expect(needsRootWrapper(request(arraySchema), object)).toBe(true);
     expect(
-      needsRootWrapper(request(arraySchema), { jsonSchemaRoot: 'any' })
+      needsRootWrapper(request(arraySchema), { objectSchemaRoot: false })
     ).toBe(false);
     expect(needsRootWrapper(request(arraySchema), undefined)).toBe(false);
     expect(needsRootWrapper(request({ type: 'object' }), object)).toBe(false);
@@ -124,7 +204,7 @@ describe('toOpenAIRequestBody with non-object roots', () => {
       request(arraySchema),
       undefined,
       {
-        jsonSchemaRoot: 'object',
+        objectSchemaRoot: true,
       }
     ) as any;
     expect(body.response_format).toStrictEqual({
@@ -139,7 +219,7 @@ describe('toOpenAIRequestBody with non-object roots', () => {
       config: { strict: true },
     } as GenerateRequest;
     const body = toOpenAIRequestBody('gpt-5', req, undefined, {
-      jsonSchemaRoot: 'object',
+      objectSchemaRoot: true,
     }) as any;
     expect(body.response_format.json_schema.strict).toBe(true);
     expect(body.response_format.json_schema.schema.required).toStrictEqual([
@@ -157,7 +237,7 @@ describe('toOpenAIRequestBody with non-object roots', () => {
     );
     const obj = { type: 'object', properties: { a: { type: 'string' } } };
     const body = toOpenAIRequestBody('gpt-4o', request(obj), undefined, {
-      jsonSchemaRoot: 'object',
+      objectSchemaRoot: true,
     }) as any;
     expect(body.response_format.json_schema.schema).toStrictEqual(obj);
   });
@@ -222,8 +302,16 @@ describe('WrapperStreamUnwrapper', () => {
     expect(u.flush()).toBe('');
   });
 
+  it('gives the same result however the opening is split', () => {
+    const spaced = '{' + ' '.repeat(42) + '"value":1}';
+    expect(run([spaced])).toBe('1');
+    expect(run(spaced.split(''))).toBe('1');
+  });
+
   it('passes through output that is not a wrapper', () => {
     expect(run(['[1,', '2]'])).toBe('[1,2]');
+    expect(run('{"valuable":1}'.split(''))).toBe('{"valuable":1}');
+    expect(run('{"other":1}'.split(''))).toBe('{"other":1}');
     expect(
       run(['{"other":1,"more":"text that is long enough to decide"}'])
     ).toBe('{"other":1,"more":"text that is long enough to decide"}');
@@ -246,7 +334,7 @@ describe('openAIModelRunner with a wrapped root', () => {
       undefined,
       {
         name: 'openai',
-        jsonSchemaRoot: 'object',
+        objectSchemaRoot: true,
       }
     );
 
@@ -449,5 +537,64 @@ describe('openAIModelRunner with a wrapped root', () => {
         toolRequest: { ref: 'call_1', name: 'lookup', input: {} },
       });
     });
+  });
+});
+
+describe('plugins and the object-root setting', () => {
+  let server: FakeOpenAIServer;
+  beforeEach(async () => {
+    server = new FakeOpenAIServer();
+    await server.start();
+  });
+  afterEach(() => server.stop());
+
+  function reply(content: string) {
+    server.setNextResponse({
+      body: {
+        choices: [
+          { message: { role: 'assistant', content }, finish_reason: 'stop' },
+        ],
+      },
+    });
+  }
+
+  it('openAI() wraps a non-object root and unwraps the reply', async () => {
+    reply('{"value":["a","b"]}');
+    const ai = genkit({
+      // baseURL is not a typed openAI() option, but it reaches the client.
+      plugins: [
+        openAI({ apiKey: 'k', baseURL: server.baseUrl } as OpenAIPluginOptions),
+      ],
+    });
+    const { output } = await ai.generate({
+      model: 'openai/gpt-4o',
+      prompt: 'hi',
+      output: { schema: z.array(z.string()) },
+    });
+    const sent = server.requests[0].body.response_format.json_schema.schema;
+    expect(sent.type).toBe('object');
+    expect(sent.properties.value.type).toBe('array');
+    expect(output).toStrictEqual(['a', 'b']);
+  });
+
+  it('openAICompatible() sends the schema unchanged', async () => {
+    reply('["a","b"]');
+    const ai = genkit({
+      plugins: [
+        openAICompatible({
+          name: 'host',
+          apiKey: 'k',
+          baseURL: server.baseUrl,
+        }),
+      ],
+    });
+    const { output } = await ai.generate({
+      model: 'host/some-model',
+      prompt: 'hi',
+      output: { schema: z.array(z.string()), constrained: true },
+    });
+    const sent = server.requests[0].body.response_format?.json_schema?.schema;
+    expect(sent?.properties?.value).toBeUndefined();
+    expect(output).toStrictEqual(['a', 'b']);
   });
 });
