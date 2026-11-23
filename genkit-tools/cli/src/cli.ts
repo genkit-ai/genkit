@@ -24,31 +24,32 @@ import {
   record,
 } from '@genkit-ai/tools-common/utils';
 import { Command, program } from 'commander';
-import { config } from './commands/config';
-import { devTestModel } from './commands/dev-test-model';
-import { docsList, docsRead, docsSearch } from './commands/docs';
-import { evalExtractData } from './commands/eval-extract-data';
-import { evalFlow } from './commands/eval-flow';
-import { evalRun } from './commands/eval-run';
-import { flowBatchRun } from './commands/flow-batch-run';
-import { flowRun } from './commands/flow-run';
-import { initAiTools } from './commands/init-ai-tools/index';
-import { logList } from './commands/log-list';
-import { mcp } from './commands/mcp';
-import { getPluginCommands, getPluginSubCommand } from './commands/plugins';
+import { config } from './commands/config.js';
+import { devTestModel } from './commands/dev-test-model.js';
+import { docsList, docsRead, docsSearch } from './commands/docs.js';
+import { evalExtractData } from './commands/eval-extract-data.js';
+import { evalFlow } from './commands/eval-flow.js';
+import { evalRun } from './commands/eval-run.js';
+import { flowBatchRun } from './commands/flow-batch-run.js';
+import { flowRun } from './commands/flow-run.js';
+import { initAiTools } from './commands/init-ai-tools.js';
+import { logList } from './commands/log-list.js';
+import { mcp } from './commands/mcp.js';
+import { getPluginCommands, getPluginSubCommand } from './commands/plugins.js';
 import {
   SERVER_HARNESS_COMMAND,
   serverHarness,
-} from './commands/server-harness';
-import { start } from './commands/start';
-import { startFlutter } from './commands/start-flutter';
-import { traceGet } from './commands/trace-get';
-import { traceList } from './commands/trace-list';
-import { uiStart } from './commands/ui-start';
-import { uiStop } from './commands/ui-stop';
+} from './commands/server-harness.js';
+import { startFlutter } from './commands/start-flutter.js';
+import { start } from './commands/start.js';
+import { traceGet } from './commands/trace-get.js';
+import { traceList } from './commands/trace-list.js';
+import { uiStart } from './commands/ui-start.js';
+import { uiStop } from './commands/ui-stop.js';
+import { warnIfLegacyGenkitContext } from './utils/legacy-context-warning.js';
 import { detectCLIRuntime } from './utils/runtime-detector.js';
-import { showUpdateNotification } from './utils/updates';
-import { version } from './utils/version';
+import { showUpdateNotification } from './utils/updates.js';
+import { version } from './utils/version.js';
 
 /**
  * All commands need to be directly registered in this list.
@@ -108,7 +109,8 @@ export async function startCLI(): Promise<void> {
 
       if (
         !process.argv.includes('--non-interactive') &&
-        commandName !== 'config'
+        commandName !== 'config' &&
+        commandName !== 'mcp'
       ) {
         await notifyAnalyticsIfFirstRun();
       }
@@ -116,6 +118,20 @@ export async function startCLI(): Promise<void> {
       const { isCompiledBinary } = detectCLIRuntime();
       const projectRoot = await findProjectRoot();
       const projectRuntime = await detectRuntime(projectRoot);
+      if (
+        process.stdout.isTTY &&
+        !process.argv.includes('--non-interactive') &&
+        process.argv[2] !== SERVER_HARNESS_COMMAND &&
+        commandName !== 'mcp' &&
+        commandName !== 'config' &&
+        commandName !== 'init:ai-tools'
+      ) {
+        try {
+          await warnIfLegacyGenkitContext(projectRoot);
+        } catch (e) {
+          logger.debug('Failed to check for legacy GENKIT.md context', e);
+        }
+      }
       await record(
         new RunCommandEvent(
           commandName,
@@ -126,12 +142,14 @@ export async function startCLI(): Promise<void> {
     });
 
   // Check for updates and show notification if available,
-  // unless --no-update-notification is set
+  // unless --no-update-notification is set or running the mcp stdio server
   // Run this synchronously to ensure it shows before command execution
   const hasNoUpdateNotification = process.argv.includes(
     '--no-update-notification'
   );
-  if (!hasNoUpdateNotification) {
+  const { operands } = program.parseOptions(process.argv.slice(2));
+  const isMcpCommand = operands[0] === 'mcp';
+  if (!hasNoUpdateNotification && !isMcpCommand) {
     try {
       await showUpdateNotification();
     } catch (e) {
@@ -146,7 +164,7 @@ export async function startCLI(): Promise<void> {
     program.addCommand(serverHarness);
   }
 
-  const deprecatedCommands = new Set([uiStart, uiStop]);
+  const deprecatedCommands = new Set([uiStart, uiStop, initAiTools]);
   for (const command of commands) {
     program.addCommand(command, {
       hidden: deprecatedCommands.has(command),

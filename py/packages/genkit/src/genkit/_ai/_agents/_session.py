@@ -48,6 +48,7 @@ def reserve_snapshot_id() -> str:
 # Custom state is a Pydantic model, so StateT is bound to BaseModel; the Any
 # default covers schemaless (client-managed) sessions where custom is plain JSON.
 StateT = TypeVarExt('StateT', bound=BaseModel, default=Any)
+"""Type of a session's custom state: a Pydantic model, or `Any` for schemaless sessions."""
 SessionContextT = TypeVarExt('SessionContextT', default=Any)
 # A store only ever hands custom state back out (it's a phantom over the wire
 # format), so its parameter is covariant.

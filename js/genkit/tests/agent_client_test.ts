@@ -805,7 +805,7 @@ describe('custom transport', () => {
   });
 
   // Type-level checks (ex. rejecting undeclared options) live in
-  // `tests/types/`, checked by `tsconfig.types-test.json`.
+  // `tests/types/`, checked by `tsconfig.test.json`.
 
   it('can decorate the HTTP transport', async () => {
     const originalFetch = globalThis.fetch;

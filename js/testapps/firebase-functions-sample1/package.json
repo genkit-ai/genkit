@@ -3,9 +3,12 @@
     "build": "(cd functions && npm i && npm run build) && (npm run build:js)",
     "build:js": "webpack"
   },
+  "engines": {
+    "node": ">=24"
+  },
   "private": true,
   "dependencies": {
-    "firebase": "^10.9.0",
+    "firebase": "^13.2.0",
     "jquery": "^3.7.1"
   },
   "devDependencies": {

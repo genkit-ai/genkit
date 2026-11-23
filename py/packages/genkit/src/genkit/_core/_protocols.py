@@ -20,14 +20,14 @@ Keeping interfaces here instead of in their implementation modules breaks
 circular-import cycles.  A realistic example in Genkit is the Registry/Plugin/Middleware cycle:
 
     1. Registry (_registry.py) imports Plugin (_plugin.py) to manage plugins.
-    2. Plugin (_plugin.py) imports GenerateMiddleware (_middleware.py) to type-hint list_middleware.
-    3. BaseMiddleware/GenerateMiddleware (_middleware.py) need to annotate their request-scoped
+    2. Plugin (_plugin.py) imports Middleware (_middleware.py) to type-hint list_middleware.
+    3. Middleware/_MiddlewareMetadata (_middleware.py) need to annotate their request-scoped
        registry attribute, which refers back to Registry.
 
     If _middleware.py imported Registry from _registry.py directly, it would complete the
     import cycle: _registry -> _plugin -> _middleware -> _registry.
 
-    Solution: BaseMiddleware type-hints with RegistryLike from this leaf module, breaking the cycle.
+    Solution: Middleware type-hints with RegistryLike from this leaf module, breaking the cycle.
 """
 
 from __future__ import annotations

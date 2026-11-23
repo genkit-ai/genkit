@@ -17,12 +17,10 @@
   "dependencies": {
     "@genkit-ai/google-genai": "workspace:*",
     "@genkit-ai/vertexai": "workspace:*",
-    "@opentelemetry/sdk-trace-base": "~1.25.0",
     "genkit": "workspace:*"
   },
   "devDependencies": {
     "rimraf": "^6.0.1",
-    "tsx": "^4.19.2",
     "typescript": "^5.9.3"
   }
 }

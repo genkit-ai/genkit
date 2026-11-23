@@ -22,8 +22,8 @@ import { writeFile } from 'fs/promises';
 import {
   EXPERIMENTAL_AUTH_OPTION_HELP,
   runWithManager,
-} from '../utils/manager-utils';
-import { parseJson } from '../utils/option-parsers';
+} from '../utils/manager-utils.js';
+import { parseJson } from '../utils/option-parsers.js';
 
 interface FlowRunOptions {
   /** --experimental-auth. */
@@ -35,6 +35,7 @@ interface FlowRunOptions {
 
 /** Command to run a flow. */
 export const flowRun = new Command('flow:run')
+  .allowExcessArguments(true)
   .usage('[options] <flowName> [data] [-- <command...>]')
   .description('run a flow using provided data as input')
   .argument('<flowName>', 'name of the flow to run')

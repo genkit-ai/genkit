@@ -42,9 +42,9 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from genkit._core._action import Action, BidiAction, input_from_json, parse_action_key
 from genkit._core._constants import GENKIT_VERSION
 from genkit._core._environment import is_dev_environment
-from genkit._core._error import get_reflection_json
+from genkit._core._error import Interrupt, get_reflection_json, interrupt_escape_error
 from genkit._core._logger import get_logger
-from genkit._core._middleware import GenerateMiddleware
+from genkit._core._middleware import _MiddlewareMetadata
 from genkit._core._model import AgentInit, AgentInput, ModelRef
 from genkit._core._reflection_config import REFLECTION_SECRET_HEADER, secrets_equal
 from genkit._core._registry import Registry
@@ -142,8 +142,8 @@ class ActionRunner:
                 else None
             )
             # A bidi action's fn already gives a single-turn view of a connection
-            # when driven through run() (seed one input, stream chunks, return the
-            # output), so the HTTP path just needs run(). The only bidi-specific
+            # when driven through _run() (seed one input, stream chunks, return the
+            # output), so the HTTP path just needs _run(). The only bidi-specific
             # step is normalizing the agent payload: minting a session id for a
             # server-store agent and defaulting an absent turn to an empty input.
             input_val = self.payload.get('input')
@@ -155,7 +155,7 @@ class ActionRunner:
                 else:
                     input_val = AgentInput.model_validate(as_agent_input_dict(input_val))
 
-            output = await self.action.run(
+            output = await self.action._run(
                 input=input_from_json(input_val),
                 on_chunk=on_chunk,
                 context=self.payload.get('context', {}),
@@ -174,12 +174,14 @@ class ActionRunner:
             self.queue.put_nowait(json.dumps(payload))
         except asyncio.CancelledError:
             raise
-        except Exception as e:
+        except (Exception, Interrupt) as e:
+            # A tool run on its own has no generate loop to pause, so its
+            # Interrupt is reported like any other failure.
             # Dev UI already shows the error + stack from the reflection response.
             # Dumping a full traceback here turns every playground failure into
             # terminal noise.
             logger.debug('Action failed: %s: %s', type(e).__name__, e, exc_info=True)
-            error = get_reflection_json(e, trace_id=self.trace_id)
+            error = get_reflection_json(interrupt_escape_error(e) or e, trace_id=self.trace_id)
             self.queue.put_nowait(json.dumps({'error': error.model_dump(by_alias=True)}))
         finally:
             self.trace_ready.set()
@@ -285,8 +287,8 @@ def create_reflection_asgi_app(
             if type_param == 'middleware':
                 serialized: dict[str, Any] = {}
                 for key, val in raw_values.items():
-                    assert isinstance(val, GenerateMiddleware), (
-                        f'registry middleware/{key!r} must be GenerateMiddleware, got {type(val).__name__}'
+                    assert isinstance(val, _MiddlewareMetadata), (
+                        f'registry middleware/{key!r} must be _MiddlewareMetadata, got {type(val).__name__}'
                     )
                     serialized[key] = val.model_dump(by_alias=True, exclude_none=True, mode='json')
                 raw_values = serialized

@@ -31,7 +31,7 @@ Example:
 
     # 2. Generate content using GPT-5.2
     res = await ai.generate(
-        model=OpenAI.gpt_model('gpt-5.2'),
+        model=OpenAI.gpt('gpt-5.2'),
         prompt='Suggest 2 catchy names for an AI newsletter.',
     )
 

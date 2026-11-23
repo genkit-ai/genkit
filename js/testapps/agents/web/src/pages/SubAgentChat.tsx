@@ -65,8 +65,7 @@ export default function SubAgentChat() {
               const tr = part.toolRequest;
               // Format call_agent delegations nicely
               const inp = tr.input as
-                | { agent?: string; task?: string }
-                | undefined;
+                { agent?: string; task?: string } | undefined;
               const label =
                 tr.name === 'call_agent' && inp?.agent
                   ? `🤝 Delegating to "${inp.agent}": ${inp.task ?? ''}`
@@ -76,8 +75,7 @@ export default function SubAgentChat() {
               const tr = part.toolResponse;
               // Format call_agent responses nicely
               const out = tr.output as
-                | { response?: string; agentName?: string }
-                | undefined;
+                { response?: string; agentName?: string } | undefined;
               const label =
                 tr.name === 'call_agent' && out?.agentName
                   ? `✅ "${out.agentName}" responded: ${out.response ?? ''}`

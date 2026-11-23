@@ -20,11 +20,11 @@ from flask import Flask
 from genkit_flask import genkit_flask_handler
 from genkit_google_genai import GoogleAI
 
-from genkit import ActionRunContext, Genkit
+from genkit import FlowContext, Genkit
 
 ai = Genkit(
     plugins=[GoogleAI()],
-    model=GoogleAI.gemini_model('gemini-flash-latest'),
+    model=GoogleAI.gemini('gemini-flash-latest'),
 )
 app = Flask(__name__)
 
@@ -32,7 +32,7 @@ app = Flask(__name__)
 @app.post('/say_hi')
 @genkit_flask_handler(ai)
 @ai.flow()
-async def say_hi(name: str, ctx: ActionRunContext) -> str:
+async def say_hi(name: str, ctx: FlowContext) -> str:
     # generate_stream + send_chunk is how the Flask handler streams tokens.
     stream = ai.generate_stream(prompt=f'tell a short joke about {name}')
     async for chunk in stream.stream:

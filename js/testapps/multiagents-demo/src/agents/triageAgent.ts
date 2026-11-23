@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { googleAI } from '@genkit-ai/google-genai';
 import { ai } from '../config/genkit';
 import { transferToAgent } from './interrupts';
 
@@ -21,7 +22,7 @@ import { transferToAgent } from './interrupts';
 export const agent = ai.definePrompt({
   name: 'triageAgent',
   description: 'Triage Agent',
-  model: 'googleai/gemini-2.5-flash',
+  model: googleAI.model('gemini-flash-latest'),
   tools: [transferToAgent],
   system: `You are an AI customer service agent for TechStore Computer Shop.
     Greet the user and ask them how you can help. Route them to the appropriate specialist agent:

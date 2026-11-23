@@ -17,6 +17,7 @@
 """Module containing various core constants."""
 
 import importlib.metadata
+from typing import Final
 
 
 def package_version() -> str:
@@ -28,6 +29,8 @@ def package_version() -> str:
 
 
 # Sent over HTTP in the client header and on the OTLP log scope.
-GENKIT_VERSION = package_version()
+GENKIT_VERSION: Final[str] = package_version()
 
-GENKIT_CLIENT_HEADER = f'genkit-python/{GENKIT_VERSION}'
+# Header value plugins send in ``x-goog-api-client`` and ``user-agent``.
+GENKIT_USER_AGENT: Final[str] = f'genkit-python/{GENKIT_VERSION}'
+"""Header value plugins send in x-goog-api-client and user-agent."""

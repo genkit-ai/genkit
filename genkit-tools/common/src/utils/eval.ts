@@ -19,7 +19,7 @@ import { randomUUID } from 'crypto';
 import { createReadStream } from 'fs';
 import { readFile } from 'fs/promises';
 import { createInterface } from 'readline';
-import type { BaseRuntimeManager } from '../manager';
+import type { BaseRuntimeManager } from '../manager/index.js';
 import {
   findToolsConfig,
   isEvalField,
@@ -28,7 +28,7 @@ import {
   type InputStepSelector,
   type OutputStepSelector,
   type StepSelector,
-} from '../plugin';
+} from '../plugin/index.js';
 import {
   DatasetSchema,
   EvalInputDatasetSchema,
@@ -48,9 +48,9 @@ import {
   type NestedSpanData,
   type RetrieverResponse,
   type TraceData,
-} from '../types';
-import { logger } from './logger';
-import { stackTraceSpans } from './trace';
+} from '../types/index.js';
+import { logger } from './logger.js';
+import { stackTraceSpans } from './trace.js';
 
 export type EvalExtractorFn = (t: TraceData) => any;
 

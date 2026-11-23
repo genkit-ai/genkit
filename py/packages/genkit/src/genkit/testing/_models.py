@@ -26,10 +26,10 @@ from typing import Any, cast
 
 from pydantic import BaseModel
 
-from genkit import ActionRunContext, Genkit, Message, ModelResponse, ModelResponseChunk, Part
+from genkit import Genkit, Message, ModelResponse, ModelResponseChunk, Part
 from genkit._core._action import Action
 from genkit._core._typing import Role
-from genkit.model import ModelRequest
+from genkit.model import ModelContext, ModelRequest
 
 ResponseCallback = Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]] | ModelResponse[Any]]
 
@@ -62,7 +62,7 @@ class ScriptedModel:
     async def model_fn(
         self,
         request: ModelRequest,
-        ctx: ActionRunContext,
+        ctx: ModelContext,
     ) -> ModelResponse:
         """Handle a model execution turn."""
         self.last_request = deepcopy(request)
@@ -103,7 +103,7 @@ def define_scripted_model(
 
     async def model_fn(
         request: ModelRequest,
-        ctx: ActionRunContext,
+        ctx: ModelContext,
     ) -> ModelResponse:
         return await model.model_fn(request, ctx)
 
@@ -121,7 +121,7 @@ class EchoModel:
     async def model_fn(
         self,
         request: ModelRequest,
-        ctx: ActionRunContext,
+        ctx: ModelContext,
     ) -> ModelResponse:
         """Echo the request messages, tool choice, and config back in the response text."""
         self.last_request = request
@@ -135,7 +135,7 @@ class EchoModel:
 
         if request.config:
             if isinstance(request.config, BaseModel):
-                config_json = request.config.model_dump_json()
+                config_json = request.config.model_dump_json(by_alias=True, exclude_none=True)
             else:
                 config_json = json.dumps(request.config, separators=(',', ':'))
         else:
@@ -178,7 +178,7 @@ def define_echo_model(
 
     async def model_fn(
         request: ModelRequest,
-        ctx: ActionRunContext,
+        ctx: ModelContext,
     ) -> ModelResponse:
         return await echo.model_fn(request, ctx)
 
@@ -202,7 +202,7 @@ class StaticResponseModel:
     async def model_fn(
         self,
         request: ModelRequest,
-        _ctx: ActionRunContext,
+        _ctx: ModelContext,
     ) -> ModelResponse:
         """Return the preconfigured static message."""
         self.last_request = request
@@ -220,7 +220,7 @@ def define_static_response_model(
 
     async def model_fn(
         request: ModelRequest,
-        ctx: ActionRunContext,
+        ctx: ModelContext,
     ) -> ModelResponse:
         return await static.model_fn(request, ctx)
 

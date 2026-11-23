@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 
-import type { PromptMessage } from '@modelcontextprotocol/sdk/types.js' with { 'resolution-mode': 'import' };
+import type { PromptMessage } from '@modelcontextprotocol/sdk/types.js' with {
+  'resolution-mode': 'import',
+};
 import { type MessageData, type Part } from 'genkit';
 
 const ROLE_MAP = {

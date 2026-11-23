@@ -44,8 +44,7 @@ function toDocuments(
   vectorField: string,
   contentField: string | ((snap: QueryDocumentSnapshot) => Part[]),
   metadataFields?:
-    | string[]
-    | ((snap: QueryDocumentSnapshot) => Record<string, any>)
+    string[] | ((snap: QueryDocumentSnapshot) => Record<string, any>)
 ): DocumentData[] {
   return result.docs.map((d) => {
     const out: DocumentData = { content: toContent(d, contentField) };
@@ -116,8 +115,7 @@ export function defineFirestoreRetriever(
      * metadata fields from a snapshot.
      **/
     metadataFields?:
-      | string[]
-      | ((snap: QueryDocumentSnapshot) => Record<string, any>);
+      string[] | ((snap: QueryDocumentSnapshot) => Record<string, any>);
   }
 ): RetrieverAction {
   const {

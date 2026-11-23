@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
+import { randomUUID } from 'crypto';
 import { createInterface } from 'readline/promises';
-import { v4 as uuidV4 } from 'uuid';
-import type { AnalyticsInfo } from '../types/analytics';
-import { configstore, getUserSettings } from './configstore';
-import { logger } from './logger';
-import { toolsPackage } from './package';
+import type { AnalyticsInfo } from '../types/analytics.js';
+import { configstore, getUserSettings } from './configstore.js';
+import { logger } from './logger.js';
+import { toolsPackage } from './package.js';
 
 // This code is largely adapted from
 // https://github.com/firebase/firebase-tools/blob/master/src/track.ts
@@ -387,7 +387,7 @@ function getSession(): AnalyticsSession {
   // ClientID is sticky
   let clientId: string | undefined = configstore.get(CONFIGSTORE_CLIENT_KEY);
   if (!clientId) {
-    clientId = uuidV4();
+    clientId = randomUUID();
     configstore.set(CONFIGSTORE_CLIENT_KEY, clientId);
   }
 

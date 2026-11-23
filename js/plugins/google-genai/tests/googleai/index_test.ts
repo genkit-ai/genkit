@@ -31,10 +31,6 @@ import {
 import { googleAI } from '../../src/googleai/index.js';
 import { Model } from '../../src/googleai/types.js';
 import { MISSING_API_KEY_ERROR } from '../../src/googleai/utils.js';
-import {
-  TEST_ONLY as VEO_TEST_ONLY,
-  VeoConfigSchema,
-} from '../../src/googleai/veo.js';
 
 describe('GoogleAI Plugin', () => {
   let originalEnv: NodeJS.ProcessEnv;
@@ -85,17 +81,6 @@ describe('GoogleAI Plugin', () => {
         const model = await ai.registry.lookupAction(modelPath);
         assert.ok(model, `${modelName} should be registered at ${modelPath}`);
         assert.strictEqual(model?.__action.name, `googleai/${modelName}`);
-      }
-    });
-
-    it('should register all known and hidden Veo models', async () => {
-      const ai = genkit({ plugins: [googleAI()] });
-      for (const modelName in VEO_TEST_ONLY.ALL_MODELS) {
-        const modelPath = `/background-model/googleai/${modelName}`;
-        const expectedBaseName = `googleai/${modelName}`;
-        const model = await ai.registry.lookupAction(modelPath);
-        assert.ok(model, `${modelName} should be registered at ${modelPath}`);
-        assert.strictEqual(model?.__action.name, expectedBaseName);
       }
     });
 
@@ -150,8 +135,6 @@ describe('GoogleAI Plugin', () => {
   describe('Resolver via lookupAction', () => {
     const testGeminiModelName = 'gemini-custom-pro';
     const testGeminiModelPath = `/model/googleai/${testGeminiModelName}`;
-    const testVeoModelName = 'veo-custom';
-    const testVeoModelPath = `/background-model/googleai/${testVeoModelName}`;
     const testEmbedderName = 'embedding-custom-001';
     const testEmbedderPath = `/embedder/googleai/${testEmbedderName}`;
 
@@ -168,14 +151,22 @@ describe('GoogleAI Plugin', () => {
       );
     });
 
-    it('should register a new Veo model when looked up', async () => {
+    it('should throw a clear error for shut-down Veo models', async () => {
       const ai = genkit({ plugins: [googleAI()] });
-      const model = await ai.registry.lookupAction(testVeoModelPath);
-      assert.ok(
-        model,
-        `${testVeoModelName} should be resolvable and registered`
+      // As a background model (how Veo was called) and as a plain model.
+      await assert.rejects(
+        ai.registry.lookupAction(
+          '/background-model/googleai/veo-3.1-generate-preview'
+        ),
+        /Veo models on the Gemini API have been shut down\. Use gemini-omni-1\.1-flash/
       );
-      assert.strictEqual(model?.__action.name, `googleai/${testVeoModelName}`);
+      await assert.rejects(
+        ai.generate({
+          model: 'googleai/veo-3.1-generate-preview',
+          prompt: 'a cat',
+        }),
+        /Veo models on the Gemini API have been shut down\. Use gemini-omni-1\.1-flash/
+      );
     });
 
     it('should throw a clear error for shut-down Imagen models', async () => {
@@ -327,37 +318,6 @@ describe('GoogleAI Plugin', () => {
       );
     });
 
-    it('should return a Veo model reference with correct schema', () => {
-      const modelRef = googleAI.model('veo-new-model');
-      assert.strictEqual(
-        modelRef.configSchema,
-        VeoConfigSchema,
-        'Should have VeoConfigSchema'
-      );
-    });
-
-    it('should have config values for veo model', () => {
-      const modelRef = googleAI.model('veo-new-model', {
-        aspectRatio: '9:16',
-        durationSeconds: 8,
-      });
-      assert.strictEqual(
-        modelRef.configSchema,
-        VeoConfigSchema,
-        'Should have VeoConfigSchema'
-      );
-      assert.strictEqual(
-        modelRef.config?.aspectRatio,
-        '9:16',
-        'should be 9:16'
-      );
-      assert.strictEqual(
-        modelRef.config?.durationSeconds,
-        8,
-        'should be 8 seconds'
-      );
-    });
-
     it('should return a gemini model reference for unknown model names', () => {
       const modelRef = googleAI.model('foo-model');
       assert.strictEqual(
@@ -445,6 +405,7 @@ describe('GoogleAI Plugin', () => {
           supportedGenerationMethods: ['embedContent'],
         },
         {
+          // Veo models on the Gemini API have been shut down: not listed.
           name: 'models/veo-3.1-generate-preview',
           supportedGenerationMethods: ['predictLongRunning'],
         },
@@ -462,11 +423,7 @@ describe('GoogleAI Plugin', () => {
       const actionNames = actions.map((a) => a.name).sort();
       assert.deepStrictEqual(
         actionNames,
-        [
-          'googleai/gemini-2.5-pro',
-          'googleai/gemini-embedding-001',
-          'googleai/veo-3.1-generate-preview',
-        ].sort()
+        ['googleai/gemini-2.5-pro', 'googleai/gemini-embedding-001'].sort()
       );
 
       const modelAction = actions.find(
@@ -478,11 +435,6 @@ describe('GoogleAI Plugin', () => {
         (a) => a.name === 'googleai/gemini-embedding-001'
       );
       assert.strictEqual(embedderAction?.actionType, 'embedder');
-
-      const veoAction = actions.find(
-        (a) => a.name === 'googleai/veo-3.1-generate-preview'
-      );
-      assert.strictEqual(veoAction?.actionType, 'model');
     });
 
     it('should filter out deprecated models', async () => {
@@ -494,11 +446,6 @@ describe('GoogleAI Plugin', () => {
         {
           name: 'models/gemini-pro-deprecated',
           supportedGenerationMethods: ['generateContent'],
-          description: 'This model is deprecated.',
-        },
-        {
-          name: 'models/veo-deprecated',
-          supportedGenerationMethods: ['predictLongRunning'],
           description: 'This model is deprecated.',
         },
         {

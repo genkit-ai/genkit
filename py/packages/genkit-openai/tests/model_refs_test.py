@@ -14,7 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the OpenAI.gpt_model typed ref constructor."""
+"""Tests for the OpenAI.gpt typed ref constructor."""
 
 from typing import get_args, get_type_hints
 from unittest.mock import MagicMock
@@ -28,36 +28,36 @@ from genkit import GenkitError
 from genkit.model import ModelRef
 
 
-def test_gpt_model_returns_model_ref() -> None:
-    """gpt_model namespaces the name and binds OpenAIConfig."""
-    ref = OpenAI.gpt_model('gpt-4o')
+def test_gpt_returns_model_ref() -> None:
+    """gpt namespaces the name and binds OpenAIConfig."""
+    ref = OpenAI.gpt('gpt-4o')
 
     assert isinstance(ref, ModelRef)
     assert ref.name == 'openai/gpt-4o'
     assert ref.config_schema is OpenAIConfig
 
 
-def test_gpt_model_strips_own_prefix() -> None:
+def test_gpt_strips_own_prefix() -> None:
     """An already-namespaced name is not double-prefixed."""
-    assert OpenAI.gpt_model('openai/gpt-4o').name == 'openai/gpt-4o'
+    assert OpenAI.gpt('openai/gpt-4o').name == 'openai/gpt-4o'
 
 
-def test_gpt_model_keeps_foreign_prefix() -> None:
+def test_gpt_keeps_foreign_prefix() -> None:
     """A Vertex or Azure paste is a different name, not remapped onto OpenAI."""
-    assert OpenAI.gpt_model('vertexai/gpt-4o').name == 'openai/vertexai/gpt-4o'
-    assert OpenAI.gpt_model('azure/gpt-4o').name == 'openai/azure/gpt-4o'
+    assert OpenAI.gpt('vertexai/gpt-4o').name == 'openai/vertexai/gpt-4o'
+    assert OpenAI.gpt('azure/gpt-4o').name == 'openai/azure/gpt-4o'
 
 
-def test_gpt_model_carries_config() -> None:
+def test_gpt_carries_config() -> None:
     """A default config passed at construction survives into the ref."""
-    ref = OpenAI.gpt_model('gpt-4o', config=OpenAIConfig(temperature=0.2))
+    ref = OpenAI.gpt('gpt-4o', config=OpenAIConfig(temperature=0.2))
     assert ref.config is not None
     assert ref.config.temperature == 0.2
 
 
-def test_gpt_model_allows_unknown_chat_ids() -> None:
+def test_gpt_allows_unknown_chat_ids() -> None:
     """A brand-new chat id works before this plugin learns its name."""
-    assert OpenAI.gpt_model('gpt-next-99').name == 'openai/gpt-next-99'
+    assert OpenAI.gpt('gpt-next-99').name == 'openai/gpt-next-99'
 
 
 @pytest.mark.parametrize(
@@ -72,39 +72,39 @@ def test_gpt_model_allows_unknown_chat_ids() -> None:
         'text-embedding-3-small',  # embedders never take chat config
     ],
 )
-def test_gpt_model_is_chat_only(bad_id: str) -> None:
+def test_gpt_is_chat_only(bad_id: str) -> None:
     """Non-chat ids are refused so chat-only keys can't hit the wrong endpoint."""
     with pytest.raises(GenkitError) as exc_info:
-        OpenAI.gpt_model(bad_id)
+        OpenAI.gpt(bad_id)
     assert exc_info.value.status == 'INVALID_ARGUMENT'
 
 
-def test_gpt_model_reject_names_the_string_path() -> None:
+def test_gpt_reject_names_the_string_path() -> None:
     """The error names the id and the plain-string way to still use it."""
     with pytest.raises(GenkitError) as exc_info:
-        OpenAI.gpt_model('dall-e-3')
+        OpenAI.gpt('dall-e-3')
     assert exc_info.value.status == 'INVALID_ARGUMENT'
     message = str(exc_info.value)
     assert 'an image model' in message
     assert "'openai/dall-e-3'" in message
 
 
-def test_gpt_model_requires_a_name() -> None:
+def test_gpt_requires_a_name() -> None:
     """A bare prefix with no id left is an invalid argument."""
     with pytest.raises(GenkitError) as exc_info:
-        OpenAI.gpt_model('openai/')
+        OpenAI.gpt('openai/')
     assert exc_info.value.status == 'INVALID_ARGUMENT'
 
 
-def test_gpt_model_rejects_non_string_name() -> None:
+def test_gpt_rejects_non_string_name() -> None:
     """A non-string must not become a name via str() (None → 'None')."""
     with pytest.raises(GenkitError) as exc_info:
-        OpenAI.gpt_model(None)  # type: ignore[arg-type]
+        OpenAI.gpt(None)  # type: ignore[arg-type]
     assert exc_info.value.status == 'INVALID_ARGUMENT'
     assert 'must be a string' in str(exc_info.value)
 
     with pytest.raises(GenkitError) as exc_info:
-        OpenAI.gpt_model(123)  # type: ignore[arg-type]
+        OpenAI.gpt(123)  # type: ignore[arg-type]
     assert exc_info.value.status == 'INVALID_ARGUMENT'
     assert 'must be a string' in str(exc_info.value)
 

@@ -126,10 +126,7 @@ export const captureContentEnvVar =
  * best for development.
  */
 export type ContentCapturingMode =
-  | 'NO_CONTENT'
-  | 'SPAN_ONLY'
-  | 'EVENT_ONLY'
-  | 'SPAN_AND_EVENT';
+  'NO_CONTENT' | 'SPAN_ONLY' | 'EVENT_ONLY' | 'SPAN_AND_EVENT';
 
 /**
  * Parses the spec env var into a {@link ContentCapturingMode}. Accepts the
