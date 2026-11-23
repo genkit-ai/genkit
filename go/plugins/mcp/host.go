@@ -49,8 +49,9 @@ type MCPHost struct {
 	clients map[string]*GenkitMCPClient // Internal map for efficient lookups
 }
 
-// NewMCPHost creates a new MCPHost with the given options
-func NewMCPHost(g *genkit.Genkit, options MCPHostOptions) (*MCPHost, error) {
+// NewHost creates an MCP host with the given options. Connections are kept on
+// the host; tools are returned as detached values by [MCPHost.ActiveTools].
+func NewHost(options MCPHostOptions) (*MCPHost, error) {
 	// Set default values
 	if options.Name == "" {
 		options.Name = "genkit-mcp"
@@ -68,7 +69,7 @@ func NewMCPHost(g *genkit.Genkit, options MCPHostOptions) (*MCPHost, error) {
 	// Connect to all servers synchronously during initialization
 	ctx := context.Background()
 	for _, serverConfig := range options.MCPServers {
-		if err := host.Connect(ctx, g, serverConfig.Name, serverConfig.Config); err != nil {
+		if err := host.ConnectServer(ctx, serverConfig.Name, serverConfig.Config); err != nil {
 			logger.Error(ctx, "failed to connect to MCP server, continuing with the others", "server", serverConfig.Name, "host", host.name, "error", err)
 			// Continue with other servers
 		}
@@ -77,9 +78,16 @@ func NewMCPHost(g *genkit.Genkit, options MCPHostOptions) (*MCPHost, error) {
 	return host, nil
 }
 
-// Connect connects to a single MCP server with the provided configuration
-// and automatically registers tools, prompts, and resources from the server
-func (h *MCPHost) Connect(ctx context.Context, g *genkit.Genkit, serverName string, config MCPClientOptions) error {
+// NewMCPHost creates an MCP host with the given options.
+//
+// Deprecated: Use [NewHost]. The Genkit argument is ignored.
+func NewMCPHost(_ *genkit.Genkit, options MCPHostOptions) (*MCPHost, error) {
+	return NewHost(options)
+}
+
+// ConnectServer connects the host to an MCP server. Tools and resources stay
+// detached until the caller chooses how to use or register them.
+func (h *MCPHost) ConnectServer(ctx context.Context, serverName string, config MCPClientOptions) error {
 	// If a client with this name already exists, disconnect it first
 	if existingClient, exists := h.clients[serverName]; exists {
 		if err := existingClient.Disconnect(); err != nil {
@@ -103,6 +111,13 @@ func (h *MCPHost) Connect(ctx context.Context, g *genkit.Genkit, serverName stri
 	h.clients[serverName] = client
 
 	return nil
+}
+
+// Connect connects the host to an MCP server.
+//
+// Deprecated: Use [MCPHost.ConnectServer]. The Genkit argument is ignored.
+func (h *MCPHost) Connect(ctx context.Context, _ *genkit.Genkit, serverName string, config MCPClientOptions) error {
+	return h.ConnectServer(ctx, serverName, config)
 }
 
 // Disconnect disconnects from a specific MCP server
@@ -130,8 +145,8 @@ func (h *MCPHost) Reconnect(ctx context.Context, serverName string) error {
 	return client.Restart(ctx)
 }
 
-// GetActiveTools retrieves all tools from all connected and enabled MCP clients
-func (h *MCPHost) GetActiveTools(ctx context.Context, gk *genkit.Genkit) ([]ai.Tool, error) {
+// ActiveTools retrieves detached tools from all connected and enabled MCP clients.
+func (h *MCPHost) ActiveTools(ctx context.Context) ([]ai.Tool, error) {
 	var allTools []ai.Tool
 
 	for name, client := range h.clients {
@@ -139,7 +154,7 @@ func (h *MCPHost) GetActiveTools(ctx context.Context, gk *genkit.Genkit) ([]ai.T
 			continue
 		}
 
-		tools, err := client.GetActiveTools(ctx, gk)
+		tools, err := client.ActiveTools(ctx)
 		if err != nil {
 			logger.Error(ctx, "failed to fetch tools from MCP client, skipping it", "client", name, "host", h.name, "error", err)
 			continue
@@ -149,6 +164,13 @@ func (h *MCPHost) GetActiveTools(ctx context.Context, gk *genkit.Genkit) ([]ai.T
 	}
 
 	return allTools, nil
+}
+
+// GetActiveTools retrieves detached tools from connected MCP clients.
+//
+// Deprecated: Use [MCPHost.ActiveTools]. The Genkit argument is ignored.
+func (h *MCPHost) GetActiveTools(ctx context.Context, _ *genkit.Genkit) ([]ai.Tool, error) {
+	return h.ActiveTools(ctx)
 }
 
 // GetActiveResources retrieves detached resources from all connected and enabled MCP clients

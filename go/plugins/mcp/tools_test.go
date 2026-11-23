@@ -169,7 +169,7 @@ func TestPrepareToolArguments(t *testing.T) {
 }
 
 // inProcessTools serves an MCP server in process and returns its tools as
-// Genkit tools, keyed by name, as GetActiveTools builds them.
+// Genkit tools, keyed by name, as ActiveTools builds them.
 func inProcessTools(t *testing.T, srv *server.MCPServer) map[string]ai.Tool {
 	t.Helper()
 	ctx := context.Background()
@@ -188,7 +188,7 @@ func inProcessTools(t *testing.T, srv *server.MCPServer) map[string]ai.Tool {
 	}
 
 	gc := &GenkitMCPClient{options: MCPClientOptions{Name: "srv"}, server: &ServerRef{Client: c}}
-	tools, err := gc.GetActiveTools(ctx, nil)
+	tools, err := gc.ActiveTools(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

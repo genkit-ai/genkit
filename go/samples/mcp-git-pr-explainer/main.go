@@ -80,7 +80,7 @@ func main() {
 	}
 	defer client.Disconnect()
 
-	tools, err := client.GetActiveTools(ctx, g)
+	tools, err := client.ActiveTools(ctx)
 	if err != nil {
 		logger.FromContext(ctx).Error("failed to list GitHub tools", "error", err)
 		os.Exit(1)

@@ -46,9 +46,25 @@ func clientExample() {
 		logger.FromContext(ctx).Error("Failed to create MCP client", "error", err)
 		return
 	}
+	defer func() {
+		logger.FromContext(ctx).Info("Disconnecting from MCP server", "client", "mcp-time")
+		if err := client.Disconnect(); err != nil {
+			logger.FromContext(ctx).Error("Failed to disconnect from MCP server", "client", "mcp-time", "error", err)
+			return
+		}
+		logger.FromContext(ctx).Info("Disconnected from MCP server", "client", "mcp-time")
+	}()
 
 	// Get tools and generate response
-	tools, _ := client.GetActiveTools(ctx, g)
+	tools, err := client.ActiveTools(ctx)
+	if err != nil {
+		logger.FromContext(ctx).Error("Failed to get MCP time tools", "error", err)
+		return
+	}
+	if len(tools) == 0 {
+		logger.FromContext(ctx).Error("No MCP tools available; check MCP server connection", "client", "mcp-time")
+		return
+	}
 	logger.FromContext(ctx).Info("Found MCP time tools", "count", len(tools), "client", "mcp-time")
 
 	var toolRefs []ai.ToolRef
@@ -67,11 +83,6 @@ func clientExample() {
 	} else {
 		logger.FromContext(ctx).Info("Generation completed", "response", response.Text())
 	}
-
-	// Disconnect from server
-	logger.FromContext(ctx).Info("Disconnecting from MCP server", "client", "mcp-time")
-	client.Disconnect()
-	logger.FromContext(ctx).Info("Disconnected from MCP server", "client", "mcp-time")
 }
 
 // MCP Host Example - connects to time server and demonstrates both tools and resources
@@ -82,7 +93,7 @@ func managerExample() {
 	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
 
 	// Create and connect to MCP time server
-	host, _ := mcp.NewMCPHost(g, mcp.MCPHostOptions{
+	host, err := mcp.NewHost(mcp.MCPHostOptions{
 		Name: "time-example",
 		MCPServers: []mcp.MCPServerConfig{
 			{
@@ -98,9 +109,28 @@ func managerExample() {
 			},
 		},
 	})
+	if err != nil {
+		logger.FromContext(ctx).Error("Failed to create MCP host", "error", err)
+		return
+	}
+	defer func() {
+		if err := host.Disconnect(ctx, "time"); err != nil {
+			logger.FromContext(ctx).Error("Failed to disconnect from MCP server", "server", "time", "error", err)
+			return
+		}
+		logger.FromContext(ctx).Info("Disconnected from MCP server", "server", "time")
+	}()
 
 	// Get tools and resources from MCP servers
-	tools, _ := host.GetActiveTools(ctx, g)
+	tools, err := host.ActiveTools(ctx)
+	if err != nil {
+		logger.FromContext(ctx).Error("Failed to get MCP tools", "error", err)
+		return
+	}
+	if len(tools) == 0 {
+		logger.FromContext(ctx).Error("No MCP tools available; check MCP server connection", "server", "time")
+		return
+	}
 	logger.FromContext(ctx).Info("Found MCP tools", "count", len(tools))
 
 	var toolRefs []ai.ToolRef
@@ -119,10 +149,6 @@ func managerExample() {
 	} else {
 		logger.FromContext(ctx).Info("Generation completed", "response", response.Text())
 	}
-
-	// Disconnect from server
-	host.Disconnect(ctx, "time")
-	logger.FromContext(ctx).Info("Disconnected from MCP server", "server", "time")
 }
 
 func main() {
