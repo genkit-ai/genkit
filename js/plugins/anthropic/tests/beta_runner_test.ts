@@ -681,7 +681,6 @@ describe('BetaRunner', () => {
       betas: [
         'files-api-2025-04-14',
         'effort-2025-11-24',
-        'structured-outputs-2025-11-13',
         'task-budgets-2026-03-13',
       ],
     });

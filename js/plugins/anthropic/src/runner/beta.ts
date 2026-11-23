@@ -23,6 +23,7 @@ import type {
   MessageCreateParamsNonStreaming as BetaMessageCreateParamsNonStreaming,
   MessageCreateParamsStreaming as BetaMessageCreateParamsStreaming,
   BetaMessageParam,
+  BetaOutputConfig,
   BetaRawMessageStreamEvent,
   BetaRedactedThinkingBlockParam,
   BetaRequestDocumentBlock,
@@ -86,14 +87,13 @@ const BETA_APIS = [
   // 'skills-2025-10-02',
   'effort-2025-11-24',
   // 'advanced-tool-use-2025-11-20',
-  'structured-outputs-2025-11-13',
   'task-budgets-2026-03-13',
 ];
 
 /**
  * Transforms a JSON schema to be compatible with Anthropic's structured output requirements.
  * Anthropic requires `additionalProperties: false` on all object types.
- * @see https://docs.anthropic.com/en/docs/build-with-claude/structured-outputs#json-schema-limitations
+ * @see https://platform.claude.com/docs/en/build-with-claude/structured-outputs#json-schema-limitations
  */
 function toAnthropicSchema(
   schema: Record<string, unknown>
@@ -344,16 +344,15 @@ export class BetaRunner extends BaseRunner<BetaRunnerTypes> {
       metadata: request.config?.metadata,
       tools: request.tools?.map((tool) => this.toAnthropicTool(tool)),
       thinking: thinkingConfig,
-      output_format: this.isStructuredOutputEnabled(request)
-        ? {
-            type: 'json_schema',
-            schema: toAnthropicSchema(request.output!.schema!),
-          }
-        : undefined,
       betas: Array.isArray(request.config?.betas)
         ? [...(request.config?.betas ?? [])]
         : [...BETA_APIS],
       ...restConfig,
+      // After `restConfig` so they aren't overwritten; see toAnthropicOutputConfig.
+      output_format: this.isStructuredOutputEnabled(request)
+        ? undefined
+        : restConfig.output_format,
+      output_config: this.toAnthropicOutputConfig(request),
     } as BetaMessageCreateParamsNonStreaming;
 
     return removeUndefinedProperties(body);
@@ -404,16 +403,15 @@ export class BetaRunner extends BaseRunner<BetaRunnerTypes> {
       metadata: request.config?.metadata,
       tools: request.tools?.map((tool) => this.toAnthropicTool(tool)),
       thinking: thinkingConfig,
-      output_format: this.isStructuredOutputEnabled(request)
-        ? {
-            type: 'json_schema',
-            schema: toAnthropicSchema(request.output!.schema!),
-          }
-        : undefined,
       betas: Array.isArray(request.config?.betas)
         ? [...(request.config?.betas ?? [])]
         : [...BETA_APIS],
       ...restConfig,
+      // After `restConfig` so they aren't overwritten; see toAnthropicOutputConfig.
+      output_format: this.isStructuredOutputEnabled(request)
+        ? undefined
+        : restConfig.output_format,
+      output_config: this.toAnthropicOutputConfig(request),
     } as BetaMessageCreateParamsStreaming;
 
     return removeUndefinedProperties(body);
@@ -528,6 +526,31 @@ export class BetaRunner extends BaseRunner<BetaRunnerTypes> {
       default:
         return 'other';
     }
+  }
+
+  /**
+   * Builds `output_config`, merging the user's config (effort, task_budget,
+   * ...) with the JSON schema format when constrained output is requested.
+   *
+   * When constrained output is requested, the schema from `request.output`
+   * takes precedence over any `format` set in `config.output_config` and
+   * over `config.output_format`, which is then not sent.
+   */
+  private toAnthropicOutputConfig(
+    request: GenerateRequest<typeof AnthropicConfigSchema>
+  ): BetaOutputConfig | undefined {
+    const userOutputConfig = request.config?.output_config as
+      BetaOutputConfig | undefined;
+    if (!this.isStructuredOutputEnabled(request)) {
+      return userOutputConfig;
+    }
+    return {
+      ...userOutputConfig,
+      format: {
+        type: 'json_schema',
+        schema: toAnthropicSchema(request.output!.schema!),
+      },
+    };
   }
 
   private isStructuredOutputEnabled(
