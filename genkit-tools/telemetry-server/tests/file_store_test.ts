@@ -646,6 +646,104 @@ describe('index', () => {
     }
   });
 
+  it('retries reindex on next init if a rebuild is interrupted midway', async () => {
+    const base = path.resolve(
+      os.tmpdir(),
+      `./telemetry-server-interrupted-reindex-test-${Date.now()}-${Math.floor(
+        Math.random() * 1000
+      )}`
+    );
+    const storeRoot = path.resolve(base, 'traces');
+    const reindexRoot = path.resolve(base, 'traces_idx');
+    try {
+      const hostAKey = '/dynamic-action-provider/host-a:tool/search';
+      const hostBKey = '/dynamic-action-provider/host-b:tool/search';
+
+      const store1 = new LocalFileTraceStore({
+        storeRoot,
+        indexRoot: reindexRoot,
+      });
+      await store1.init();
+
+      for (const [traceId, spanId, key, startTime] of [
+        [TRACE_ID_1, SPAN_A, hostAKey, 100],
+        [TRACE_ID_2, SPAN_B, hostBKey, 200],
+      ] as const) {
+        const rootSpan = span(traceId, spanId, 100, 100);
+        rootSpan.displayName = 'search';
+        rootSpan.startTime = startTime;
+        rootSpan.attributes['genkit:metadata:subtype'] = 'tool';
+        rootSpan.attributes['genkit:key'] = key;
+        await store1.save(traceId, {
+          traceId,
+          displayName: 'search',
+          spans: { [spanId]: rootSpan },
+        });
+      }
+
+      // Trigger migration by stripping formatVersion from genkit.metadata.
+      const idxDir = path.resolve(reindexRoot, '.genkit/traces_idx');
+      const metadataPath = path.resolve(idxDir, 'genkit.metadata');
+      const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+      delete metadata.formatVersion;
+      fs.writeFileSync(metadataPath, JSON.stringify(metadata));
+
+      // Interrupt the rebuild after indexing only the first trace.
+      const interruptedStore = new LocalFileTraceStore({
+        storeRoot,
+        indexRoot: reindexRoot,
+      });
+      const underlyingIndex = (interruptedStore as any).index as Index;
+      const originalAdd = underlyingIndex.add.bind(underlyingIndex);
+      let added = 0;
+      underlyingIndex.add = (traceData: TraceData) => {
+        if (added >= 1) {
+          throw new Error('simulated crash during reindex');
+        }
+        added++;
+        originalAdd(traceData);
+      };
+
+      await assert.rejects(
+        () => interruptedStore.init(),
+        /simulated crash during reindex/
+      );
+      assert.strictEqual(fs.existsSync(metadataPath), false);
+
+      // A fresh store must detect the incomplete index, retry rebuild, and restore both traces.
+      const recoveredStore = new LocalFileTraceStore({
+        storeRoot,
+        indexRoot: reindexRoot,
+      });
+      await recoveredStore.init();
+
+      const allListed = await recoveredStore.list({ limit: 5 });
+      assert.deepStrictEqual(
+        allListed.traces.map((t) => t.traceId),
+        [TRACE_ID_2, TRACE_ID_1]
+      );
+
+      for (const [traceId, key] of [
+        [TRACE_ID_1, hostAKey],
+        [TRACE_ID_2, hostBKey],
+      ] as const) {
+        const filtered = await recoveredStore.list({
+          limit: 5,
+          filter: { eq: { key } },
+        });
+        assert.deepStrictEqual(
+          filtered.traces.map((t) => t.traceId),
+          [traceId]
+        );
+      }
+
+      const rebuiltMetadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+      assert.strictEqual(rebuiltMetadata.formatVersion, 1);
+    } finally {
+      fs.rmSync(base, { recursive: true, force: true });
+    }
+  });
+
   it('should apply search filters', () => {
     const spanA = span(TRACE_ID_1, SPAN_A, 100, 100);
     spanA.displayName = 'flowA';

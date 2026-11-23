@@ -121,6 +121,7 @@ export class LocalFileTraceStore implements TraceStore {
       if (!hasRootSpan) continue;
       this.index.add(trace);
     }
+    this.index.writeMetadata();
     logger.info(
       `Indexed ${list.traces.length} traces in ${Date.now() - time}ms in ${this.indexRoot}`
     );
@@ -346,13 +347,19 @@ export class Index {
   clear() {
     fs.rmSync(this.indexRoot, { recursive: true, force: true });
     fs.mkdirSync(this.indexRoot, { recursive: true });
-    fs.appendFileSync(
-      this.metadataFileName(),
+  }
+
+  writeMetadata() {
+    const metadataPath = this.metadataFileName();
+    const tmpPath = `${metadataPath}.${process.pid}.${Date.now()}.tmp`;
+    fs.writeFileSync(
+      tmpPath,
       JSON.stringify({
         version: currentVersion,
         formatVersion: INDEX_FORMAT_VERSION,
       })
     );
+    fs.renameSync(tmpPath, metadataPath);
   }
 
   metadataFileName() {
