@@ -56,30 +56,25 @@ func GoogleAI() *SystemOne {
 		Video:    MediaSupported,
 		Models:   map[string]ModelSpec{"gemini-decision-1": {}},
 		preset: preset{
-			label:           "Google AI",
-			apiKeyEnvs:      []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"},
-			transport:       newGemini,
-			headers:         http.Header{"X-Goog-Api-Client": {"genkit-go/" + genkitinternal.Version}},
-			documents:       true,
-			urls:            true,
-			mediaResolution: true,
+			label:      "Google AI",
+			apiKeyEnvs: []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"},
+			transport:  newGemini,
+			headers:    http.Header{"X-Goog-Api-Client": {"genkit-go/" + genkitinternal.Version}},
 		},
 	}
 }
 
-// newGemini builds the genai SDK client the Decisions API is reached on.
-func newGemini(ctx context.Context, c transportConfig) (systemone.Transport, error) {
+// newGemini builds the genai SDK client the Decisions API is reached on,
+// with the key, base URL, headers, and HTTP client Init resolved.
+func newGemini(ctx context.Context, c *systemone.Client) (systemone.Transport, error) {
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
-		APIKey:     c.apiKey,
-		Backend:    genai.BackendGeminiAPI,
-		HTTPClient: c.http,
-		HTTPOptions: genai.HTTPOptions{
-			BaseURL: c.baseURL,
-			Headers: c.headers,
-		},
+		APIKey:      c.APIKey,
+		Backend:     genai.BackendGeminiAPI,
+		HTTPClient:  c.HTTP,
+		HTTPOptions: genai.HTTPOptions{BaseURL: c.BaseURL, Headers: c.Headers},
 	})
 	if err != nil {
 		return nil, err
 	}
-	return &systemone.Gemini{Name: c.name, Client: client}, nil
+	return &systemone.Gemini{Name: c.Endpoint.Name, Client: client}, nil
 }

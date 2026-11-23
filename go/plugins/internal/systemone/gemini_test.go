@@ -64,10 +64,10 @@ func TestGeminiRequest(t *testing.T) {
 	}
 	_, err := c.Decide(t.Context(), "gemini-decision-1", &Request{
 		State: map[string]any{"ticket": "hi"},
-		Media: Media{Parts: []MediaPart{
+		Media: Media{
 			{Kind: MediaImage, ContentType: "image/png", Data: "iVBORw0KGgo="},
 			{Kind: MediaVideo, ContentType: "video/mp4", URI: "https://example.com/v.mp4"},
-		}},
+		},
 		Questions:       questions,
 		MediaResolution: "ultra_high",
 	})
@@ -121,7 +121,7 @@ func TestGeminiTextOnlyInputIsAString(t *testing.T) {
 	// Media alone sends no empty text block, which the API refuses.
 	_, err := c.Decide(t.Context(), "gemini-decision-1", &Request{
 		State:     "",
-		Media:     Media{Parts: []MediaPart{{Kind: MediaImage, ContentType: "image/png", Data: "iVBORw0KGgo="}}},
+		Media:     Media{{Kind: MediaImage, ContentType: "image/png", Data: "iVBORw0KGgo="}},
 		Questions: testQuestions,
 	})
 	if err != nil {

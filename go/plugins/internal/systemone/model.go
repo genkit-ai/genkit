@@ -106,17 +106,17 @@ func (m *model) generate(ctx context.Context, req *ai.ModelRequest, cfg *Config,
 	if cfg != nil {
 		opts = *cfg
 	}
-	endpoint := m.client.Endpoint
-	if endpoint.Transport != nil && len(opts.Extra) > 0 {
-		return nil, status.Errorf(status.ErrInvalidArgument, "systemone: %s takes no extra fields; its client builds the whole request", endpoint.Name)
+	name, wire := m.client.Endpoint.Name, m.client.Endpoint.Wire()
+	if len(opts.Extra) > 0 && !wire.Extra {
+		return nil, status.Errorf(status.ErrInvalidArgument, "systemone: %s takes no extra fields; its client builds the whole request", name)
 	}
 	for _, field := range reservedFields {
 		if _, ok := opts.Extra[field]; ok {
 			return nil, status.Errorf(status.ErrInvalidArgument, "systemone: extra field %q is one the request builds itself", field)
 		}
 	}
-	if opts.MediaResolution != "" && !endpoint.MediaResolution {
-		return nil, status.Errorf(status.ErrInvalidArgument, "systemone: %s takes no media resolution", endpoint.Name)
+	if opts.MediaResolution != "" && !wire.MediaResolution {
+		return nil, status.Errorf(status.ErrInvalidArgument, "systemone: %s takes no media resolution", name)
 	}
 	enum := req.Output.Format == ai.OutputFormatEnum
 	preamble, err := SystemPreamble(req.Messages)
@@ -194,8 +194,8 @@ func responseUsage(u Usage) *ai.GenerationUsage {
 }
 
 // modalityName is a modality as it goes into a usage key: image is Image.
+// Usage.InputByModality holds its modalities lower case.
 func modalityName(modality string) string {
-	modality = strings.ToLower(modality)
 	if modality == "" {
 		return "Unspecified"
 	}

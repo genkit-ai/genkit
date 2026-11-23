@@ -50,6 +50,13 @@ type Gemini struct {
 	Client *genai.Client
 }
 
+// Wire implements [Transport]: the API reads PDFs, fetches media by URL,
+// and takes a media resolution, and the SDK builds the whole request, so
+// it takes no extra fields.
+func (g *Gemini) Wire() Wire {
+	return Wire{Documents: true, URLs: true, MediaResolution: true}
+}
+
 // Decide implements [Transport]. The answers are read from the response
 // body as the API sent it, so the fields the SDK's answer types do not
 // declare, such as log likelihoods, stay on [Info.Answers].
@@ -61,13 +68,7 @@ func (g *Gemini) Decide(ctx context.Context, model string, r *Request) (*Respons
 	version := geminiAPIVersion
 	res, err := g.Client.Decisions.Create(ctx, operations.CreateDecisionRequest{APIVersion: &version, Body: body})
 	if err != nil {
-		var apiErr *apierrors.APIError
-		if errors.As(err, &apiErr) {
-			if block := geminiBlocked(apiErr.StatusCode, []byte(apiErr.Body)); block != nil {
-				return &Response{Info: Info{Model: model}, Blocked: block}, nil
-			}
-		}
-		return nil, g.failure(ctx, err)
+		return g.failure(ctx, model, err)
 	}
 	if res.HTTPMeta.Response == nil {
 		return nil, status.Errorf(status.ErrInternal, "%s: the SDK returned no response", g.Name)
@@ -87,28 +88,32 @@ func (g *Gemini) Decide(ctx context.Context, model string, r *Request) (*Respons
 }
 
 // failure maps an SDK error onto a Genkit status, after the SDK has
-// retried what was worth retrying. An error response is mapped as it is on
-// the native wire; a response the SDK could not read, such as a success
-// that is not JSON, is INTERNAL, as a failure to reach the API is
+// retried what was worth retrying. An input the API refused as unsafe is a
+// blocked response, not an error. Any other error response is mapped as it
+// is on the native wire; a response the SDK could not read, such as a
+// success that is not JSON, is INTERNAL, as a failure to reach the API is
 // UNAVAILABLE; and anything else the SDK refuses, such as a request it
 // cannot encode, is INTERNAL, since it fails the same way every time. A
 // context that ended is reported as such.
-func (g *Gemini) failure(ctx context.Context, err error) error {
+func (g *Gemini) failure(ctx context.Context, model string, err error) (*Response, error) {
 	if ctx.Err() != nil {
-		return stopped(ctx, err)
+		return nil, stopped(ctx, err)
 	}
 	var apiErr *apierrors.APIError
 	if errors.As(err, &apiErr) {
-		if apiErr.StatusCode >= 400 {
-			return httpError(g.Name, apiErr.StatusCode, []byte(apiErr.Body))
+		if block := geminiBlocked(apiErr.StatusCode, []byte(apiErr.Body)); block != nil {
+			return &Response{Info: Info{Model: model}, Blocked: block}, nil
 		}
-		return status.Errorf(status.ErrInternal, "%s: HTTP %d: %s", g.Name, apiErr.StatusCode, apiErr.Message)
+		if apiErr.StatusCode >= 400 {
+			return nil, httpError(g.Name, apiErr.StatusCode, []byte(apiErr.Body))
+		}
+		return nil, status.Errorf(status.ErrInternal, "%s: HTTP %d: %s", g.Name, apiErr.StatusCode, apiErr.Message)
 	}
 	var urlErr *url.Error
 	if errors.As(err, &urlErr) {
-		return status.Errorf(status.ErrUnavailable, "%s: %w", g.Name, err)
+		return nil, status.Errorf(status.ErrUnavailable, "%s: %w", g.Name, err)
 	}
-	return status.Errorf(status.ErrInternal, "%s: %w", g.Name, err)
+	return nil, status.Errorf(status.ErrInternal, "%s: %w", g.Name, err)
 }
 
 // geminiRequest builds a Decisions request.
@@ -137,11 +142,11 @@ func geminiInput(r *Request) (decisions.Input, error) {
 	if err != nil {
 		return decisions.Input{}, err
 	}
-	if len(r.Media.Parts) == 0 {
+	if len(r.Media) == 0 {
 		return decisions.NewInput(text), nil
 	}
-	blocks := make([]decisions.DecisionInputContent, 0, len(r.Media.Parts)+1)
-	for _, part := range r.Media.Parts {
+	blocks := make([]decisions.DecisionInputContent, 0, len(r.Media)+1)
+	for _, part := range r.Media {
 		blocks = append(blocks, geminiMedia(part, r.MediaResolution))
 	}
 	if text != "" {
@@ -156,7 +161,7 @@ func geminiInput(r *Request) (decisions.Input, error) {
 func geminiMedia(part MediaPart, resolution string) decisions.DecisionInputContent {
 	data, uri := optional(part.Data), optional(part.URI)
 	var res *interactions.MediaResolution
-	if resolution != "" && (part.Kind == MediaImage || part.Kind == MediaVideo && resolution != "ultra_high") {
+	if resolution != "" {
 		r := interactions.MediaResolution(resolution)
 		res = &r
 	}
@@ -168,6 +173,9 @@ func geminiMedia(part MediaPart, resolution string) decisions.DecisionInputConte
 		mt := interactions.AudioContentMimeType(part.ContentType)
 		return decisions.NewDecisionInputContent(interactions.AudioContent{Data: data, URI: uri, MimeType: &mt})
 	case MediaVideo:
+		if resolution == "ultra_high" {
+			res = nil
+		}
 		mt := interactions.VideoContentMimeType(part.ContentType)
 		return decisions.NewDecisionInputContent(interactions.VideoContent{Data: data, URI: uri, MimeType: &mt, Resolution: res})
 	default:
@@ -208,9 +216,11 @@ func geminiQuestion(q Question) (decisions.Question, error) {
 		for _, option := range options {
 			criteria[option.Name] = asText(option.Description)
 		}
-		instructions := decisions.NewChoiceQuestionInstructions(text)
+		var instructions decisions.ChoiceQuestionInstructions
 		if blocks != nil {
 			instructions = decisions.NewChoiceQuestionInstructions(blocks)
+		} else {
+			instructions = decisions.NewChoiceQuestionInstructions(text)
 		}
 		return decisions.NewQuestion(decisions.ChoiceQuestion{Criteria: criteria, Instructions: instructions}), nil
 	case KindScore:
@@ -219,9 +229,11 @@ func geminiQuestion(q Question) (decisions.Question, error) {
 		for i, level := range levels {
 			criteria[i] = asText(level)
 		}
-		instructions := decisions.NewScoreQuestionInstructions(text)
+		var instructions decisions.ScoreQuestionInstructions
 		if blocks != nil {
 			instructions = decisions.NewScoreQuestionInstructions(blocks)
+		} else {
+			instructions = decisions.NewScoreQuestionInstructions(text)
 		}
 		return decisions.NewQuestion(decisions.ScoreQuestion{Criteria: criteria, Instructions: instructions}), nil
 	case KindNoul:
@@ -230,9 +242,11 @@ func geminiQuestion(q Question) (decisions.Question, error) {
 			yes, no := asText(sides["true"]), asText(sides["false"])
 			criteria = &decisions.NoulCriteria{TrueDescription: &yes, FalseDescription: &no}
 		}
-		instructions := decisions.NewNoulQuestionInstructions(text)
+		var instructions decisions.NoulQuestionInstructions
 		if blocks != nil {
 			instructions = decisions.NewNoulQuestionInstructions(blocks)
+		} else {
+			instructions = decisions.NewNoulQuestionInstructions(text)
 		}
 		return decisions.NewQuestion(decisions.NoulQuestion{Criteria: criteria, Instructions: instructions}), nil
 	}
@@ -346,17 +360,21 @@ func geminiBlocked(code int, body []byte) *Block {
 	if json.Unmarshal(body, &envelope) != nil {
 		return nil
 	}
-	reasons := make([]string, 0, len(envelope.Error.Details)+1)
+	match := func(reason string) *Block {
+		if reason = strings.ToLower(reason); geminiBlockReasons[reason] {
+			return &Block{Reason: reason, Message: envelope.Error.Message}
+		}
+		return nil
+	}
 	var reason string
 	if json.Unmarshal(envelope.Error.Code, &reason) == nil {
-		reasons = append(reasons, reason)
+		if block := match(reason); block != nil {
+			return block
+		}
 	}
 	for _, d := range envelope.Error.Details {
-		reasons = append(reasons, d.Reason)
-	}
-	for _, r := range reasons {
-		if r := strings.ToLower(r); geminiBlockReasons[r] {
-			return &Block{Reason: r, Message: envelope.Error.Message}
+		if block := match(d.Reason); block != nil {
+			return block
 		}
 	}
 	return nil

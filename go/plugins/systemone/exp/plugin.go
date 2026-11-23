@@ -188,21 +188,11 @@ type preset struct {
 	account    string
 	accountEnv string
 	// transport builds the client of a server reached through its own
-	// SDK rather than the native wire.
-	transport func(ctx context.Context, c transportConfig) (systemone.Transport, error)
+	// SDK rather than the native wire, from the key, base URL, headers,
+	// and HTTP client Init resolved.
+	transport func(ctx context.Context, c *systemone.Client) (systemone.Transport, error)
 	// headers are sent on every request, under the caller's Headers.
 	headers http.Header
-	// documents and urls say whether the models read PDFs and take media
-	// by URL, and mediaResolution whether the server takes a resolution,
-	// which only a transport's wire carries.
-	documents, urls, mediaResolution bool
-}
-
-// transportConfig is what Init resolved, for a preset's transport.
-type transportConfig struct {
-	name, apiKey, baseURL string
-	headers               http.Header
-	http                  *http.Client
 }
 
 // Config is the per-request configuration of a decision model: StateJSON
@@ -276,34 +266,27 @@ func (s *SystemOne) Init(ctx context.Context) []api.Action {
 	for key, values := range s.Headers {
 		headers[http.CanonicalHeaderKey(key)] = slices.Clone(values)
 	}
-	httpClient := cmp.Or(s.HTTPClient, &http.Client{Timeout: systemone.RequestTimeout})
-	baseURL = strings.TrimSuffix(baseURL, "/")
-	var transport systemone.Transport
-	modelsPath := rooted(s.ModelsPath)
+	s.client = &systemone.Client{
+		HTTP:    cmp.Or(s.HTTPClient, &http.Client{Timeout: systemone.RequestTimeout}),
+		BaseURL: strings.TrimSuffix(baseURL, "/"),
+		APIKey:  apiKey,
+		Headers: headers,
+		Endpoint: &systemone.Endpoint{
+			Name:       s.Provider,
+			Path:       path,
+			ModelsPath: rooted(s.ModelsPath),
+			Route:      s.Route,
+			Unwrap:     s.Unwrap,
+		},
+	}
 	if newTransport := s.preset.transport; newTransport != nil {
-		var err error
-		transport, err = newTransport(ctx, transportConfig{name: s.Provider, apiKey: apiKey, baseURL: baseURL, headers: headers, http: httpClient})
+		transport, err := newTransport(ctx, s.client)
 		if err != nil {
 			panic(s.Provider + ": " + err.Error())
 		}
 		// The native listing does not apply to a server reached on its
 		// own client, and would send the key over the native wire.
-		modelsPath = ""
-	}
-	s.client = &systemone.Client{
-		HTTP:    httpClient,
-		BaseURL: baseURL,
-		APIKey:  apiKey,
-		Headers: headers,
-		Endpoint: &systemone.Endpoint{
-			Name:            s.Provider,
-			Path:            path,
-			ModelsPath:      modelsPath,
-			Route:           s.Route,
-			Unwrap:          s.Unwrap,
-			Transport:       transport,
-			MediaResolution: s.preset.mediaResolution,
-		},
+		s.client.Endpoint.Transport, s.client.Endpoint.ModelsPath = transport, ""
 	}
 	return nil
 }
@@ -424,14 +407,15 @@ func (s *SystemOne) newModel(c *systemone.Client, id string) *ai.ModelAction {
 	reads := func(plugin, model MediaSupport) bool {
 		return cmp.Or(model, plugin) == MediaSupported
 	}
+	// A wire that carries documents and URLs carries them for every model
+	// it serves; the server refuses them for a model that cannot read them.
+	wire := c.Endpoint.Wire()
 	return systemone.NewModel(c, api.NewName(c.Endpoint.Name, id), id, systemone.Spec{Label: label, Reads: systemone.Reads{
-		Images: reads(s.media[0], spec.Images),
-		Audio:  reads(s.media[1], spec.Audio),
-		Video:  reads(s.media[2], spec.Video),
-		// A transport's wire carries documents and URLs for every model it
-		// serves; the server refuses them for a model that cannot read them.
-		Documents: s.preset.documents,
-		URLs:      s.preset.urls,
+		Images:    reads(s.media[0], spec.Images),
+		Audio:     reads(s.media[1], spec.Audio),
+		Video:     reads(s.media[2], spec.Video),
+		Documents: wire.Documents,
+		URLs:      wire.URLs,
 	}})
 }
 

@@ -61,9 +61,6 @@ type Endpoint struct {
 	// HTTP wire, such as on a vendor's SDK; the paths, Route, and Unwrap do
 	// not apply.
 	Transport Transport
-	// MediaResolution reports whether the endpoint takes a media
-	// resolution.
-	MediaResolution bool
 }
 
 // Transport sends one request on a server's own client and reads its
@@ -72,6 +69,30 @@ type Endpoint struct {
 // can tell it from a broken request.
 type Transport interface {
 	Decide(ctx context.Context, model string, r *Request) (*Response, error)
+	// Wire is what the transport's wire carries.
+	Wire() Wire
+}
+
+// Wire says what a wire carries beside the state, the questions, and
+// images, audio, and video given inline, so a request it cannot carry is
+// refused before it is sent.
+type Wire struct {
+	// Documents is PDF files, and URLs media given as an HTTPS URL that
+	// the server fetches.
+	Documents, URLs bool
+	// MediaResolution is the resolution images and video are read at.
+	MediaResolution bool
+	// Extra is extra top-level request fields.
+	Extra bool
+}
+
+// Wire is what the endpoint's wire carries: the transport's, or the
+// native wire's, which takes extra fields and nothing else.
+func (e *Endpoint) Wire() Wire {
+	if e.Transport != nil {
+		return e.Transport.Wire()
+	}
+	return Wire{Extra: true}
 }
 
 // Block is why a server refused to answer for the input: a reason code,
@@ -84,9 +105,10 @@ type Block struct {
 // Request is the native request body, before the endpoint's envelope.
 type Request struct {
 	State any
-	// Media is sent in the images, audio, and videos fields, which the
-	// servers place before the state. Each field is sent only when it has
-	// media, since a server that does not read a kind can refuse its field.
+	// Media is sent in the images, audio, and videos fields as data URLs,
+	// which the servers place before the state. Each field is sent only
+	// when it has media, since a server that does not read a kind can
+	// refuse its field.
 	Media     Media
 	Questions map[string]Question
 	// Extra is merged into the top-level fields, which is the escape hatch
@@ -109,9 +131,11 @@ func (r *Request) Body(model string) map[string]any {
 		delete(body, field)
 	}
 	body["model"], body["state"], body["questions"] = model, r.State, r.Questions
-	for field, media := range map[string][]string{"images": r.Media.Images, "audio": r.Media.Audio, "videos": r.Media.Videos} {
-		if len(media) > 0 {
-			body[field] = media
+	fields := map[string]string{MediaImage: "images", MediaAudio: "audio", MediaVideo: "videos"}
+	for _, part := range r.Media {
+		if field := fields[part.Kind]; field != "" && part.Data != "" {
+			urls, _ := body[field].([]string)
+			body[field] = append(urls, "data:"+part.ContentType+";base64,"+part.Data)
 		}
 	}
 	return body
