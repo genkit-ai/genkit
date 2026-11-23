@@ -41,6 +41,28 @@ import {
   isObject,
 } from './types.js';
 
+const PARAMETERLESS_OBJECT_SCHEMA_KEYS = new Set([
+  'type',
+  'properties',
+  'required',
+  'additionalProperties',
+  'unevaluatedProperties',
+  'patternProperties',
+  'minProperties',
+  'maxProperties',
+  'dependencies',
+  'dependentRequired',
+  'dependentSchemas',
+  'nullable',
+  'title',
+  '$schema',
+  '$id',
+  'id',
+  '$comment',
+  '$defs',
+  'definitions',
+]);
+
 function isEmptyObjectRecord(value: unknown): boolean {
   return (
     value === undefined ||
@@ -52,7 +74,7 @@ function isEmptyObjectRecord(value: unknown): boolean {
 function isParameterlessObjectSchema(
   schema?: ToolDefinition['inputSchema']
 ): boolean {
-  if (!schema) {
+  if (!isObject(schema)) {
     return false;
   }
   const isObjectType =
@@ -63,35 +85,41 @@ function isParameterlessObjectSchema(
   if (!isObjectType) {
     return false;
   }
-  const hasRequired =
-    schema.required !== undefined &&
-    schema.required !== null &&
-    (!Array.isArray(schema.required) || schema.required.length > 0);
-  const hasMinProperties =
-    typeof schema.minProperties === 'number' && schema.minProperties > 0;
-  const hasCombinatorOrRef = Boolean(
-    schema.anyOf ||
-    schema.oneOf ||
-    schema.allOf ||
-    schema.$ref ||
-    schema.if ||
-    schema.then ||
-    schema.else ||
-    schema.not ||
-    schema.dependencies ||
-    schema.dependentRequired ||
-    schema.dependentSchemas
+  const hasOnlyRecognizedKeys = Object.keys(schema).every(
+    (key) =>
+      schema[key] === undefined || PARAMETERLESS_OBJECT_SCHEMA_KEYS.has(key)
   );
+  if (!hasOnlyRecognizedKeys) {
+    return false;
+  }
+  const hasEmptyRequired =
+    schema.required === undefined ||
+    schema.required === null ||
+    (Array.isArray(schema.required) && schema.required.length === 0);
+  const allowsNoAdditional =
+    schema.additionalProperties === undefined ||
+    schema.additionalProperties === false;
+  const allowsNoUnevaluated =
+    schema.unevaluatedProperties === undefined ||
+    schema.unevaluatedProperties === false;
+  const hasZeroMinProperties =
+    schema.minProperties === undefined || schema.minProperties === 0;
+  const hasZeroMaxProperties =
+    schema.maxProperties === undefined || schema.maxProperties === 0;
+  const isNonNullable =
+    schema.nullable === undefined || schema.nullable === false;
   return (
     isEmptyObjectRecord(schema.properties) &&
     isEmptyObjectRecord(schema.patternProperties) &&
-    !hasRequired &&
-    !hasMinProperties &&
-    !schema.additionalProperties &&
-    !schema.unevaluatedProperties &&
-    !schema.nullable &&
-    !schema.enum &&
-    !hasCombinatorOrRef
+    isEmptyObjectRecord(schema.dependencies) &&
+    isEmptyObjectRecord(schema.dependentRequired) &&
+    isEmptyObjectRecord(schema.dependentSchemas) &&
+    hasEmptyRequired &&
+    allowsNoAdditional &&
+    allowsNoUnevaluated &&
+    hasZeroMinProperties &&
+    hasZeroMaxProperties &&
+    isNonNullable
   );
 }
 

@@ -1492,6 +1492,14 @@ describe('toGeminiTool', () => {
       { type: 'object' },
       { type: 'object', properties: {}, additionalProperties: false },
       { type: ['object'], properties: {} },
+      {
+        type: 'object',
+        properties: {},
+        additionalProperties: false,
+        dependencies: {},
+        dependentRequired: {},
+        dependentSchemas: {},
+      },
     ]) {
       assert.deepStrictEqual(
         toGeminiTool({
@@ -1552,6 +1560,12 @@ describe('toGeminiTool', () => {
         additionalProperties: false,
       },
       { type: 'object', minProperties: 1 },
+      {
+        type: 'object',
+        propertyNames: { pattern: '^tag_' },
+        maxProperties: 1,
+      },
+      { type: 'object', const: { mode: 'fast' } },
     ]) {
       assert.deepStrictEqual(
         toGeminiTool({
