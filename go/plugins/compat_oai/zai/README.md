@@ -69,8 +69,7 @@ is at https://docs.z.ai/guides/overview/pricing.
 
 Models take a typed `zai.ChatConfig`: the generation fields Z.ai accepts plus
 its own controls (`thinking`, `reasoningEffort`, `doSample`). `zai.ModelRef`
-carries the config
-with the model ID:
+carries the config with the model ID:
 
 ```go
 response, err := genkit.Generate(ctx, g,

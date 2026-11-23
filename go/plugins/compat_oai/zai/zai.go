@@ -182,7 +182,7 @@ var (
 // declared, since Z.ai serves dated snapshots the plugin cannot enumerate,
 // and an undeclared list leaves config version pinning unconstrained.
 //
-// Catalog: https://docs.z.ai/guides/llm/overview
+// Catalog: https://docs.z.ai/guides/overview/pricing
 var supportedModels = map[string]ai.ModelOptions{
 	// GLM 5.4 takes text, image, video, and file input. See
 	// https://docs.z.ai/guides/llm/glm-5.4.
