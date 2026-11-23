@@ -130,9 +130,10 @@ func TestConvertPromptArgument(t *testing.T) {
 		{"number", "1.5", 1.5, false},
 		{"boolean", "true", true, false},
 		{"boolean", "yes", nil, true},
-		{"object", `{"a":1}`, map[string]any{"a": 1.0}, false},
-		{"array", `[1,"x"]`, []any{1.0, "x"}, false},
+		{"object", `{"id":9007199254740993}`, map[string]any{"id": json.Number("9007199254740993")}, false},
+		{"array", `[1,"x"]`, []any{json.Number("1"), "x"}, false},
 		{"object", "{", nil, true},
+		{"object", "{} {}", nil, true},
 		{"string", "3", "3", false},
 		{nil, "3", "3", false},
 		{[]any{"integer", "null"}, "3", "3", false},
@@ -207,11 +208,21 @@ func TestMCPServerUsesPromptDefaults(t *testing.T) {
 		ai.WithInputType(greetInput{Greeting: "Hello", Name: "Ada"}),
 		ai.WithPrompt("{{greeting}} {{name}}"),
 	)
+	// The zero value given to WithInputType holds no real defaults.
+	genkit.DefinePrompt(g, "zero-greet",
+		ai.WithInputType(greetInput{}),
+		ai.WithPrompt("{{greeting}} {{name}}"),
+	)
 	s := NewMCPServer(g, MCPServerOptions{Name: "defaults"})
-	for _, arg := range listPrompts(t, s)[0].Arguments {
-		if arg.Required {
-			t.Errorf("argument %q with a default is required", arg.Name)
+	for _, prompt := range listPrompts(t, s) {
+		for _, arg := range prompt.Arguments {
+			if want := prompt.Name == "zero-greet"; arg.Required != want {
+				t.Errorf("%s argument %q required = %t, want %t", prompt.Name, arg.Name, arg.Required, want)
+			}
 		}
+	}
+	if _, err := getPrompt(t, s, "zero-greet", map[string]string{"greeting": "Hi"}); !strings.Contains(err, `requires argument "name"`) {
+		t.Errorf("prompts/get zero-greet without name error = %q, want missing argument", err)
 	}
 	for _, test := range []struct {
 		arguments map[string]string
@@ -255,7 +266,8 @@ func TestMCPServerSkipsPromptsWithoutObjectInput(t *testing.T) {
 
 func TestGenkitMessagesToMCP(t *testing.T) {
 	got, err := genkitMessagesToMCP([]*ai.Message{
-		ai.NewSystemTextMessage("Be brief."),
+		ai.NewMessage(ai.RoleSystem, nil, ai.NewTextPart("Be brief."), ai.NewTextPart("Be kind.")),
+		ai.NewMessage(ai.RoleSystem, nil, ai.NewMediaPart("", "data:image/png;base64,aGVsbG8="), ai.NewTextPart("Use the logo.")),
 		ai.NewUserTextMessage("Hi"),
 		ai.NewModelTextMessage("Hello"),
 	})
@@ -264,11 +276,19 @@ func TestGenkitMessagesToMCP(t *testing.T) {
 	}
 	want := []mcp.PromptMessage{
 		{Role: mcp.RoleUser, Content: mcp.NewTextContent("System instructions:\nBe brief.")},
+		{Role: mcp.RoleUser, Content: mcp.NewTextContent("Be kind.")},
+		{Role: mcp.RoleUser, Content: mcp.NewTextContent("System instructions:")},
+		{Role: mcp.RoleUser, Content: mcp.NewImageContent("aGVsbG8=", "image/png")},
+		{Role: mcp.RoleUser, Content: mcp.NewTextContent("Use the logo.")},
 		{Role: mcp.RoleUser, Content: mcp.NewTextContent("Hi")},
 		{Role: mcp.RoleAssistant, Content: mcp.NewTextContent("Hello")},
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("genkitMessagesToMCP mismatch (-want +got):\n%s", diff)
+	}
+	// MCP requires a messages array, so an empty render must not encode as null.
+	if got, err := genkitMessagesToMCP(nil); err != nil || got == nil {
+		t.Errorf("genkitMessagesToMCP(nil) = %#v, %v, want an empty slice", got, err)
 	}
 	if _, err := genkitMessagesToMCP([]*ai.Message{ai.NewMessage(ai.RoleTool, nil, ai.NewTextPart("result"))}); err == nil {
 		t.Error("genkitMessagesToMCP accepted a tool message")
@@ -289,6 +309,7 @@ func TestGenkitPartToMCP(t *testing.T) {
 		{"empty media", ai.NewMediaPart("audio/wav", ""), nil},
 		{"signed remote URL", ai.NewMediaPart("image/png", "https://storage.example.com/a.png?X-Goog-Signature=secret"), nil},
 		{"video", ai.NewMediaPart("video/mp4", "data:video/mp4;base64,aGVsbG8="), nil},
+		{"percent-encoded data URI", ai.NewMediaPart("image/svg+xml", "data:image/svg+xml,%3Csvg%2F%3E"), nil},
 		{"tool request", ai.NewToolRequestPart(&ai.ToolRequest{Name: "lookup"}), nil},
 		{"tool response", ai.NewToolResponsePart(&ai.ToolResponse{Name: "lookup"}), nil},
 		{"custom", ai.NewCustomPart(map[string]any{"a": 1}), nil},

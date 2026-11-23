@@ -19,7 +19,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -113,15 +115,15 @@ func genkitPromptDefaults(desc api.ActionDesc) map[string]any {
 }
 
 // genkitPromptArguments lists the properties of a normalized object schema as
-// MCP prompt arguments, sorted by name. A required property with a default
-// value is optional.
+// MCP prompt arguments, sorted by name. A required property is optional only
+// when its default is not a zero value: ai.WithInputType stores its whole
+// value as the default, so the zero struct T{} sets no real defaults.
 func genkitPromptArguments(schema, defaults map[string]any) []mcp.PromptArgument {
 	properties, _ := schema["properties"].(map[string]any)
 	required, _ := schema["required"].([]any)
 	arguments := make([]mcp.PromptArgument, 0, len(properties))
 	for name, raw := range properties {
-		_, hasDefault := defaults[name]
-		arg := mcp.PromptArgument{Name: name, Required: slices.Contains(required, any(name)) && !hasDefault}
+		arg := mcp.PromptArgument{Name: name, Required: slices.Contains(required, any(name)) && isZeroValue(defaults[name])}
 		if property, ok := raw.(map[string]any); ok {
 			arg.Description, _ = property["description"].(string)
 		}
@@ -129,6 +131,17 @@ func genkitPromptArguments(schema, defaults map[string]any) []mcp.PromptArgument
 	}
 	slices.SortFunc(arguments, func(a, b mcp.PromptArgument) int { return strings.Compare(a.Name, b.Name) })
 	return arguments
+}
+
+func isZeroValue(value any) bool {
+	if value == nil {
+		return true
+	}
+	v := reflect.ValueOf(value)
+	if v.Kind() == reflect.Map || v.Kind() == reflect.Slice {
+		return v.Len() == 0
+	}
+	return v.IsZero()
 }
 
 // convertPromptArgument converts an MCP prompt argument, which is always a
@@ -143,9 +156,15 @@ func convertPromptArgument(property map[string]any, value string) (any, error) {
 	case "boolean":
 		return strconv.ParseBool(value)
 	case "object", "array":
+		// Keep numbers as json.Number so large integers keep their digits.
+		decoder := json.NewDecoder(strings.NewReader(value))
+		decoder.UseNumber()
 		var converted any
-		if err := json.Unmarshal([]byte(value), &converted); err != nil {
+		if err := decoder.Decode(&converted); err != nil {
 			return nil, fmt.Errorf("not a JSON %s: %w", kind, err)
+		}
+		if decoder.Decode(new(any)) != io.EOF {
+			return nil, fmt.Errorf("not a single JSON %s", kind)
 		}
 		return converted, nil
 	}
@@ -153,11 +172,13 @@ func convertPromptArgument(property map[string]any, value string) (any, error) {
 }
 
 // genkitMessagesToMCP converts rendered prompt messages to MCP prompt
-// messages, one per part. MCP prompts have only user and assistant roles, so a
-// system message becomes a user message whose text starts with
-// "System instructions:".
+// messages, one per part. MCP prompts have only user and assistant roles, so
+// the parts of a system message become user messages, the first of them
+// starting with "System instructions:". When that first part is not text, a
+// text message holding only the prefix comes before it.
 func genkitMessagesToMCP(messages []*ai.Message) ([]mcp.PromptMessage, error) {
-	var result []mcp.PromptMessage
+	const systemPrefix = "System instructions:"
+	result := []mcp.PromptMessage{} // MCP requires an array, even when empty.
 	for _, message := range messages {
 		if message == nil {
 			continue
@@ -171,6 +192,7 @@ func genkitMessagesToMCP(messages []*ai.Message) ([]mcp.PromptMessage, error) {
 		default:
 			return nil, fmt.Errorf("MCP prompts do not support role %q", message.Role)
 		}
+		prefix := message.Role == ai.RoleSystem
 		for _, part := range message.Content {
 			if part == nil {
 				continue
@@ -179,9 +201,14 @@ func genkitMessagesToMCP(messages []*ai.Message) ([]mcp.PromptMessage, error) {
 			if err != nil {
 				return nil, err
 			}
-			if text, ok := content.(mcp.TextContent); ok && message.Role == ai.RoleSystem {
-				text.Text = "System instructions:\n" + text.Text
-				content = text
+			if prefix {
+				prefix = false
+				if text, ok := content.(mcp.TextContent); ok {
+					text.Text = systemPrefix + "\n" + text.Text
+					content = text
+				} else {
+					result = append(result, mcp.PromptMessage{Role: role, Content: mcp.NewTextContent(systemPrefix)})
+				}
 			}
 			result = append(result, mcp.PromptMessage{Role: role, Content: content})
 		}
@@ -192,9 +219,15 @@ func genkitMessagesToMCP(messages []*ai.Message) ([]mcp.PromptMessage, error) {
 // genkitPartToMCP converts a rendered prompt part with partToMCP, which also
 // converts tool results. Unlike a tool result, a prompt fails, as in the
 // JavaScript server, on a part MCP cannot carry: tool requests and responses,
-// custom, reasoning and resource parts, media given by URL, media other than
-// images and audio, and media without data.
+// custom, reasoning and resource parts, media given by URL or by a data URI
+// that is not base64-encoded, media other than images and audio, and media
+// without data.
 func genkitPartToMCP(part *ai.Part) (mcp.Content, error) {
+	if rest, ok := strings.CutPrefix(part.Text, "data:"); ok && part.IsMedia() {
+		if header, _, _ := strings.Cut(rest, ","); !strings.HasSuffix(header, ";base64") {
+			return nil, errors.New("media data URI must be base64-encoded")
+		}
+	}
 	content, err := partToMCP(part)
 	empty := part.IsMedia() && part.Text == ""
 	switch c := content.(type) {
