@@ -216,8 +216,11 @@ func TestMCPServerToolFilterExcludesCalls(t *testing.T) {
 			return tool.Name() == "public"
 		},
 	})
-	if err := s.setup(); err != nil {
-		t.Fatal(err)
+	if s.GetServer() == nil {
+		t.Fatal("GetServer() = nil, want initialized MCP server")
+	}
+	if diff := cmp.Diff([]string{"public"}, s.ListRegisteredTools()); diff != "" {
+		t.Fatalf("ListRegisteredTools() mismatch (-want +got):\n%s", diff)
 	}
 	if genkit.LookupTool(g, "private") == nil {
 		t.Fatal("filter removed private tool from Genkit registry")

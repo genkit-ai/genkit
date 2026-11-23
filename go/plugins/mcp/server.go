@@ -38,7 +38,8 @@ type MCPServerOptions struct {
 	Version string
 	// ToolFilter selects which Genkit tools this MCP server exposes.
 	// If nil, all tools are exposed. Excluded tools cannot be listed or called
-	// through this server. The filter runs once during server setup.
+	// through this server. The filter runs once during initial server setup
+	// (triggered by the first call to ServeStdio, Serve, or GetServer).
 	ToolFilter func(ai.Tool) bool
 }
 
@@ -362,7 +363,7 @@ func (s *GenkitMCPServer) GetServer() *server.MCPServer {
 	return s.mcpServer
 }
 
-// ListRegisteredTools returns the names of all discovered tools
+// ListRegisteredTools returns the names of the tools registered on this MCP server.
 func (s *GenkitMCPServer) ListRegisteredTools() []string {
 	var toolNames []string
 	for _, tool := range s.toolActions {
