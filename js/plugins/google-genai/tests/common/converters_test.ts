@@ -1912,6 +1912,28 @@ describe('toGeminiTool', () => {
       properties: { street: { type: SchemaType.STRING } },
       required: undefined,
     });
+
+    const draft7Anchor = toGeminiTool({
+      name: 'draft7_plain_name_fragment_id',
+      description: 'Draft 7 child with plain-name fragment $id',
+      inputSchema: {
+        $schema: 'http://json-schema.org/draft-07/schema#',
+        type: 'object',
+        properties: {
+          contact: {
+            $id: '#contact',
+            type: 'object',
+            properties: { name: { $ref: '#/definitions/Name' } },
+          },
+        },
+        definitions: { Name: { type: 'string' } },
+      },
+    });
+    assert.deepStrictEqual(draft7Anchor.parameters?.properties?.contact, {
+      type: SchemaType.OBJECT,
+      properties: { name: { type: SchemaType.STRING } },
+      required: undefined,
+    });
   });
 
   it('should ignore $ref sibling keywords for Draft 4-7 schemas', () => {
@@ -2002,6 +2024,26 @@ describe('toGeminiTool', () => {
           /Unsupported sibling keyword type alongside tool schema reference/,
       }
     );
+
+    const draft2020Anchor = toGeminiTool({
+      name: 'draft2020_ref_sibling_anchor',
+      description: 'Draft 2020-12 tool with sibling $anchor alongside $ref',
+      inputSchema: {
+        $schema: 'https://json-schema.org/draft/2020-12/schema',
+        type: 'object',
+        properties: {
+          names: {
+            type: 'array',
+            items: { $ref: '#/$defs/Name', $anchor: 'nameItem' },
+          },
+        },
+        $defs: { Name: { type: 'string' } },
+      },
+    });
+    assert.deepStrictEqual(draft2020Anchor.parameters?.properties?.names, {
+      type: SchemaType.ARRAY,
+      items: { type: SchemaType.STRING },
+    });
 
     assert.throws(
       () =>

@@ -59,6 +59,9 @@ const MAX_GEMINI_TOOL_SCHEMA_DEPTH = 128;
 // replace constraints on the referenced schema with sibling constraints.
 const REF_ANNOTATION_KEYS = new Set([
   '$ref',
+  '$anchor',
+  '$dynamicAnchor',
+  '$recursiveAnchor',
   '$comment',
   '$defs',
   '$id',
@@ -118,13 +121,17 @@ function hasSchemaResourceMarker(
     return false;
   }
   const idKey = isDraft4 ? 'id' : '$id';
+  const idValue = Object.prototype.hasOwnProperty.call(record, idKey)
+    ? record[idKey]
+    : undefined;
+  const schemaValue = Object.prototype.hasOwnProperty.call(record, '$schema')
+    ? record.$schema
+    : undefined;
   return (
-    (Object.prototype.hasOwnProperty.call(record, idKey) &&
-      typeof record[idKey] === 'string' &&
-      record[idKey].length > 0) ||
-    (Object.prototype.hasOwnProperty.call(record, '$schema') &&
-      typeof record.$schema === 'string' &&
-      record.$schema.length > 0)
+    (typeof idValue === 'string' &&
+      idValue.length > 0 &&
+      !idValue.startsWith('#')) ||
+    (typeof schemaValue === 'string' && schemaValue.length > 0)
   );
 }
 
@@ -270,15 +277,12 @@ function toGeminiSchemaProperty(
       });
     }
     let nextProperty = referenced;
-    if (!refSiblingsIgnored) {
-      const {
-        $ref: _,
-        $id: _id,
-        id: _draft4Id,
-        $schema: _schema,
-        ...overrides
-      } = property;
-      nextProperty = { ...referenced, ...overrides };
+    if (
+      !refSiblingsIgnored &&
+      typeof property.description === 'string' &&
+      property.description.length > 0
+    ) {
+      nextProperty = { ...referenced, description: property.description };
     }
     return toGeminiSchemaProperty(
       nextProperty,
