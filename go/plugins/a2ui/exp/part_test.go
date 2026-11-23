@@ -48,7 +48,7 @@ func TestNewPartWireShape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"data":{"envelopes":[{"createSurface":{"surfaceId":"s1"}}]},"metadata":{"mimeType":"application/a2ui+json"}}`
+	want := `{"data":{"messages":[{"createSurface":{"surfaceId":"s1"}}]},"metadata":{"mimeType":"application/a2ui+json"}}`
 	if string(b) != want {
 		t.Errorf("wire shape = %s\nwant       = %s", string(b), want)
 	}
@@ -95,5 +95,147 @@ func TestEnvelopesFromPartsRoundTrip(t *testing.T) {
 	action, _ := envs[0]["action"].(map[string]any)
 	if action["name"] != "submit" {
 		t.Errorf("action name = %v, want submit", action["name"])
+	}
+}
+
+func TestEnvelopesFromPartsLegacyKey(t *testing.T) {
+	// Parts written before the rename to "messages" must keep replaying.
+	p := ai.NewDataPart(map[string]any{
+		"envelopes": []any{map[string]any{"deleteSurface": map[string]any{"surfaceId": "s1"}}},
+	})
+	p.Metadata = map[string]any{"mimeType": A2UIMimeType}
+	if !IsPart(p) {
+		t.Fatal("legacy part not recognized by IsPart")
+	}
+	if envs := EnvelopesFromParts([]*ai.Part{p}); len(envs) != 1 {
+		t.Fatalf("got %d envelopes, want 1", len(envs))
+	}
+}
+
+func TestNewPartNilSliceWireShape(t *testing.T) {
+	p := newPart(nil)
+	if !IsPart(p) {
+		t.Fatal("newPart(nil) must pass IsPart")
+	}
+	b, err := json.Marshal(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"data":{"messages":[]},"metadata":{"mimeType":"application/a2ui+json"}}`
+	if string(b) != want {
+		t.Errorf("wire shape = %s\nwant       = %s", string(b), want)
+	}
+}
+
+func TestIsPartAndMessagesPrecedence(t *testing.T) {
+	createEnv := Envelope{"createSurface": map[string]any{"surfaceId": "s1"}}
+	deleteEnv := Envelope{"deleteSurface": map[string]any{"surfaceId": "s1"}}
+	var typedNilAny []any
+	var typedNilEnv []Envelope
+
+	makePart := func(data map[string]any) *ai.Part {
+		p := ai.NewDataPart(data)
+		p.Metadata = map[string]any{"mimeType": A2UIMimeType}
+		return p
+	}
+
+	tests := []struct {
+		name      string
+		part      *ai.Part
+		wantValid bool
+		wantCount int
+		wantFirst string
+	}{
+		{
+			name:      "non-list messages rejected",
+			part:      makePart(map[string]any{"messages": "oops"}),
+			wantValid: false,
+		},
+		{
+			name:      "non-list legacy envelopes rejected",
+			part:      makePart(map[string]any{"envelopes": map[string]any{}}),
+			wantValid: false,
+		},
+		{
+			name:      "non-nil non-list messages alongside valid envelopes rejected",
+			part:      makePart(map[string]any{"messages": "oops", "envelopes": []any{createEnv}}),
+			wantValid: false,
+		},
+		{
+			name:      "messages wins over envelopes when both non-empty",
+			part:      makePart(map[string]any{"messages": []any{createEnv}, "envelopes": []any{deleteEnv}}),
+			wantValid: true,
+			wantCount: 1,
+			wantFirst: "createSurface",
+		},
+		{
+			name:      "empty non-nil messages wins over envelopes",
+			part:      makePart(map[string]any{"messages": []any{}, "envelopes": []any{deleteEnv}}),
+			wantValid: true,
+			wantCount: 0,
+		},
+		{
+			name:      "untyped nil messages falls back to envelopes",
+			part:      makePart(map[string]any{"messages": nil, "envelopes": []any{deleteEnv}}),
+			wantValid: true,
+			wantCount: 1,
+			wantFirst: "deleteSurface",
+		},
+		{
+			name:      "typed nil []any messages falls back to envelopes",
+			part:      makePart(map[string]any{"messages": typedNilAny, "envelopes": []any{deleteEnv}}),
+			wantValid: true,
+			wantCount: 1,
+			wantFirst: "deleteSurface",
+		},
+		{
+			name:      "typed nil []Envelope messages alone rejected",
+			part:      makePart(map[string]any{"messages": typedNilEnv}),
+			wantValid: false,
+		},
+		{
+			name:      "in-process []Envelope accepted under messages",
+			part:      makePart(map[string]any{"messages": []Envelope{createEnv}}),
+			wantValid: true,
+			wantCount: 1,
+			wantFirst: "createSurface",
+		},
+		{
+			name:      "in-process []Envelope accepted under envelopes",
+			part:      makePart(map[string]any{"envelopes": []Envelope{deleteEnv}}),
+			wantValid: true,
+			wantCount: 1,
+			wantFirst: "deleteSurface",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsPart(tc.part); got != tc.wantValid {
+				t.Fatalf("IsPart = %v, want %v", got, tc.wantValid)
+			}
+			envs := EnvelopesFromParts([]*ai.Part{tc.part})
+			if len(envs) != tc.wantCount {
+				t.Fatalf("len(EnvelopesFromParts) = %d, want %d", len(envs), tc.wantCount)
+			}
+			if tc.wantFirst != "" {
+				if _, ok := envs[0][tc.wantFirst]; !ok {
+					t.Errorf("first envelope = %v, missing %q", envs[0], tc.wantFirst)
+				}
+			}
+		})
+	}
+
+	// JSON wire payload with explicit `"messages": null` alongside `"envelopes"`.
+	var fromJSON ai.Part
+	rawJSON := `{"data":{"messages":null,"envelopes":[{"deleteSurface":{"surfaceId":"s1"}}]},"metadata":{"mimeType":"application/a2ui+json"}}`
+	if err := json.Unmarshal([]byte(rawJSON), &fromJSON); err != nil {
+		t.Fatal(err)
+	}
+	if !IsPart(&fromJSON) {
+		t.Fatal("JSON messages:null + envelopes should pass IsPart")
+	}
+	if envs := EnvelopesFromParts([]*ai.Part{&fromJSON}); len(envs) != 1 {
+		t.Fatalf("got %d envelopes from JSON fallback, want 1", len(envs))
 	}
 }

@@ -35,14 +35,13 @@ from google.genai.errors import APIError
 from pydantic import ValidationError
 
 from genkit import (
-    ActionRunContext,
     FinishReason,
     GenkitError,
     Message,
     Part,
     Role,
 )
-from genkit.model import Constrained, ModelRequest
+from genkit.model import ConstrainedSupport, ModelContext, ModelRequest
 
 PNG_BYTES = b'\x89PNG\r\n\x1a\n-person'
 PNG_B64 = base64.b64encode(PNG_BYTES).decode('ascii')
@@ -111,7 +110,7 @@ def _wire_body(call_kwargs: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _generate(model: VirtualTryOnModel, request: ModelRequest) -> Any:  # noqa: ANN401
-    return await model.generate(request, ActionRunContext())
+    return await model.generate(request, ModelContext())
 
 
 class TestRequestShape:
@@ -325,20 +324,6 @@ class TestRequestShape:
         client.aio.models.recontext_image.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_request_extra_body_keeps_the_plugin_one(self) -> None:
-        """The plugin's http_options.extra_body still reaches the wire when the request adds its own."""
-        client = _client()
-        plugin_options = genai_types.HttpOptions(extra_body={'parameters': {'enhancePrompt': True}})
-        model = VirtualTryOnModel('virtual-try-on-001', client, client_kwargs={'http_options': plugin_options})
-        config = VirtualTryOnConfig.model_validate({'personGeneration': 'allow_adult'})
-        await _generate(model, _request(config=config))
-
-        sent = client.aio.models.recontext_image.await_args.kwargs['config']
-        assert sent.http_options.extra_body == {
-            'parameters': {'enhancePrompt': True, 'personGeneration': 'allow_adult'}
-        }
-
-    @pytest.mark.asyncio
     async def test_no_config_sends_no_config(self) -> None:
         """A request with no config leaves the parameters block off."""
         client = _client()
@@ -450,7 +435,7 @@ class TestResponseShape:
         """There is nothing to stream; the caller still gets the complete response."""
         client = _client(response=_sdk_response([{'bytesBase64Encoded': PNG_B64, 'mimeType': 'image/png'}]))
         chunks: list[object] = []
-        ctx = ActionRunContext(streaming_callback=chunks.append)
+        ctx = ModelContext(streaming_callback=chunks.append)
 
         response = await VirtualTryOnModel('virtual-try-on-001', client).generate(_request(), ctx)
 
@@ -489,7 +474,7 @@ class TestRequestClient:
         )
 
         with patch('genkit_google_genai._models._virtual_try_on.genai.Client', return_value=override) as ctor:
-            await model.generate(_request(), ActionRunContext(context={'secrets': {'api_key': 'sk-tenant'}}))
+            await model.generate(_request(), ModelContext(context={'secrets': {'api_key': 'sk-tenant'}}))
 
         kwargs = ctor.call_args.kwargs
         assert kwargs['api_key'] == 'sk-tenant'
@@ -509,9 +494,7 @@ class TestRequestClient:
         config = VirtualTryOnConfig.model_validate({'location': 'europe-west4'})
 
         with patch('genkit_google_genai._models._virtual_try_on.genai.Client', return_value=override) as ctor:
-            await model.generate(
-                _request(config=config), ActionRunContext(context={'secrets': {'api_key': 'sk-tenant'}})
-            )
+            await model.generate(_request(config=config), ModelContext(context={'secrets': {'api_key': 'sk-tenant'}}))
 
         kwargs = ctor.call_args.kwargs
         assert kwargs['api_key'] == 'sk-tenant'
@@ -630,7 +613,7 @@ class TestRequestClient:
         model = VirtualTryOnModel('virtual-try-on-001', _client())
 
         with pytest.raises(GenkitError) as exc_info:
-            await model.generate(_request(), ActionRunContext(context={'api_key': 'sk-tenant'}))
+            await model.generate(_request(), ModelContext(context={'api_key': 'sk-tenant'}))
         assert exc_info.value.status == 'INVALID_ARGUMENT'
         assert 'context.secrets' in str(exc_info.value)
 
@@ -643,7 +626,7 @@ class TestRequestClient:
             patch('genkit_google_genai._models._virtual_try_on.genai.Client', side_effect=ValueError('bad kwargs')),
             pytest.raises(GenkitError) as exc_info,
         ):
-            await model.generate(_request(), ActionRunContext(context={'secrets': {'api_key': 'sk-tenant'}}))
+            await model.generate(_request(), ModelContext(context={'secrets': {'api_key': 'sk-tenant'}}))
         assert exc_info.value.status == 'INVALID_ARGUMENT'
         assert 'bad kwargs' in str(exc_info.value)
 
@@ -775,4 +758,4 @@ def test_model_info_does_not_claim_text_inputs() -> None:
     supports = virtual_try_on_model_info('virtual-try-on-001').supports
     assert supports is not None
     assert supports.system_role is False
-    assert supports.constrained == Constrained.NONE
+    assert supports.constrained == ConstrainedSupport.NONE

@@ -291,8 +291,10 @@ function isUrlCitation(annotation: unknown): annotation is UrlCitation {
   );
 }
 
-// Streams a response that uses the built-in Google Search tool. Citations
-// arrive at the end of the stream and are attached to the final text part.
+// Streams a response that uses the built-in Google Search tool. Each search
+// is streamed as a `googleSearchCall` part (with its queries) when it
+// finishes. Citations arrive at the end of the stream and are attached to
+// the final text part.
 ai.defineFlow('streaming-google-search', async (_, { sendChunk }) => {
   const { stream, response } = ai.generateStream({
     model: googleAI.model('gemini-3.6-flash'),
@@ -305,6 +307,13 @@ ai.defineFlow('streaming-google-search', async (_, { sendChunk }) => {
   });
 
   for await (const chunk of stream) {
+    for (const part of chunk.content) {
+      const queries: unknown =
+        part.custom?.googleSearchCall?.arguments?.queries;
+      if (Array.isArray(queries)) {
+        sendChunk(`[Searching: ${queries.join(', ')}]\n`);
+      }
+    }
     if (chunk.text) {
       sendChunk(chunk.text);
     }
@@ -480,6 +489,29 @@ ai.defineFlow('multimodal-input', async () => {
         media: {
           contentType: 'image/jpeg',
           url: `data:image/jpeg;base64,${photoBase64}`,
+        },
+      },
+    ],
+  });
+
+  return text;
+});
+
+// A Word document as inline media. Office documents (Word, Excel, ...) are
+// sent as `document` content with their content type.
+ai.defineFlow('word-document-input', async () => {
+  const docxBase64 = fs.readFileSync('story.docx', { encoding: 'base64' });
+  const contentType =
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+
+  const { text } = await ai.generate({
+    model: googleAI.model('gemini-3.8-flash'),
+    prompt: [
+      { text: 'Summarize this document in three sentences.' },
+      {
+        media: {
+          contentType,
+          url: `data:${contentType};base64,${docxBase64}`,
         },
       },
     ],
@@ -727,6 +759,52 @@ ai.defineFlow(
     return (await response).text;
   }
 );
+
+// Tool choice: `required` makes the model call a tool, `none` makes it
+// answer without one, `auto` (the default without toolChoice) lets it
+// decide. returnToolRequests returns the tool calls instead of running
+// them, so the output shows what the model asked for.
+ai.defineFlow(
+  {
+    name: 'tool-choice',
+    inputSchema: z.enum(['required', 'auto', 'none']).default('required'),
+  },
+  async (toolChoice) => {
+    const response = await ai.generate({
+      model: googleAI.model('gemini-3.8-flash'),
+      prompt: "What's the weather in Paris, France?",
+      tools: [getWeather],
+      toolChoice,
+      returnToolRequests: true,
+    });
+    return {
+      toolRequests: response.toolRequests.map((p) => p.toolRequest),
+      text: response.text,
+    };
+  }
+);
+
+// Only some tools allowed: functionCallingConfig with mode ANY and
+// allowedFunctionNames. The model would start with getWeather; only
+// celsiusToFahrenheit is allowed, so it calls that one.
+// allowedFunctionNames only applies with mode ANY or VALIDATED: with
+// another mode it's ignored with a warning.
+ai.defineFlow('tool-choice-allowed-function-names', async () => {
+  const response = await ai.generate({
+    model: googleAI.model('gemini-3.8-flash'),
+    prompt:
+      "What's the weather in Paris, France? Convert the temperature to Fahrenheit.",
+    tools: [getWeather, celsiusToFahrenheit],
+    config: {
+      functionCallingConfig: {
+        mode: 'ANY',
+        allowedFunctionNames: ['celsiusToFahrenheit'],
+      },
+    },
+    returnToolRequests: true,
+  });
+  return response.toolRequests.map((p) => p.toolRequest);
+});
 
 // Multipart tool calling
 ai.defineFlow(
@@ -1363,7 +1441,6 @@ function getApiKeyFromEnvVar(): string | undefined {
 }
 
 async function downloadVideo(video: MediaPart, path: string) {
-  const fetch = (await import('node-fetch')).default;
   // The key goes in a header, not the URL, so it stays out of logs.
   const videoDownloadResponse = await fetch(video.media!.url, {
     headers: { 'x-goog-api-key': getApiKeyFromEnvVar() ?? '' },
@@ -1378,7 +1455,7 @@ async function downloadVideo(video: MediaPart, path: string) {
 
   // Wait until the whole file is written, so callers can use it right away.
   await pipeline(
-    Readable.from(videoDownloadResponse.body),
+    Readable.fromWeb(videoDownloadResponse.body as any),
     fs.createWriteStream(path)
   );
 }
@@ -1770,8 +1847,10 @@ ai.defineFlow('deep-research-collaboration', async (_, { sendChunk }) => {
   sendChunk('\n--- Turn 2: Approving and Executing Plan ---');
   const interactionId = operation.id;
 
+  // A stored interaction can only be continued by the agent that created it
+  // (the server returns 400 "belongs to a different agent" otherwise).
   let { operation: op2 } = await ai.generate({
-    model: googleAI.model('deep-research-max-preview-04-2026'),
+    model: googleAI.model('deep-research-preview-04-2026'),
     prompt: 'Looks great! Proceed with the research.',
     config: {
       collaborativePlanning: false,

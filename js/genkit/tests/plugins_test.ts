@@ -14,9 +14,11 @@
  * limitations under the License.
  */
 
+import { logger } from '@genkit-ai/core/logging';
 import * as assert from 'assert';
-import { beforeEach, describe, it } from 'node:test';
+import { beforeEach, describe, it, mock } from 'node:test';
 import { genkit, type GenkitBeta } from '../src/beta';
+import { tool } from '../src/index';
 import {
   backgroundModel,
   embedderActionMetadata,
@@ -25,6 +27,7 @@ import {
   model,
   modelActionMetadata,
 } from '../src/plugin';
+import { defineEchoModel } from './helpers';
 
 const v1Plugin = genkitPlugin(
   'myV1Plugin',
@@ -255,5 +258,47 @@ describe('session', () => {
       name: 'GenkitError',
       status: 'NOT_FOUND',
     });
+  });
+});
+
+describe('v2 plugin tools', () => {
+  it('are not registered again when passed to generate', async () => {
+    const toolPlugin = genkitPluginV2({
+      name: 'toolPlugin',
+      init: () => [
+        tool({ name: 'eager', description: 'eager' }, async () => 'ok'),
+        tool(
+          { name: 'multipart', description: 'multipart', multipart: true },
+          async () => ({ output: 'ok' })
+        ),
+      ],
+      resolve: (actionType, name) =>
+        actionType === 'tool'
+          ? tool({ name, description: name }, async () => 'ok')
+          : undefined,
+    });
+    const ai = genkit({ model: 'echoModel', plugins: [toolPlugin] });
+    defineEchoModel(ai);
+    const tools = await Promise.all(
+      [
+        '/tool/toolPlugin/eager',
+        '/tool.v2/toolPlugin/multipart',
+        '/tool/toolPlugin/lazy',
+      ].map((key) => ai.registry.lookupAction(key))
+    );
+    const errors = mock.method(logger, 'error');
+
+    try {
+      await ai.generate({ prompt: 'hi', tools });
+      await ai.generate({ prompt: 'hi', tools });
+    } finally {
+      errors.mock.restore();
+    }
+
+    assert.deepStrictEqual(
+      errors.mock.calls.map((c) => c.arguments),
+      []
+    );
+    assert.ok(tools.every((t) => t.__registry === ai.registry));
   });
 });

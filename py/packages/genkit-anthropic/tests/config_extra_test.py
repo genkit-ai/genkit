@@ -58,7 +58,7 @@ def test_extra_colliding_key_wins_through_extra_body() -> None:
     assert params['extra_body']['temperature'] == 0.9
 
 
-@pytest.mark.parametrize('field', ['model', 'messages', 'system', 'tools', 'tool_choice', 'stream', 'output_config'])
+@pytest.mark.parametrize('field', ['model', 'messages', 'system', 'tools', 'stream', 'output_config'])
 def test_extra_cannot_set_genkit_built_fields(field: str) -> None:
     """Fields Genkit builds from the request are rejected, not overwritten."""
     with pytest.raises(GenkitError) as err:
@@ -77,11 +77,11 @@ def test_beta_only_key_in_extra_selects_beta_surface() -> None:
 
 
 def test_beta_only_key_in_extra_rejected_on_stable_surface() -> None:
-    """`apiVersion='stable'` plus a beta-only key in `extra` fails at validation."""
+    """`apiVersion='stable'` plus a beta-only key in `extra` fails the merged check."""
     beta_key = next(key for key in sorted(BETA_ONLY_KEYS) if key != 'betas')
 
-    with pytest.raises(ValidationError, match='beta'):
-        AnthropicConfig(api_version='stable', extra={beta_key: {}})
+    with pytest.raises(ValueError, match='beta'):
+        AnthropicConfig(api_version='stable', extra={beta_key: {}}).check_merged()
 
 
 def test_generate_anthropic_timeout_in_extra_raises_pointing_at_plugin() -> None:

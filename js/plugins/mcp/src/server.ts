@@ -14,8 +14,12 @@
  * limitations under the License.
  */
 
-import type { Server } from '@modelcontextprotocol/sdk/server/index.js' with { 'resolution-mode': 'import' };
-import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js' with { 'resolution-mode': 'import' };
+import type { Server } from '@modelcontextprotocol/sdk/server/index.js' with {
+  'resolution-mode': 'import',
+};
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js' with {
+  'resolution-mode': 'import',
+};
 import type {
   CallToolRequest,
   CallToolResult,
@@ -29,7 +33,9 @@ import type {
   Prompt,
   PromptMessage,
   Tool,
-} from '@modelcontextprotocol/sdk/types.js' with { 'resolution-mode': 'import' };
+} from '@modelcontextprotocol/sdk/types.js' with {
+  'resolution-mode': 'import',
+};
 import {
   ListResourceTemplatesRequest,
   ListResourcesRequest,
@@ -89,9 +95,8 @@ export class GenkitMcpServer {
    */
   async setup(): Promise<void> {
     if (this.actionsResolved) return;
-    const { Server } = await import(
-      '@modelcontextprotocol/sdk/server/index.js'
-    );
+    const { Server } =
+      await import('@modelcontextprotocol/sdk/server/index.js');
 
     this.server = new Server(
       { name: this.options.name, version: this.options.version || '1.0.0' },
@@ -338,9 +343,8 @@ export class GenkitMcpServer {
    * StdioServerTransport will be created and used.
    */
   async start(transport?: Transport) {
-    const { StdioServerTransport } = await import(
-      '@modelcontextprotocol/sdk/server/stdio.js'
-    );
+    const { StdioServerTransport } =
+      await import('@modelcontextprotocol/sdk/server/stdio.js');
     if (!transport) {
       transport = new StdioServerTransport();
     }

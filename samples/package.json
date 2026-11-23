@@ -3,25 +3,36 @@
   "private": true,
   "scripts": {
     "preinstall": "npx only-allow pnpm",
-    "build:js-angular": "cd js-angular && npm run setup && npm run build",
-    "build:js-character-generator": "cd js-character-generator && npm install && npm run build",
-    "build:js-chatbot": "cd js-chatbot && npm install && npm run setup && npm run build",
-    "build:js-coffee-shop": "cd js-coffee-shop && npm install && npm run build",
-    "build:js-menu": "cd js-menu && npm install && npm run build",
-    "build:js-prompts": "cd js-prompts && npm install && npm run build",
-    "build:js-schoolAgent": "cd js-schoolAgent && npm install && npm run build",
-    "build:js-gemini": "cd js-gemini && npm install && npm run build",
-    "build:all-samples": "concurrently npm:build:js-*"
+    "build:js-angular": "pnpm -r -F \"./js-angular/*\" build",
+    "build:js-character-generator": "pnpm -F ./js-character-generator build",
+    "build:js-chatbot": "pnpm -r -F \"./js-chatbot/*\" build",
+    "build:js-coffee-shop": "pnpm -F ./js-coffee-shop build",
+    "build:js-gemini": "pnpm -F ./js-gemini build",
+    "build:js-menu": "pnpm -F ./js-menu build",
+    "build:js-openai": "pnpm -F ./js-openai build",
+    "build:js-prompts": "pnpm -F ./js-prompts build",
+    "build:js-schoolAgent": "pnpm -F ./js-schoolAgent build",
+    "build:all-samples": "pnpm -r --workspace-concurrency -1 -F \"./js-*\" -F \"!./js-angular\" -F \"!./js-chatbot\" -F \"./js-angular/*\" -F \"./js-chatbot/*\" build"
   },
-  "pre-commit": [
-    "format:check"
-  ],
   "devDependencies": {
-    "npm-run-all": "^4.1.5",
-    "concurrently": "^8.2.2",
     "only-allow": "^1.2.1",
-    "pre-commit": "^1.2.2",
     "prettier": "^3.2.5",
     "tsx": "^4.19.2"
-  }
+  },
+  "pnpm": {
+    "overrides": {
+      "undici": "^7.30.0"
+    },
+    "onlyBuiltDependencies": [
+      "@firebase/util",
+      "@parcel/watcher",
+      "esbuild",
+      "lmdb",
+      "msgpackr-extract",
+      "protobufjs",
+      "re2",
+      "sharp"
+    ]
+  },
+  "packageManager": "pnpm@10.27.0+sha512.72d699da16b1179c14ba9e64dc71c9a40988cbdc65c264cb0e489db7de917f20dcf4d64d8723625f2969ba52d4b7e2a1170682d9ac2a5dcaeaab732b7e16f04a"
 }

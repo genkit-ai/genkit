@@ -114,8 +114,7 @@ class BackgroundActionImpl<
   I extends z.ZodTypeAny = z.ZodTypeAny,
   O extends z.ZodTypeAny = z.ZodTypeAny,
   RunOptions extends BackgroundActionRunOptions = BackgroundActionRunOptions,
-> implements BackgroundAction<I, O, RunOptions>
-{
+> implements BackgroundAction<I, O, RunOptions> {
   __action: ActionMetadata<I, O>;
 
   readonly startAction: Action<I, typeof OperationSchema>;
@@ -129,8 +128,7 @@ class BackgroundActionImpl<
     startAction: Action<I, typeof OperationSchema>,
     checkAction: Action<typeof OperationSchema, typeof OperationSchema>,
     cancelAction:
-      | Action<typeof OperationSchema, typeof OperationSchema>
-      | undefined
+      Action<typeof OperationSchema, typeof OperationSchema> | undefined
   ) {
     this.__action = {
       name: startAction.__action.name,
@@ -336,8 +334,8 @@ export function backgroundAction<
     }
   );
   let cancelAction:
-    | Action<typeof OperationSchema, typeof OperationSchema>
-    | undefined = undefined;
+    Action<typeof OperationSchema, typeof OperationSchema> | undefined =
+    undefined;
   if (config.cancel) {
     cancelAction = action(
       {
