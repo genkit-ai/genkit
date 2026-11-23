@@ -19,8 +19,29 @@
 /**
  * Main genkit import.
  *
+ * @example
  * ```ts
- * import { genkit } from 'genkit';
+ * import { genkit, z } from 'genkit';
+ * import { googleAI } from '@genkit-ai/google-genai';
+ *
+ * const ai = genkit({
+ *   plugins: [googleAI()],
+ * });
+ *
+ * export const myFlow = ai.defineFlow(
+ *   {
+ *     name: 'myFlow',
+ *     inputSchema: z.object({ subject: z.string() }),
+ *     outputSchema: z.string(),
+ *   },
+ *   async ({ subject }) => {
+ *     const { text } = await ai.generate({
+ *       model: googleAI.model('gemini-2.5-flash'),
+ *       prompt: `Say hello to ${subject}`,
+ *     });
+ *     return text;
+ *   }
+ * );
  * ```
  *
  * @module /

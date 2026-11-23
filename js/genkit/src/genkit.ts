@@ -176,6 +176,31 @@ export interface GenkitOptions {
  * Registry keeps track of actions, flows, tools, and many other components. Reflection server exposes an API to inspect the registry and trigger executions of actions in the registry. Flow server exposes flows as HTTP endpoints for production use.
  *
  * There may be multiple Genkit instances in a single codebase.
+ *
+ * @example
+ * ```ts
+ * import { genkit, z } from 'genkit';
+ * import { googleAI } from '@genkit-ai/google-genai';
+ *
+ * const ai = genkit({
+ *   plugins: [googleAI()],
+ * });
+ *
+ * export const myFlow = ai.defineFlow(
+ *   {
+ *     name: 'myFlow',
+ *     inputSchema: z.object({ subject: z.string() }),
+ *     outputSchema: z.string(),
+ *   },
+ *   async ({ subject }) => {
+ *     const { text } = await ai.generate({
+ *       model: googleAI.model('gemini-2.5-flash'),
+ *       prompt: `Say hello to ${subject}`,
+ *     });
+ *     return text;
+ *   }
+ * );
+ * ```
  */
 export class Genkit extends GenkitAI implements HasRegistry {
   /** Developer-configured options. */
@@ -229,6 +254,31 @@ export class Genkit extends GenkitAI implements HasRegistry {
 
   /**
    * Defines and registers a flow function.
+   *
+   * @example
+   * ```ts
+   * import { genkit, z } from 'genkit';
+   * import { googleAI } from '@genkit-ai/google-genai';
+   *
+   * const ai = genkit({
+   *   plugins: [googleAI()],
+   * });
+   *
+   * export const myFlow = ai.defineFlow(
+   *   {
+   *     name: 'myFlow',
+   *     inputSchema: z.object({ subject: z.string() }),
+   *     outputSchema: z.string(),
+   *   },
+   *   async ({ subject }) => {
+   *     const { text } = await ai.generate({
+   *       model: googleAI.model('gemini-2.5-flash'),
+   *       prompt: `Say hello to ${subject}`,
+   *     });
+   *     return text;
+   *   }
+   * );
+   * ```
    */
   defineFlow<
     I extends z.ZodTypeAny = z.ZodTypeAny,
@@ -808,6 +858,31 @@ function registerActionV2(
  *
  * This will create a new Genkit registry, register the provided plugins, stores, and other configuration. This
  * should be called before any flows are registered.
+ *
+ * @example
+ * ```ts
+ * import { genkit, z } from 'genkit';
+ * import { googleAI } from '@genkit-ai/google-genai';
+ *
+ * const ai = genkit({
+ *   plugins: [googleAI()],
+ * });
+ *
+ * export const myFlow = ai.defineFlow(
+ *   {
+ *     name: 'myFlow',
+ *     inputSchema: z.object({ subject: z.string() }),
+ *     outputSchema: z.string(),
+ *   },
+ *   async ({ subject }) => {
+ *     const { text } = await ai.generate({
+ *       model: googleAI.model('gemini-2.5-flash'),
+ *       prompt: `Say hello to ${subject}`,
+ *     });
+ *     return text;
+ *   }
+ * );
+ * ```
  */
 export function genkit(options: GenkitOptions): Genkit {
   return new Genkit(options);
