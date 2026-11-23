@@ -14,18 +14,18 @@
  * limitations under the License.
  */
 
-import Ajv, { type ErrorObject, type JSONSchemaType } from 'ajv';
+import { Ajv, type ErrorObject, type JSONSchemaType } from 'ajv';
 import addFormats from 'ajv-formats';
-import { getDatasetStore } from '.';
-import type { BaseRuntimeManager } from '../manager';
+import type { BaseRuntimeManager } from '../manager/index.js';
 import {
   InferenceDatasetSchema,
   type Action,
   type ErrorDetail,
   type ValidateDataRequest,
   type ValidateDataResponse,
-} from '../types';
-import { getModelInput } from '../utils';
+} from '../types/index.js';
+import { getModelInput } from '../utils/index.js';
+import { getDatasetStore } from './index.js';
 
 // Setup for AJV
 type JSONSchema = JSONSchemaType<any> | any;
@@ -110,7 +110,7 @@ function validate(
   }
 
   const ajv = new Ajv();
-  addFormats(ajv);
+  addFormats.default(ajv);
   const validator = ajv.compile(jsonSchema);
   const valid = validator(input) as boolean;
   const errors = validator.errors?.map((e) => e);

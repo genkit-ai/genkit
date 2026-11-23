@@ -17,15 +17,15 @@
 import { startServer } from '@genkit-ai/tools-common/server';
 import { findProjectRoot, logger } from '@genkit-ai/tools-common/utils';
 import { Command } from 'commander';
-import getPort, { makeRange } from 'get-port';
+import getPort, { portNumbers } from 'get-port';
 import open from 'open';
 import {
   EXPERIMENTAL_AUTH_OPTION_HELP,
   REFLECTION_V2_HOST_OPTION_HELP,
   getDevEnvVars,
   startDevProcessManager,
-} from '../utils/manager-utils';
-import { parsePort } from '../utils/option-parsers';
+} from '../utils/manager-utils.js';
+import { parsePort } from '../utils/option-parsers.js';
 
 interface FlutterRunOptions {
   /** --experimental-auth. */
@@ -41,6 +41,7 @@ interface FlutterRunOptions {
 
 /** Command to run a Flutter app in dev mode and/or the Dev UI. */
 export const startFlutter = new Command('start:flutter')
+  .allowExcessArguments(true)
   .description('runs a flutter app in Genkit dev mode')
   .option('-n, --noui', 'do not start the Dev UI', false)
   .option('-p, --port <port>', 'port for the Dev UI', parsePort)
@@ -92,7 +93,7 @@ export const startFlutter = new Command('start:flutter')
 
     if (!options.noui) {
       const port =
-        options.port ?? (await getPort({ port: makeRange(4000, 4099) }));
+        options.port ?? (await getPort({ port: portNumbers(4000, 4099) }));
       startServer(manager, port);
       if (options.open) {
         open(`http://localhost:${port}`);

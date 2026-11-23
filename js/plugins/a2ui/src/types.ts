@@ -150,17 +150,19 @@ export type A2uiServerEnvelope =
 export type A2uiEnvelope = A2uiServerEnvelope | ActionEnvelope;
 
 /**
- * The canonical "a2ui part": a Genkit `data` part whose `data` is an object
- * `{ envelopes }` wrapping the array of A2UI envelopes, and whose
- * `metadata.mimeType` is {@link A2UI_MIME_TYPE}.
+ * The canonical "a2ui part": a Genkit `data` part whose `data` is the A2UI
+ * spec's `{ messages }` payload wrapper around the array of A2UI envelopes, and
+ * whose `metadata.mimeType` is {@link A2UI_MIME_TYPE}.
  *
- * The array is wrapped in an object (rather than being the `data` value
- * directly) so the payload is a `Map<String, dynamic>`-shaped object on every
- * runtime — some (e.g. Dart) expect a data part's `data` to be an object, not a
- * bare array.
+ * The A2UI extension spec puts the message list directly in `data`, but a
+ * Genkit data part's `data` must be an object on every runtime (Dart expects a
+ * map), so the list sits under the spec's own `messages` wrapper.
+ *
+ * Parts written before the rename carry `{ envelopes }` instead; they are still
+ * read (see {@link a2uiPartMessages}) so persisted sessions replay.
  */
 export interface A2uiPart {
-  data: { envelopes: A2uiEnvelope[] };
+  data: { messages: A2uiEnvelope[] } | { envelopes: A2uiEnvelope[] };
   metadata: {
     mimeType: typeof A2UI_MIME_TYPE;
     [key: string]: unknown;

@@ -74,8 +74,7 @@ export type VertexAIEvaluationMetricConfig =
     };
 
 export type VertexAIEvaluationMetric =
-  | VertexAIEvaluationMetricType
-  | VertexAIEvaluationMetricConfig;
+  VertexAIEvaluationMetricType | VertexAIEvaluationMetricConfig;
 
 /** Options specific to evaluation configuration */
 export interface EvaluationOptions {

@@ -30,7 +30,7 @@ export function loadPromptFile(path: string): Promise<PromptFunction> {
 
 export async function renderText(
   prompt: PromptFunction,
-  input
+  input: unknown
 ): Promise<string> {
   const renderred = await prompt({
     input,

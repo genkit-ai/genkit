@@ -27,9 +27,10 @@ from __future__ import annotations
 
 from genkit_google_genai import GoogleAI
 
-from genkit import ActionRunContext, FinishReason
+from genkit import FinishReason
 from genkit.exp import Genkit
 from genkit.exp.agent import (
+    AgentContext,
     AgentFinishReason,
     AgentInput,
     AgentResult,
@@ -44,13 +45,13 @@ ai = Genkit(plugins=[GoogleAI()])
 store = InMemorySessionStore()
 
 
-async def custom_coder_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
+async def custom_coder_fn(sess: SessionRunner, ctx: AgentContext) -> AgentResult:
     async def handle_turn(inp: AgentInput, _: TurnContext) -> TurnResult | None:
         history = await sess.get_messages()
         messages = history or None
 
         stream_resp = ai.generate_stream(
-            model=GoogleAI.gemini_model('gemini-flash-latest'),
+            model=GoogleAI.gemini('gemini-flash-latest'),
             system='Concise coding assistant.',
             messages=messages,
         )

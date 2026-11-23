@@ -19,9 +19,9 @@
 from genkit_google_genai import GoogleAI
 from pydantic import BaseModel
 
-from genkit import Genkit, ToolRunContext
+from genkit import Genkit, ToolContext
 
-ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
 
 # What your auth middleware would have already resolved for this request.
 ACCOUNTS = {
@@ -35,7 +35,7 @@ class AccountNeed(BaseModel):
 
 
 @ai.tool()
-async def account_record(input: AccountNeed, ctx: ToolRunContext) -> str:
+async def account_record(input: AccountNeed, ctx: ToolContext) -> str:
     # Tenant is not a tool argument, so a prompt cannot hop to another customer.
     key = (str(ctx.context.get('user_id', '')), str(ctx.context.get('tenant_id', '')))
     account = ACCOUNTS.get(key, 'unknown')

@@ -1,5 +1,7 @@
 # Genkit Evaluators Plugin
 
+> **Final release line.** genkit-evaluators is removed in genkit 1.0 and requires `genkit<1`.
+
 Provides three built-in rule-based evaluators:
 
 - **regex** – Tests output against a regex pattern (reference = regex string)

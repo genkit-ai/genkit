@@ -143,8 +143,7 @@ export interface GenkitChatTransportConfig {
 export class GenkitChatTransport implements ChatTransport<UIMessage> {
   private readonly url: string;
   private readonly headersConfig?:
-    | Record<string, string>
-    | (() => Record<string, string>);
+    Record<string, string> | (() => Record<string, string>);
 
   constructor(config: GenkitChatTransportConfig) {
     this.url = config.url;

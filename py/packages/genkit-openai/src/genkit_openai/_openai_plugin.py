@@ -24,34 +24,30 @@ from collections.abc import Mapping
 from typing import Any, Literal, TypeAlias, cast
 
 from openai import APIError, AsyncOpenAI
-from openai.types import Model
+from openai.types import Model as OpenAIModelEntry
 from pydantic import BaseModel
 
-from genkit import ActionRunContext, Embedding, GenkitError, ModelResponse
+from genkit import Embedding, GenkitError, ModelResponse
 from genkit.embedder import (
+    Embedder,
     EmbedderInfo,
     EmbedderSupports,
     EmbedRequest,
     EmbedResponse,
-    embedder,
-    embedder_action_metadata,
 )
 from genkit.model import (
+    Model,
+    ModelContext,
     ModelInfo,
     ModelRef,
     ModelRequest,
-    Supports,
-    model as create_model,
-    model_action_metadata,
-    model_ref,
+    ModelSupports,
 )
 from genkit.plugin_api import (
     Action,
     ActionKind,
-    ActionMetadata,
     Plugin,
     loop_local_client,
-    to_json_schema,
 )
 from genkit_openai._models._audio import (
     SUPPORTED_STT_MODELS,
@@ -192,24 +188,24 @@ def _is_known_unsupported(name: str) -> bool:
     return any(matcher in name for matcher in _UNSUPPORTED_MODEL_MATCHERS)
 
 
-# Default Supports for each multimodal model type, used as fallback when
+# Default ModelSupports for each multimodal model type, used as fallback when
 # a model is not found in the registry.
-_DEFAULT_SUPPORTS: dict[_ModelType, Supports] = {
-    _ModelType.IMAGE: Supports(
+_DEFAULT_SUPPORTS: dict[_ModelType, ModelSupports] = {
+    _ModelType.IMAGE: ModelSupports(
         media=False,
         output=['media'],
         multiturn=False,
         system_role=False,
         tools=False,
     ),
-    _ModelType.TTS: Supports(
+    _ModelType.TTS: ModelSupports(
         media=False,
         output=['media'],
         multiturn=False,
         system_role=False,
         tools=False,
     ),
-    _ModelType.STT: Supports(
+    _ModelType.STT: ModelSupports(
         media=True,
         output=['text', 'json'],
         multiturn=False,
@@ -230,12 +226,12 @@ _MULTIMODAL_CONFIG: dict[_ModelType, _MultimodalModelConfig] = {
 }
 
 
-def _get_multimodal_info_dict(
+def _get_multimodal_info(
     name: str,
     model_type: _ModelType,
     supported_models: dict[str, ModelInfo],
-) -> tuple[dict[str, object], type[BaseModel]]:
-    """Build the info dictionary for a multimodal model.
+) -> tuple[ModelInfo, type[BaseModel]]:
+    """Build the ModelInfo for a multimodal model.
 
     Uses registry metadata when available, falls back to default supports.
 
@@ -245,25 +241,15 @@ def _get_multimodal_info_dict(
         supported_models: Registry of known models and their metadata.
 
     Returns:
-        A tuple containing the info dictionary and the config class this
+        A tuple containing the ModelInfo and the config class this
         endpoint checks against.
     """
     schema = multimodal_config_class(name=name, model_type=model_type)
     model_info = supported_models.get(name)
     if model_info:
-        return (
-            model_info.model_dump(by_alias=True, exclude_none=True, exclude={'config_schema'}),
-            schema,
-        )
+        return model_info, schema
 
-    default_supports = _DEFAULT_SUPPORTS.get(model_type)
-    return (
-        {
-            'label': f'OpenAI - {name}',
-            'supports': default_supports.model_dump(by_alias=True, exclude_none=True) if default_supports else {},
-        },
-        schema,
-    )
+    return ModelInfo(label=f'OpenAI - {name}', supports=_DEFAULT_SUPPORTS.get(model_type)), schema
 
 
 def multimodal_config_class(*, name: str, model_type: _ModelType) -> type[BaseModel]:
@@ -275,29 +261,6 @@ def multimodal_config_class(*, name: str, model_type: _ModelType) -> type[BaseMo
     if 'gpt-image' in name:
         return OpenAIGptImageConfig
     return OpenAIDalleConfig
-
-
-def _multimodal_action_metadata(
-    name: str,
-    supported_models: dict[str, ModelInfo],
-    model_type: _ModelType,
-) -> ActionMetadata:
-    """Build ActionMetadata for a multimodal model.
-
-    Args:
-        name: The raw model name (without the 'openai/' prefix).
-        supported_models: Registry of known models and their metadata.
-        model_type: The classified model type for default supports fallback.
-
-    Returns:
-        ActionMetadata for the model.
-    """
-    info_dict, config_schema = _get_multimodal_info_dict(name, model_type, supported_models)
-    return model_action_metadata(
-        name=open_ai_name(name),
-        config_schema=config_schema,
-        info=info_dict,
-    )
 
 
 def default_openai_metadata(name: str) -> dict[str, Any]:
@@ -316,8 +279,8 @@ class OpenAI(Plugin):
     name = 'openai'
 
     @classmethod
-    def gpt_model(cls, name: KnownGpt | str, *, config: OpenAIConfig | None = None) -> ModelRef[OpenAIConfig]:
-        """Typed ref for an OpenAI chat model, e.g. ``OpenAI.gpt_model('gpt-4o')``.
+    def gpt(cls, name: KnownGpt | str, *, config: OpenAIConfig | None = None) -> ModelRef[OpenAIConfig]:
+        """Typed ref for an OpenAI chat model, e.g. ``OpenAI.gpt('gpt-4o')``.
 
         Chat only: image, TTS, STT, and embedding ids validate different
         request shapes, so binding OpenAIConfig to them would let chat-only
@@ -326,10 +289,10 @@ class OpenAI(Plugin):
         # str(None) is 'None', and that classifies as chat, so a non-string
         # would mint a real-looking ref instead of failing here.
         if not isinstance(name, str):
-            raise GenkitError(status='INVALID_ARGUMENT', message='OpenAI.gpt_model: model name must be a string.')
+            raise GenkitError(status='INVALID_ARGUMENT', message='OpenAI.gpt: model name must be a string.')
         local = _strip_ref_prefixes(name)
         if not local:
-            raise GenkitError(status='INVALID_ARGUMENT', message='OpenAI.gpt_model: model name is required.')
+            raise GenkitError(status='INVALID_ARGUMENT', message='OpenAI.gpt: model name is required.')
         model_type = _classify_model(local)
         if model_type != _ModelType.CHAT:
             kind = {
@@ -341,11 +304,11 @@ class OpenAI(Plugin):
             raise GenkitError(
                 status='INVALID_ARGUMENT',
                 message=(
-                    f"OpenAI.gpt_model: '{local}' is {kind}; it does not take "
+                    f"OpenAI.gpt: '{local}' is {kind}; it does not take "
                     f"OpenAIConfig. Pass it as a string ('openai/{local}')."
                 ),
             )
-        return model_ref(local, config_schema=OpenAIConfig, namespace='openai', config=config)
+        return ModelRef(name=f'openai/{local}', config_schema=OpenAIConfig, config=config)
 
     def __init__(
         self,
@@ -371,16 +334,23 @@ class OpenAI(Plugin):
                 take, or repeats ``api_key`` or ``base_url``.
         """
         options = _client_kwargs(api_key=api_key, base_url=base_url, client_options=client_options)
+        self._options = options
         self._plugin_api_key: str | None = options.get('api_key')
-        self._runtime_client = loop_local_client(lambda: AsyncOpenAI(**options))
-        # Only used when the plugin has no key of its own. Its placeholder key is
-        # never sent: every call through it swaps in the caller's key first.
-        tenant_only_options: dict[str, Any] = {**options, 'api_key': 'unset'}
-        self._tenant_only_client = loop_local_client(lambda: AsyncOpenAI(**tenant_only_options))
         plugin_headers: dict[str, str] = dict(options.get('default_headers') or {})
         self._tenant_headers = {k: v for k, v in plugin_headers.items() if k.lower() not in _PLUGIN_ACCOUNT_HEADERS}
         self._pins_authorization = any(k.lower() == 'authorization' for k in plugin_headers)
-        self._list_actions_cache: list[ActionMetadata] | None = None
+        self._list_actions_cache: list[Action] | None = None
+
+    @loop_local_client
+    def _runtime_client(self) -> AsyncOpenAI:
+        return AsyncOpenAI(**self._options)
+
+    @loop_local_client
+    def _tenant_only_client(self) -> AsyncOpenAI:
+        # Only used when the plugin has no key of its own. Its placeholder key is
+        # never sent: every call through it swaps in the caller's key first.
+        params: dict[str, Any] = {**self._options, 'api_key': 'unset'}
+        return AsyncOpenAI(**params)
 
     def _has_plugin_key(self) -> bool:
         return bool(self._plugin_api_key or os.environ.get('OPENAI_API_KEY'))
@@ -474,7 +444,7 @@ class OpenAI(Plugin):
 
         return None
 
-    def _client_for_call(self, request: ModelRequest, ctx: ActionRunContext) -> AsyncOpenAI:
+    def _client_for_call(self, request: ModelRequest, ctx: ModelContext) -> AsyncOpenAI:
         """The plugin's client, or a copy carrying the caller's ``context.secrets`` key.
 
         A tenant who passed their own key is the one who should be billed. The
@@ -541,22 +511,17 @@ class OpenAI(Plugin):
         """
         model_info = self.get_model_info(name) or {}
 
-        async def _generate(request: ModelRequest[OpenAIConfig], ctx: ActionRunContext) -> ModelResponse:
+        async def _generate(request: ModelRequest[OpenAIConfig], ctx: ModelContext) -> ModelResponse:
             catalog = SUPPORTED_OPENAI_MODELS.get(cast(KnownGpt, name))
             supports = catalog.supports if catalog is not None else get_default_openai_model_info(name).supports
             openai_model = OpenAIModelHandler(OpenAIModel(name, self._client_for_call(request, ctx), supports=supports))
             return await openai_model.generate(request, ctx)
 
-        return create_model(
+        return Model(
             open_ai_name(name),
             _generate,
             config_schema=OpenAIConfig,
-            metadata={
-                'model': {
-                    **model_info,
-                    'customOptions': to_json_schema(OpenAIConfig),
-                },
-            },
+            metadata={'model': model_info},
         )
 
     def _create_multimodal_action(
@@ -577,17 +542,17 @@ class OpenAI(Plugin):
         Returns:
             Action object for the model.
         """
-        info_dict, config_schema = _get_multimodal_info_dict(name, model_type, supported_models)
+        info, config_schema = _get_multimodal_info(name, model_type, supported_models)
 
-        async def _generate(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        async def _generate(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
             model_instance = model_class(name, self._client_for_call(request, ctx))
             return await model_instance.generate(request, ctx)
 
-        return create_model(
+        return Model(
             open_ai_name(name),
             _generate,
             config_schema=config_schema,
-            metadata={'model': info_dict},
+            info=info,
         )
 
     def _create_embedder_action(self, name: str) -> Action:
@@ -621,20 +586,19 @@ class OpenAI(Plugin):
             # Get optional parameters (omit when None; OpenAI create() uses Omit, not None)
             dimensions: int | None = None
             encoding_format: Literal['float'] | None = None
-            if request.options:
-                dim_val = request.options.get('dimensions')
-                if dim_val is not None:
-                    # bool is an int subclass, so True would otherwise pass as 1.
-                    if not isinstance(dim_val, int) or isinstance(dim_val, bool):
-                        raise GenkitError(
-                            status='INVALID_ARGUMENT',
-                            message=f'dimensions must be an int, got {dim_val!r}',
-                        )
-                    dimensions = dim_val
-                # 'base64' is deliberately not forwarded: the SDK sends base64 either
-                # way and only decodes the response when it was not asked explicitly.
-                if request.options.get('encodingFormat') == 'float':
-                    encoding_format = 'float'
+            dim_val = request.options.get('dimensions')
+            if dim_val is not None:
+                # bool is an int subclass, so True would otherwise pass as 1.
+                if not isinstance(dim_val, int) or isinstance(dim_val, bool):
+                    raise GenkitError(
+                        status='INVALID_ARGUMENT',
+                        message=f'dimensions must be an int, got {dim_val!r}',
+                    )
+                dimensions = dim_val
+            # 'base64' is deliberately not forwarded: the SDK sends base64 either
+            # way and only decodes the response when it was not asked explicitly.
+            if request.options.get('encodingFormat') == 'float':
+                encoding_format = 'float'
 
             # Call with only non-None optional params to satisfy strict typings
             client = self._embed_client()
@@ -670,27 +634,24 @@ class OpenAI(Plugin):
             embeddings = [Embedding(embedding=item.embedding) for item in response.data]
             return EmbedResponse(embeddings=embeddings)
 
-        return embedder(
+        return Embedder(
             open_ai_name(name),
             embed_fn,
-            metadata=embedder_action_metadata(
-                name=open_ai_name(name),
-                info=EmbedderInfo(
-                    label=embedder_info['label'],
-                    supports=EmbedderSupports(input=embedder_info['supports']['input']),
-                    dimensions=embedder_info.get('dimensions'),
-                ),
-            ).metadata,
+            info=EmbedderInfo(
+                label=embedder_info['label'],
+                supports=EmbedderSupports(input=embedder_info['supports']['input']),
+                dimensions=embedder_info.get('dimensions'),
+            ),
         )
 
-    async def list_actions(self) -> list[ActionMetadata]:
+    async def list_actions(self) -> list[Action]:
         """Generate a list of available actions or models.
 
         Uses pattern matching on model names (mirroring the JS implementation)
         to categorize models as embedders, image generators, TTS, STT, or chat.
 
         Returns:
-            list[ActionMetadata]: A list of ActionMetadata objects. Empty for a
+            list[Action]: A list of Action objects. Empty for a
             plugin without its own key: listing models needs one, and the
             built-in catalog ``init`` registers is already in the Dev UI.
         """
@@ -699,45 +660,24 @@ class OpenAI(Plugin):
         if self._list_actions_cache is not None:
             return self._list_actions_cache
 
-        actions: list[ActionMetadata] = []
+        actions: list[Action] = []
         try:
             models_ = await self._runtime_client().models.list()
         except APIError as e:
             reraise_openai_error(e)
-        models: list[Model] = models_.data
+        models: list[OpenAIModelEntry] = models_.data
         for model in models:
             name = model.id
             if _is_known_unsupported(name):
                 continue
             model_type = _classify_model(name)
             if model_type == _ModelType.EMBEDDER:
-                actions.append(
-                    embedder_action_metadata(
-                        name=open_ai_name(name),
-                        info=EmbedderInfo(
-                            label=f'OpenAI Embedding - {name}',
-                            supports=EmbedderSupports(input=['text']),
-                        ),
-                    )
-                )
+                actions.append(self._create_embedder_action(name))
             elif model_type in _DEFAULT_SUPPORTS:
-                config = _MULTIMODAL_CONFIG[model_type]
-                actions.append(_multimodal_action_metadata(name, config[1], model_type))
+                model_class, supported_models = _MULTIMODAL_CONFIG[model_type]
+                actions.append(self._create_multimodal_action(name, model_class, supported_models, model_type))
             else:
-                actions.append(
-                    model_action_metadata(
-                        name=open_ai_name(name),
-                        config_schema=OpenAIConfig,
-                        info={
-                            'label': f'OpenAI - {name}',
-                            'supports': Supports(
-                                multiturn=True,
-                                system_role=True,
-                                tools=False,
-                            ).model_dump(by_alias=True, exclude_none=True),
-                        },
-                    )
-                )
+                actions.append(self._create_model_action(name))
         self._list_actions_cache = actions
         return actions
 

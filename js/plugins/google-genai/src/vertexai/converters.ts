@@ -216,8 +216,11 @@ function toImagenParameters(
   };
 
   for (const k in params) {
-    if (params[k] === undefined || params[k] === null) {
-      delete params[k];
+    if (
+      params[k as keyof typeof params] === undefined ||
+      params[k as keyof typeof params] === null
+    ) {
+      delete params[k as keyof typeof params];
     }
   }
 

@@ -32,7 +32,7 @@ from _ai import ai, reply_text
 from pydantic import BaseModel
 from weather_agent import get_weather  # reuse the same tool
 
-from genkit import ActionRunContext
+from genkit import FlowContext
 
 # No store → client-managed. The turn returns the full state; the caller echoes
 # it back next time. Nothing about the conversation lives on the server.
@@ -50,7 +50,7 @@ class StatelessTurn(BaseModel):
 
 
 @ai.flow()
-async def test_weather_agent_stateless(input: StatelessTurn, ctx: ActionRunContext) -> dict[str, Any]:
+async def test_weather_agent_stateless(input: StatelessTurn, ctx: FlowContext) -> dict[str, Any]:
     """Resume from the client-held state (or start fresh), then hand it back."""
     chat = weather_agent_stateless.chat(state=input.state) if input.state else weather_agent_stateless.chat()
     turn = chat.send_stream(input.text)

@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import copy
 import json
-import logging
 from typing import Any, Literal, cast
 
 from google.genai.interactions import (
@@ -60,17 +59,16 @@ from google.genai.interactions import (
 )
 from pydantic import BaseModel
 
-from genkit import FinishReason, GenkitError, Media, Message, ModelResponse, Operation, Part
+from genkit import Failure, FinishReason, GenkitError, Media, Message, ModelResponse, Operation, Part, get_logger
 from genkit.model import (
-    ModelUsage,
-    OperationError,
+    GenerationUsage,
     ToolDefinition,
     ToolRequest,
     ToolResponse,
 )
 from genkit.plugin_api import StatusName, provider_error
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 InteractionRole = Literal['user', 'model']
 
@@ -84,6 +82,7 @@ GOOGLE_SEARCH_RESULT = 'googleSearchResult'
 EXECUTABLE_CODE = 'executableCode'
 CODE_EXECUTION_RESULT = 'codeExecutionResult'
 UNKNOWN_STEP = 'unknownStep'
+SERVER_FUNCTION_CALL = 'serverFunctionCall'
 SERVER_FUNCTION_RESULT = 'serverFunctionResult'
 THOUGHT_CUSTOM = 'thought'
 # Wire function_result.content is only text/image blocks, not a JSON array.
@@ -453,6 +452,17 @@ def to_thought_step(part: Part) -> StepParam:
     return with_signature(thought, part.metadata or {})
 
 
+def to_server_function_call_step(payload: dict[str, Any]) -> FunctionCallStepParam:
+    """Replay a server-executed function_call that was stashed as custom."""
+    raw_args = payload.get('arguments')
+    return {
+        'type': 'function_call',
+        'name': payload.get('name') or '',
+        'arguments': cast(dict[str, Any], raw_args) if isinstance(raw_args, dict) else {},
+        'id': payload.get('id') or '',
+    }
+
+
 def to_server_function_result_step(payload: dict[str, Any]) -> FunctionResultStepParam:
     """Replay a function_result that was stashed as custom, including is_error."""
     step: FunctionResultStepParam = {
@@ -509,7 +519,7 @@ def to_server_tool_step(custom: dict[str, Any], metadata: dict[str, Any]) -> Ste
 def to_standalone_step(part: Part) -> StepParam | None:
     """Return the step a part compiles to on its own, or None if it is inline content."""
     if part.tool_request:
-        return to_function_call_step(part.tool_request)
+        return with_signature(to_function_call_step(part.tool_request), part.metadata or {})
     if part.tool_response:
         return to_function_result_step(part.tool_response, part.metadata)
     if part.reasoning is not None:
@@ -522,10 +532,13 @@ def to_standalone_step(part: Part) -> StepParam | None:
         unknown = custom.get(UNKNOWN_STEP)
         if isinstance(unknown, dict):
             return cast(StepParam, copy.deepcopy(unknown))
+        metadata = part.metadata or {}
+        server_call = custom.get(SERVER_FUNCTION_CALL)
+        if isinstance(server_call, dict):
+            return with_signature(to_server_function_call_step(server_call), metadata)
         server_result = custom.get(SERVER_FUNCTION_RESULT)
         if isinstance(server_result, dict):
             return to_server_function_result_step(server_result)
-        metadata = part.metadata or {}
         step = to_server_tool_step(custom, metadata)
         return with_signature(step, metadata) if step is not None else None
     return None
@@ -641,17 +654,28 @@ def from_code_execution_result(step: CodeExecutionResultStep) -> Part:
 
 
 def from_function_call_step(step: FunctionCallStep) -> Part:
-    """Convert a function_call step to a Genkit tool request part.
-
-    Fresh create/get steps with client tool calls are pending work for Genkit's
-    tool loop, so they use ToolRequestPart — not an opaque custom blob.
-    """
-    return Part(
+    """Convert a pending client function_call step to a Genkit tool request part."""
+    part = Part(
         tool_request=ToolRequest(
             name=step.name or '',
             input=plain(step.arguments) if step.arguments is not None else {},
             ref=step.id,
         )
+    )
+    return with_metadata(part, THOUGHT_SIGNATURE, getattr(step, 'signature', None))
+
+
+def from_server_function_call_step(step: FunctionCallStep) -> Part:
+    """Stash an already-resolved or sandbox function_call as custom so Genkit's tool loop skips it."""
+    payload: dict[str, Any] = {
+        'id': step.id,
+        'name': step.name or '',
+        'arguments': plain(step.arguments) if step.arguments is not None else {},
+    }
+    return with_metadata(
+        Part.from_custom({SERVER_FUNCTION_CALL: payload}),
+        THOUGHT_SIGNATURE,
+        getattr(step, 'signature', None),
     )
 
 
@@ -714,7 +738,21 @@ def from_interaction_content(content: Content) -> Part:
     return Part.from_custom({'unknownContent': content})
 
 
-def from_interaction_step(step: Step) -> list[Part]:
+def get_pending_function_call_ids(steps: list[Step], status: str | None) -> set[str]:
+    """Return IDs of function_call steps awaiting client execution on a paused turn.
+
+    Sandbox filesystem tools (such as ``write_to_file``) also appear as
+    ``function_call`` steps on Antigravity, paired with a matching
+    ``function_result`` in the same interaction. Only unmatched calls on a
+    ``requires_action`` turn become ``ToolRequest`` parts for Genkit's loop.
+    """
+    if status != 'requires_action':
+        return set()
+    resolved = {step.call_id for step in steps if isinstance(step, FunctionResultStep) and step.call_id}
+    return {step.id for step in steps if isinstance(step, FunctionCallStep) and step.id and step.id not in resolved}
+
+
+def from_interaction_step(step: Step, *, is_pending: bool = False) -> list[Part]:
     """Convert an Interactions step to Genkit parts."""
     if isinstance(step, ModelOutputStep):
         return [from_interaction_content(content) for content in (step.content or [])]
@@ -732,7 +770,7 @@ def from_interaction_step(step: Step) -> list[Part]:
     if isinstance(step, ThoughtStep):
         return [from_thought_step(step)]
     if isinstance(step, FunctionCallStep):
-        return [from_function_call_step(step)]
+        return [from_function_call_step(step)] if is_pending else [from_server_function_call_step(step)]
     if isinstance(step, FunctionResultStep):
         return [from_function_result_step(step)]
     if isinstance(step, BaseModel):
@@ -753,9 +791,9 @@ def interaction_message_metadata(interaction: Interaction) -> dict[str, Any] | N
     return metadata or None
 
 
-def usage_from_interaction(usage: Usage) -> ModelUsage:
-    """Map Interactions Usage onto Genkit ModelUsage."""
-    response_usage = ModelUsage(
+def usage_from_interaction(usage: Usage) -> GenerationUsage:
+    """Map Interactions Usage onto Genkit GenerationUsage."""
+    response_usage = GenerationUsage(
         input_tokens=usage.total_input_tokens,
         output_tokens=usage.total_output_tokens,
         total_tokens=usage.total_tokens,
@@ -789,11 +827,16 @@ def usage_from_interaction(usage: Usage) -> ModelUsage:
     return response_usage
 
 
-def parts_from_steps(steps: list[Step]) -> list[Part]:
+def parts_from_steps(steps: list[Step], *, status: str | None = None) -> list[Part]:
     """Flatten interaction steps into Genkit parts, dropping empty ones."""
+    pending_ids = get_pending_function_call_ids(steps, status)
     return [
         part
-        for part in (item for step in steps for item in from_interaction_step(step))
+        for step in steps
+        for part in from_interaction_step(
+            step,
+            is_pending=isinstance(step, FunctionCallStep) and bool(step.id) and step.id in pending_ids,
+        )
         if part.model_dump(exclude_none=True)
     ]
 
@@ -841,7 +884,7 @@ def steps_response(
         return None
     return model_response(
         interaction,
-        content=parts_from_steps(steps),
+        content=parts_from_steps(steps, status=interaction.status),
         finish_reason=finish_reason,
         finish_message=finish_message,
     )
@@ -853,8 +896,11 @@ def completed_response(interaction: Interaction) -> ModelResponse | None:
 
 
 def from_interaction_sync(interaction: Interaction) -> ModelResponse:
-    """Convert a finished interaction to a synchronous model response.
+    """Convert a finished or paused interaction to a synchronous model response.
 
+    ``requires_action`` is a deliberate pause for client function calling, so
+    unmatched ``function_call`` steps return as ``ToolRequest`` parts while
+    already-resolved sandbox calls stay in ``custom['serverFunctionCall']``.
     Truncated or over-budget turns keep their real finish reason so a
     generate that ran out of tokens does not look like a clean stop.
     In-flight statuses raise FAILED_PRECONDITION — this helper is not a poll
@@ -867,7 +913,7 @@ def from_interaction_sync(interaction: Interaction) -> ModelResponse:
         raise interaction_error(interaction, failure) from failure
     if status == 'cancelled':
         return cancelled_response(interaction)
-    if status in ('in_progress', 'queued', 'requires_action'):
+    if status in ('in_progress', 'queued'):
         raise GenkitError(
             status='FAILED_PRECONDITION',
             message=f'Interaction is still running (status={status!r})',
@@ -878,7 +924,7 @@ def from_interaction_sync(interaction: Interaction) -> ModelResponse:
         if response is None:
             raise ValueError(message)
         return response
-    if status == 'completed' or status is None:
+    if status in ('completed', 'requires_action') or status is None:
         return completed_response(interaction) or model_response(
             interaction, content=[], finish_reason=FinishReason.STOP
         )
@@ -907,19 +953,19 @@ def from_interaction(interaction: Interaction) -> Operation:
         op.done = True
         op.output = steps_response(interaction, finish_reason=finish_reason, finish_message=message)
         if op.output is None:
-            op.error = OperationError(message=message)
+            op.error = Failure(message=message)
     elif status == 'failed':
         # Always exit the poll loop on failure; leaving done unset hangs forever.
         op.done = True
-        op.error = OperationError(message=interaction_error_message(interaction) or FAILED_MESSAGE)
+        op.error = Failure(message=interaction_error_message(interaction) or FAILED_MESSAGE)
     elif status == 'requires_action':
         # Chat generate can pause for a tool. A background job cannot — there
         # is no interrupt/resume on generate_operation — so end the poll
         # instead of hanging `while not op.done` or inventing a resume handle.
         op.done = True
-        op.error = OperationError(message=BACKGROUND_INTERRUPT_UNSUPPORTED)
+        op.error = Failure(message=BACKGROUND_INTERRUPT_UNSUPPORTED)
     else:
         # A status we do not map still has to exit `while not op.done`.
         op.done = True
-        op.error = OperationError(message=f'Unknown interaction status: {status!r}')
+        op.error = Failure(message=f'Unknown interaction status: {status!r}')
     return op

@@ -34,7 +34,7 @@ from genkit_google_genai._models._virtual_try_on import is_virtual_try_on_model
 
 # Prefixes people paste from action keys, Dev UI traces, or another plugin's
 # samples. Stripping them first means the constructor decides the namespace,
-# so GoogleAI.gemini_model('vertexai/gemini-2.5-flash') cannot smuggle a
+# so GoogleAI.gemini('vertexai/gemini-2.5-flash') cannot smuggle a
 # cross-plugin name into the ref.
 STRIP_PREFIXES = (
     'background-model/',

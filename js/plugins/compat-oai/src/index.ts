@@ -117,7 +117,7 @@ export interface PluginOptions extends Partial<Omit<ClientOptions, 'apiKey'>> {
  * ```
  */
 export const openAICompatible = (options: PluginOptions) => {
-  let listActionsCache;
+  let listActionsCache: ActionMetadata[] | undefined;
   var client: OpenAI;
   function createClient() {
     if (client) return client;

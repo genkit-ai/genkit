@@ -135,8 +135,8 @@ export function toTTSRequest(
     };
   }
   for (const k in options) {
-    if (options[k] === undefined) {
-      delete options[k];
+    if ((options as unknown as Record<string, unknown>)[k] === undefined) {
+      delete (options as unknown as Record<string, unknown>)[k];
     }
   }
   return options;
@@ -325,8 +325,8 @@ export function toSttRequest(
   }
   options.response_format = customFormat || outputFormat || 'text';
   for (const k in options) {
-    if (options[k] === undefined) {
-      delete options[k];
+    if ((options as unknown as Record<string, unknown>)[k] === undefined) {
+      delete (options as unknown as Record<string, unknown>)[k];
     }
   }
   return options;

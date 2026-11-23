@@ -33,7 +33,7 @@ ai = Genkit(plugins=[GoogleAI()])
 
 agent = ai.define_agent(
     name='echoNoStore',
-    model=GoogleAI.gemini_model('gemini-flash-latest'),
+    model=GoogleAI.gemini('gemini-flash-latest'),
     system='Echo assistant. Answer briefly and remember context.',
 )
 

@@ -31,6 +31,7 @@ GENKIT_TELEMETRY_SERVER = 'GENKIT_TELEMETRY_SERVER'
 LOG_ENDPOINT = '/api/otlp'
 LOG_HEADERS = {'Content-Type': 'application/json', 'Accept': 'application/json'}
 SCOPE_NAME = 'genkit-py'
+LOG_EXPORT_THREAD_NAME = 'genkit-log-export'
 
 QUEUE_SIZE = 1024
 BATCH_SIZE = 64
@@ -294,7 +295,7 @@ class LogServerExporter:
         self.warned_unreachable = False
         self.last_result_ok = True
         self.queue: Queue[dict[str, object] | None] = Queue(maxsize=QUEUE_SIZE)
-        self.worker = threading.Thread(target=self.run_worker, name='genkit-log-export', daemon=True)
+        self.worker = threading.Thread(target=self.run_worker, name=LOG_EXPORT_THREAD_NAME, daemon=True)
         self.worker.start()
 
     def set_url(self, *, url: str) -> None:
