@@ -1486,6 +1486,132 @@ describe('Part conversions back and forth', () => {
 });
 
 describe('toGeminiTool', () => {
+  it('omits parameters for an MCP tool with no arguments', () => {
+    for (const inputSchema of [
+      { type: 'object', properties: {}, required: [] },
+      { type: 'object' },
+      { type: 'object', properties: {}, additionalProperties: false },
+      { type: ['object'], properties: {} },
+      {
+        type: 'object',
+        properties: {},
+        additionalProperties: false,
+        dependencies: {},
+        dependentRequired: {},
+        dependentSchemas: {},
+      },
+    ]) {
+      assert.deepStrictEqual(
+        toGeminiTool({
+          name: 'read_graph',
+          description: 'Read the entire knowledge graph',
+          inputSchema,
+        }),
+        {
+          name: 'read_graph',
+          description: 'Read the entire knowledge graph',
+          parameters: undefined,
+        }
+      );
+    }
+  });
+
+  it('retains parameters for an object tool schema with required fields', () => {
+    for (const inputSchema of [
+      { type: 'object', required: ['id'] },
+      { type: 'object', properties: {}, required: ['id'] },
+    ]) {
+      assert.deepStrictEqual(
+        toGeminiTool({
+          name: 'get_item',
+          description: 'Gets an item by id',
+          inputSchema,
+        }),
+        {
+          name: 'get_item',
+          description: 'Gets an item by id',
+          parameters: {
+            type: SchemaType.OBJECT,
+            properties: {},
+            required: ['id'],
+          },
+        }
+      );
+    }
+  });
+
+  it('retains parameters for an object tool schema that allows additional properties', () => {
+    for (const inputSchema of [
+      { type: 'object', properties: {}, additionalProperties: true },
+      {
+        type: 'object',
+        properties: {},
+        additionalProperties: { type: 'string' },
+      },
+      {
+        type: 'object',
+        patternProperties: { '^tag_': { type: 'string' } },
+        minProperties: 1,
+        additionalProperties: false,
+      },
+      {
+        type: 'object',
+        patternProperties: { '^tag_': { type: 'string' } },
+        additionalProperties: false,
+      },
+      { type: 'object', minProperties: 1 },
+      { type: 'object', maxProperties: 1 },
+      { type: 'object', propertyNames: { pattern: '^tag_' } },
+      { type: 'object', unevaluatedProperties: true },
+      { type: 'object', dependencies: { a: ['b'] } },
+      { type: 'object', dependentRequired: { a: ['b'] } },
+      { type: 'object', dependentSchemas: { a: { required: ['b'] } } },
+      { type: 'object', const: { mode: 'fast' } },
+    ]) {
+      assert.deepStrictEqual(
+        toGeminiTool({
+          name: 'dynamic_tool',
+          description: 'Accepts arbitrary key-value arguments',
+          inputSchema,
+        }),
+        {
+          name: 'dynamic_tool',
+          description: 'Accepts arbitrary key-value arguments',
+          parameters: {
+            type: SchemaType.OBJECT,
+            properties: {},
+            required: undefined,
+          },
+        }
+      );
+    }
+  });
+
+  it('retains nullable parameters consistently for empty object schemas', () => {
+    const nullableKeyword = toGeminiTool({
+      name: 'nullable_tool',
+      description: 'Accepts null or an empty object',
+      inputSchema: { type: 'object', nullable: true, properties: {} },
+    });
+    const nullableTypeArray = toGeminiTool({
+      name: 'nullable_tool',
+      description: 'Accepts null or an empty object',
+      inputSchema: { type: ['object', 'null'], properties: {} },
+    });
+    const want = {
+      name: 'nullable_tool',
+      description: 'Accepts null or an empty object',
+      parameters: {
+        nullable: true,
+        type: SchemaType.OBJECT,
+        properties: {},
+        required: undefined,
+      },
+    };
+    assert.deepStrictEqual(nullableKeyword, want);
+    assert.deepStrictEqual(nullableTypeArray, want);
+  });
+
   it('should convert Genkit tool to Gemini FunctionDeclaration', async () => {
     const got = toGeminiTool({
       name: 'foo',

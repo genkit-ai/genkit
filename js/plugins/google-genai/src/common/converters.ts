@@ -41,13 +41,96 @@ import {
   isObject,
 } from './types.js';
 
+const PARAMETERLESS_OBJECT_SCHEMA_KEYS = new Set([
+  'type',
+  'properties',
+  'required',
+  'additionalProperties',
+  'unevaluatedProperties',
+  'patternProperties',
+  'minProperties',
+  'maxProperties',
+  'dependencies',
+  'dependentRequired',
+  'dependentSchemas',
+  'nullable',
+  'title',
+  '$schema',
+  '$id',
+  'id',
+  '$comment',
+  '$defs',
+  'definitions',
+]);
+
+function isEmptyObjectRecord(value: unknown): boolean {
+  return (
+    value === undefined ||
+    value === null ||
+    (isObject(value) && Object.keys(value).length === 0)
+  );
+}
+
+function isParameterlessObjectSchema(
+  schema?: ToolDefinition['inputSchema']
+): boolean {
+  if (!isObject(schema)) {
+    return false;
+  }
+  const isObjectType =
+    schema.type === 'object' ||
+    (Array.isArray(schema.type) &&
+      schema.type.length === 1 &&
+      schema.type[0] === 'object');
+  if (!isObjectType) {
+    return false;
+  }
+  const hasOnlyRecognizedKeys = Object.keys(schema).every(
+    (key) =>
+      schema[key] === undefined || PARAMETERLESS_OBJECT_SCHEMA_KEYS.has(key)
+  );
+  if (!hasOnlyRecognizedKeys) {
+    return false;
+  }
+  const hasEmptyRequired =
+    schema.required === undefined ||
+    schema.required === null ||
+    (Array.isArray(schema.required) && schema.required.length === 0);
+  const allowsNoAdditional =
+    schema.additionalProperties === undefined ||
+    schema.additionalProperties === false;
+  const allowsNoUnevaluated =
+    schema.unevaluatedProperties === undefined ||
+    schema.unevaluatedProperties === false;
+  const hasZeroMinProperties =
+    schema.minProperties === undefined || schema.minProperties === 0;
+  const hasZeroMaxProperties =
+    schema.maxProperties === undefined || schema.maxProperties === 0;
+  const isNonNullable =
+    schema.nullable === undefined || schema.nullable === false;
+  return (
+    isEmptyObjectRecord(schema.properties) &&
+    isEmptyObjectRecord(schema.patternProperties) &&
+    isEmptyObjectRecord(schema.dependencies) &&
+    isEmptyObjectRecord(schema.dependentRequired) &&
+    isEmptyObjectRecord(schema.dependentSchemas) &&
+    hasEmptyRequired &&
+    allowsNoAdditional &&
+    allowsNoUnevaluated &&
+    hasZeroMinProperties &&
+    hasZeroMaxProperties &&
+    isNonNullable
+  );
+}
+
 export function toGeminiTool(tool: ToolDefinition): FunctionDeclaration {
   const declaration: FunctionDeclaration = {
     name: tool.name.replace(/\//g, '__'), // Gemini throws on '/' in tool name
     description: tool.description,
-    parameters: toGeminiSchemaProperty(
-      tool.inputSchema
-    ) as FunctionDeclarationSchema,
+    parameters: isParameterlessObjectSchema(tool.inputSchema)
+      ? undefined
+      : (toGeminiSchemaProperty(tool.inputSchema) as
+          FunctionDeclarationSchema | undefined),
   };
   return declaration;
 }
