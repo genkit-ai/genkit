@@ -23,9 +23,43 @@ import { getGenkitRuntimeConfig } from './config.js';
 import { GenkitError } from './error.js';
 
 import type { Registry } from './registry.js';
+
+function allowUnknownFormats(ajvInstance: Ajv): void {
+  const formatKeyword = ajvInstance.getKeyword('format');
+  if (typeof formatKeyword !== 'object' || !('code' in formatKeyword)) {
+    return;
+  }
+  ajvInstance.removeKeyword('format');
+  ajvInstance.addKeyword({
+    ...formatKeyword,
+    code(cxt, ruleType) {
+      if (!cxt.it.opts.validateFormats) {
+        return;
+      }
+      if (!cxt.$data && typeof cxt.schema === 'string') {
+        const formatDef = Object.prototype.hasOwnProperty.call(
+          cxt.it.self.formats,
+          cxt.schema
+        )
+          ? cxt.it.self.formats[cxt.schema]
+          : undefined;
+        if (!formatDef) {
+          cxt.it.self.logger.warn(
+            `unknown format "${cxt.schema}" ignored in schema at path "${cxt.it.errSchemaPath}"`
+          );
+          return;
+        }
+      }
+      formatKeyword.code(cxt, ruleType);
+    },
+  });
+}
+
+const ajv = new Ajv();
 // External schemas (including MCP tool schemas) may contain custom formats.
-// Ignore formats we do not know while still validating registered formats.
-const ajv = new Ajv({ strictSchema: false });
+// Ignore formats we do not know while still validating registered formats
+// and keeping strict schema checks (such as unknown keywords) enabled.
+allowUnknownFormats(ajv);
 addFormats(ajv);
 
 export { z }; // provide a consistent zod to use throughout genkit
