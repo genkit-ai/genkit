@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/firebase/genkit/go/core/logger"
@@ -91,6 +92,10 @@ type ServerRef struct {
 type GenkitMCPClient struct {
 	options MCPClientOptions
 	server  *ServerRef
+	// active is the connected client, or nil while disconnected, disabled or
+	// failed. Actions cached in the registry read it at call time so they keep
+	// working after Restart.
+	active atomic.Pointer[client.Client]
 }
 
 // NewGenkitMCPClient creates a new GenkitMCPClient with the given options.
@@ -117,6 +122,7 @@ func NewGenkitMCPClient(options MCPClientOptions) (*GenkitMCPClient, error) {
 
 // connect establishes a connection to an MCP server
 func (c *GenkitMCPClient) connect(options MCPClientOptions) error {
+	c.active.Store(nil)
 	// Close existing connection if any
 	if c.server != nil {
 		if err := c.server.Client.Close(); err != nil {
@@ -150,6 +156,9 @@ func (c *GenkitMCPClient) connect(options MCPClientOptions) error {
 		Client:    mcpClient,
 		Transport: transport,
 		Error:     serverError,
+	}
+	if !options.Disabled && serverError == "" {
+		c.active.Store(mcpClient)
 	}
 
 	return nil
@@ -235,6 +244,11 @@ func (c *GenkitMCPClient) IsEnabled() bool {
 	return !c.options.Disabled
 }
 
+// activeClient returns the connected MCP client, or nil when disconnected.
+func (c *GenkitMCPClient) activeClient() *client.Client {
+	return c.active.Load()
+}
+
 // Disable temporarily disables the client by closing the connection
 func (c *GenkitMCPClient) Disable() {
 	if !c.options.Disabled {
@@ -261,6 +275,7 @@ func (c *GenkitMCPClient) Restart(ctx context.Context) error {
 
 // Disconnect closes the connection to the MCP server
 func (c *GenkitMCPClient) Disconnect() error {
+	c.active.Store(nil)
 	if c.server != nil {
 		err := c.server.Client.Close()
 		c.server = nil
