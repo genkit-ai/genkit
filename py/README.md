@@ -12,6 +12,8 @@ Build production-ready AI applications in Python with type-safe flows, structure
 > Source, manual install and skills for other languages:
 > [genkit-ai/skills](https://github.com/genkit-ai/skills).
 
+> **Upgrading from 0.12?** See the [0.12 → 0.13 migration guide](docs/migrating-from-0.12.md).
+
 ## Quick Start
 
 Get started in three simple steps:
@@ -106,6 +108,7 @@ Open the Dev UI in your browser to interact with registered flows and agents dir
 
 ### Documentation & Maintenance
 - **API Reference:** For complete class and method signatures, see [docs/index.md](docs/index.md).
+- **Migration Guides:** Upgrading between versions, see [docs/migrating-from-0.12.md](docs/migrating-from-0.12.md).
 - **Contributing & Standards:** For coding conventions, commit guidelines, and type-checking rules, see [CONTRIBUTING.md](../CONTRIBUTING.md).
 - **Release Playbook:** For maintainer release procedures, see [docs/release_playbook.md](docs/release_playbook.md).
 

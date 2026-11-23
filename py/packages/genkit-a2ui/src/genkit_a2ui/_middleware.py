@@ -23,11 +23,12 @@ import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, Field
 
 from genkit import FinishReason, Message, ModelResponse, ModelResponseChunk, Part, Role
-from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
-from genkit.model import ABNORMAL_FINISH_REASONS, ModelRequest
+from genkit.middleware import Middleware, MiddlewareContext, ModelHookParams
+from genkit.model import ModelRequest
+from genkit.plugin_api import GenkitConfig
 
 from ._catalog import A2uiCatalog, render_catalog_instructions
 from ._loader import resolve_catalog
@@ -41,27 +42,32 @@ from ._types import DEFAULT_VERSION, SURFACE_KEYS, Envelope, SupportedVersion, V
 # unrecognized provider reasons to it, so core keeps validating in case the
 # model finished, while a turn that may have stopped mid-fence would paint a
 # half-written card.
-SKIP_REWRITE_FINISH_REASONS = ABNORMAL_FINISH_REASONS | {FinishReason.UNKNOWN}
+SKIP_REWRITE_FINISH_REASONS = frozenset(r for r in FinishReason if r.is_abnormal() or r == FinishReason.UNKNOWN)
 
 
-class SurfacesConfig(BaseModel):
+class SurfacesConfig(GenkitConfig):
     """Options for :class:`Surfaces`."""
-
-    model_config = ConfigDict(extra='forbid', populate_by_name=True)
 
     instructions: Literal['system', 'none'] = 'system'
     # 'off' passes envelopes through unchecked, 'warn' logs and drops the
     # offending block, 'strict' kills the turn. Default is 'warn' because a
     # single hallucinated component should not cost the whole answer.
-    validation: ValidateMode = Field(default='warn', alias='validate')
-    surface_id: str | None = Field(default=None, alias='surfaceId')
+    #
+    # The wire key is 'validate' (matches JS and Go), while the Python field is
+    # validation so it does not shadow BaseModel.validate.
+    validation: ValidateMode = Field(
+        default='warn',
+        validation_alias=AliasChoices('validate', 'validation'),
+        serialization_alias='validate',
+    )
+    surface_id: str | None = None
     # Registry id from load_catalog. The Developer UI lists those same ids.
     catalog: str | None = None
     # A typo here would stamp envelopes the renderer cannot paint.
     version: SupportedVersion = DEFAULT_VERSION
 
 
-class Surfaces(BaseMiddleware[SurfacesConfig]):
+class Surfaces(Middleware[SurfacesConfig]):
     """Rewrites A2UI fenced model output into data parts.
 
     On the next turn, inbound A2UI parts become text so the model can see
@@ -69,17 +75,19 @@ class Surfaces(BaseMiddleware[SurfacesConfig]):
     aborted / failed / unknown / other) is left alone — the stop is the result,
     not a salvaged card.
 
-    Under `validate='strict'` a bad fence fails the turn: generate returns a
+    Under `validation='strict'` a bad fence fails the turn: generate returns a
     response with `finish_reason` failed, no `message`, and the reason on
     `error`. `messages` ends at the user turn, so a retry does not feed the
     hallucinated surface back to the model.
     """
 
+    name = 'surfaces'
+
     async def wrap_model(
         self,
         params: ModelHookParams,
-        ctx: GenerateMiddlewareContext,
-        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ctx: MiddlewareContext,
+        next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         catalog = resolve_catalog(ctx=ctx, catalog=self.config.catalog)
         version = self.config.version or DEFAULT_VERSION
@@ -232,8 +240,6 @@ def transform_response(
     surface_id: Callable[[], str],
 ) -> ModelResponse:
     message = response.message
-    if message is None and response.candidates:
-        message = response.candidates[0].message
     if message is None:
         return response
     parser = StreamParser(
@@ -244,15 +250,7 @@ def transform_response(
     )
     new_content = rewrite_parts(parts=message.content, parser=parser, flush_nontext=True)
     new_message = message.model_copy(update={'content': new_content})
-    # Providers that also expose candidates[0] would otherwise leave the fence
-    # there after the top-level message is rewritten.
-    update: dict[str, object] = {'message': new_message}
-    if response.candidates:
-        update['candidates'] = [
-            candidate.model_copy(update={'message': new_message}) if i == 0 else candidate
-            for i, candidate in enumerate(response.candidates)
-        ]
-    return response.model_copy(update=update)
+    return response.model_copy(update={'message': new_message})
 
 
 def inject_instructions(*, request: ModelRequest, catalog: A2uiCatalog) -> ModelRequest:

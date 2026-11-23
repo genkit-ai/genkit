@@ -17,13 +17,11 @@
 import { logger } from '@genkit-ai/tools-common/utils';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { defineDocsTool } from '../mcp/docs';
-import { defineFlowTools } from './flows';
-import { defineInitPrompt } from './prompts/init';
-import { defineRuntimeTools } from './runtime';
-import { defineTraceTools } from './trace';
-import { defineUsageGuideTool } from './usage';
-import { McpRuntimeManager, McpToolOptions } from './utils';
+import { defineDocsTool } from '../mcp/docs.js';
+import { defineFlowTools } from './flows.js';
+import { defineRuntimeTools } from './runtime.js';
+import { defineTraceTools } from './trace.js';
+import { McpRuntimeManager, McpToolOptions } from './utils.js';
 
 export async function startMcpServer(params: {
   projectRoot: string;
@@ -41,17 +39,15 @@ export async function startMcpServer(params: {
       version: '0.0.2',
       title: 'Genkit MCP Server',
       description:
-        'Provides Genkit documentation, usage guides, runtime process management, flow discovery/execution, and execution trace inspection.',
+        'Provides Genkit documentation, runtime process management, flow discovery/execution, and execution trace inspection.',
     },
     {
       instructions:
-        'Use this server to look up Genkit documentation and API guides (`get_usage_guide`, `search_genkit_docs`, `list_genkit_docs`, `read_genkit_docs`), manage the local Genkit runtime (`start_runtime`, `restart_runtime`, `kill_runtime`), discover and run Genkit flows (`list_flows`, `run_flow`), and inspect execution traces (`get_trace`). Always check `get_usage_guide` or search Genkit docs before implementing Genkit features.',
+        'Use this server to look up Genkit documentation (`search_genkit_docs`, `list_genkit_docs`, `read_genkit_docs`), manage the local Genkit runtime (`start_runtime`, `restart_runtime`, `kill_runtime`), discover and run Genkit flows (`list_flows`, `run_flow`), and inspect execution traces (`get_trace`). Always search Genkit docs before implementing Genkit features.',
     }
   );
 
-  await defineDocsTool(server);
-  await defineUsageGuideTool(server);
-  defineInitPrompt(server);
+  await defineDocsTool(server, projectRoot);
 
   const manager = new McpRuntimeManager(auth);
   const options: McpToolOptions = {

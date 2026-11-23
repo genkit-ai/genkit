@@ -243,7 +243,8 @@ describe('Vertex AI Lyria', () => {
             content: [{ type: 'text', text: prompt }],
           },
         ],
-        response_modalities: ['audio', 'text'],
+        // No response_format: the server's default gives the lyrics,
+        // caption and audio (an audio entry needs a bit_rate here).
       });
       const content = result.result.message?.content;
       assert.strictEqual(content?.length, 3);
