@@ -5,11 +5,13 @@
 // models and embedders through the Gemini Developer API ([GoogleAI], provider
 // "googleai") and Google Cloud Vertex AI ([VertexAI], provider "vertexai").
 //
-// Both plugins implement [api.DynamicPlugin] and resolve any model or embedder
-// ID served by the backend on demand when referenced with its required
-// "<provider>/<model-id>" prefix (for example, "googleai/gemini-flash-latest"
-// or "vertexai/gemini-3.8-flash"), including newly released models not listed
-// in internal capability tables.
+// Both plugins implement [api.DynamicPlugin] and resolve Gemini, Imagen, and
+// embedder IDs served by the backend on demand when referenced with their
+// required "<provider>/<model-id>" prefix (for example,
+// "googleai/gemini-flash-latest" or "vertexai/gemini-3.8-flash"), including
+// newly released models not listed in internal capability tables. Veo video
+// models resolve on demand as background models via [VideoModelRef] and
+// [genkit.GenerateOperation].
 //
 // Example:
 //
@@ -74,9 +76,11 @@ func rejectBackgroundModel(provider, id string) error {
 // GoogleAI is a Genkit plugin for the Google AI (Gemini Developer API) service
 // under the "googleai" provider prefix.
 //
-// It implements [api.DynamicPlugin] and resolves any model or embedder ID
-// served by the Gemini API on demand when referenced as "googleai/<id>"
-// (for example, ai.WithModelName("googleai/gemini-flash-latest")).
+// It implements [api.DynamicPlugin] and resolves Gemini, Imagen, and embedder
+// IDs served by the Gemini API on demand when referenced as "googleai/<id>"
+// (for example, ai.WithModelName("googleai/gemini-flash-latest")). Veo video
+// models resolve as background models via [VideoModelRef] and
+// [genkit.GenerateOperation].
 type GoogleAI struct {
 	APIKey     string // API key to access the service. If empty, the values of the environment variables GEMINI_API_KEY or GOOGLE_API_KEY will be consulted, in that order.
 	APIVersion string // API version to use ("v1", "v1beta", or "v1alpha"). If empty, the genai SDK default (v1beta) is used. Can be overridden per-request via config.HTTPOptions.APIVersion.
@@ -128,9 +132,11 @@ type GoogleAI struct {
 // VertexAI is a Genkit plugin for Google Cloud Vertex AI under the "vertexai"
 // provider prefix.
 //
-// It implements [api.DynamicPlugin] and resolves any model or embedder ID
-// served by Vertex AI on demand when referenced as "vertexai/<id>"
-// (for example, ai.WithModelName("vertexai/gemini-3.8-flash")).
+// It implements [api.DynamicPlugin] and resolves Gemini, Imagen, and embedder
+// IDs served by Vertex AI on demand when referenced as "vertexai/<id>"
+// (for example, ai.WithModelName("vertexai/gemini-3.8-flash")). Veo video
+// models resolve as background models via [VideoModelRef] and
+// [genkit.GenerateOperation].
 type VertexAI struct {
 	ProjectID  string // Google Cloud project to use for Vertex AI. If empty, the value of the environment variable GOOGLE_CLOUD_PROJECT will be consulted.
 	Location   string // Location of the Vertex AI service. If empty, GOOGLE_CLOUD_LOCATION and GOOGLE_CLOUD_REGION environment variables will be consulted, in that order. Accepts a regional location (e.g. "us-central1"), a multi-region location ("us" or "eu"), or "global".
@@ -606,7 +612,8 @@ func (v *VertexAI) IsDefinedEmbedder(g *genkit.Genkit, id string) bool {
 }
 
 // GoogleAIModel resolves and returns the [ai.Model] with the given ID, or nil
-// if the [GoogleAI] plugin is not initialized.
+// if the model cannot be resolved (for example, the [GoogleAI] plugin is not
+// initialized or the ID names a Veo background model).
 //
 // Deprecated: Generation resolves a model from its name, so looking one up
 // first is rarely necessary: pass ai.WithModelName("googleai/<id>") or
@@ -616,7 +623,8 @@ func GoogleAIModel(g *genkit.Genkit, id string) ai.Model {
 }
 
 // VertexAIModel resolves and returns the [ai.Model] with the given ID, or nil
-// if the [VertexAI] plugin is not initialized.
+// if the model cannot be resolved (for example, the [VertexAI] plugin is not
+// initialized or the ID names a Veo background model).
 //
 // Deprecated: Generation resolves a model from its name, so looking one up
 // first is rarely necessary: pass ai.WithModelName("vertexai/<id>") or

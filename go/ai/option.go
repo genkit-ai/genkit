@@ -303,13 +303,14 @@ func WithModel(model ModelArg) CommonGenOption {
 	return &commonGenOptions{Model: model}
 }
 
-// WithModelName sets the model name to call for generation, formatted as
-// "<provider>/<model-id>" (for example, "googleai/gemini-flash-latest").
-// The provider prefix is required.
+// WithModelName sets the model name to call for generation, typically
+// formatted as "<provider>/<model-id>" (for example,
+// "googleai/gemini-flash-latest").
 //
-// The name is resolved to a [Model] at request time; dynamic plugins resolve
-// arbitrary model IDs served by the provider on demand without pre-registration.
-// Repeating this option, or mixing it with [WithModel], takes the last model set.
+// The name is resolved to a [Model] at request time; the provider prefix is
+// what lets a dynamic plugin resolve arbitrary model IDs served by the
+// provider on demand without pre-registration. Repeating this option, or
+// mixing it with [WithModel], takes the last model set.
 func WithModelName(name string) CommonGenOption {
 	return WithModel(NewModelRef(name, nil))
 }
@@ -983,12 +984,12 @@ func WithEmbedder(embedder EmbedderArg) EmbedderOption {
 }
 
 // WithEmbedderName sets the embedder name to call for document embedding,
-// formatted as "<provider>/<embedder-id>" (for example,
-// "googleai/gemini-embedding-001"). The provider prefix is required.
+// typically formatted as "<provider>/<embedder-id>" (for example,
+// "googleai/gemini-embedding-001").
 //
-// The name is resolved to an [Embedder] at request time; dynamic plugins
-// resolve arbitrary embedder IDs served by the provider on demand without
-// pre-registration.
+// The name is resolved to an [Embedder] at request time; the provider prefix
+// is what lets a dynamic plugin resolve arbitrary embedder IDs served by the
+// provider on demand without pre-registration.
 func WithEmbedderName(name string) EmbedderOption {
 	return WithEmbedder(NewEmbedderRef(name, nil))
 }
