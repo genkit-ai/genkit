@@ -28,6 +28,7 @@ import { JSONPath } from 'jsonpath-plus';
 import {
   FunctionCallingMode,
   FunctionDeclaration,
+  FunctionDeclarationSchema,
   FunctionResponse,
   GenerateContentCandidate as GeminiCandidate,
   Content as GeminiContent,
@@ -44,7 +45,9 @@ export function toGeminiTool(tool: ToolDefinition): FunctionDeclaration {
   const declaration: FunctionDeclaration = {
     name: tool.name.replace(/\//g, '__'), // Gemini throws on '/' in tool name
     description: tool.description,
-    parameters: toGeminiSchemaProperty(tool.inputSchema),
+    parameters: toGeminiSchemaProperty(
+      tool.inputSchema
+    ) as FunctionDeclarationSchema,
   };
   return declaration;
 }
@@ -73,7 +76,7 @@ function toGeminiSchemaProperty(
   budget = { remaining: MAX_GEMINI_TOOL_SCHEMA_NODES },
   depth = 0,
   isReferenceTarget = false
-) {
+): Schema | undefined {
   if (depth > MAX_GEMINI_TOOL_SCHEMA_DEPTH) {
     throw new GenkitError({
       status: 'INVALID_ARGUMENT',
@@ -223,16 +226,19 @@ function toGeminiSchemaProperty(
     propertyType = property.type;
   }
   if (propertyType === 'object') {
-    const nestedProperties = {};
+    const nestedProperties: Record<string, Schema> = {};
     if (property.properties) {
       Object.keys(property.properties).forEach((key) => {
-        nestedProperties[key] = toGeminiSchemaProperty(
-          property.properties[key],
+        const prop = toGeminiSchemaProperty(
+          property.properties![key],
           root,
           resolvingRefs,
           budget,
           depth + 1
         );
+        if (prop) {
+          nestedProperties[key] = prop;
+        }
       });
     }
     return {
@@ -254,7 +260,9 @@ function toGeminiSchemaProperty(
       ),
     };
   } else {
-    const schemaType = SchemaType[propertyType.toUpperCase()] as SchemaType;
+    const schemaType = (SchemaType as unknown as Record<string, SchemaType>)[
+      propertyType.toUpperCase()
+    ];
     if (!schemaType) {
       throw new GenkitError({
         status: 'INVALID_ARGUMENT',

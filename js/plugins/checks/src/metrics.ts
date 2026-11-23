@@ -51,8 +51,7 @@ export type ChecksEvaluationMetricConfig = {
 };
 
 export type ChecksEvaluationMetric =
-  | ChecksEvaluationMetricType
-  | ChecksEvaluationMetricConfig;
+  ChecksEvaluationMetricType | ChecksEvaluationMetricConfig;
 
 export function isConfig(
   config: ChecksEvaluationMetric

@@ -511,8 +511,7 @@ async function waitForSnapshotViaTransport<State, Opts extends object>(
     try {
       while (true) {
         const snap = (await transport.waitForSnapshot(snapshotId, opts)) as
-          | SessionSnapshot<State>
-          | undefined;
+          SessionSnapshot<State> | undefined;
         if (!snap || isSettled(snap)) {
           return snap;
         }
@@ -638,9 +637,10 @@ function toolRequestParts(parts?: Part[]): ToolRequestPart[] {
 // AgentInterrupt
 // ---------------------------------------------------------------------------
 
-class AgentInterruptImpl<Input = unknown, Output = unknown>
-  implements AgentInterrupt<Input, Output>
-{
+class AgentInterruptImpl<
+  Input = unknown,
+  Output = unknown,
+> implements AgentInterrupt<Input, Output> {
   readonly name: string;
   readonly ref?: string;
   readonly input: Input;
@@ -676,9 +676,10 @@ class AgentInterruptImpl<Input = unknown, Output = unknown>
 // AgentResponse
 // ---------------------------------------------------------------------------
 
-class AgentResponseImpl<State = unknown, O = unknown>
-  implements AgentResponse<State, O>
-{
+class AgentResponseImpl<State = unknown, O = unknown> implements AgentResponse<
+  State,
+  O
+> {
   constructor(
     private readonly _raw: AgentOutput<State>,
     private readonly _messages: MessageData[],
@@ -867,9 +868,10 @@ function mergeOpts<B extends object, P extends object>(
   return Object.assign({}, bound, defined);
 }
 
-class DetachedTaskImpl<State = unknown, Opts extends object = never>
-  implements DetachedTask<State, Opts>
-{
+class DetachedTaskImpl<
+  State = unknown,
+  Opts extends object = never,
+> implements DetachedTask<State, Opts> {
   constructor(
     readonly snapshotId: string,
     private readonly transport: AgentTransport<Opts>,
@@ -923,9 +925,10 @@ class DetachedTaskImpl<State = unknown, Opts extends object = never>
 // AgentChat
 // ---------------------------------------------------------------------------
 
-export class AgentChatImpl<State = unknown, Opts extends object = never>
-  implements AgentChat<State, Opts>
-{
+export class AgentChatImpl<
+  State = unknown,
+  Opts extends object = never,
+> implements AgentChat<State, Opts> {
   snapshotId?: string;
   sessionId?: string;
   messages: MessageData[] = [];
@@ -1410,8 +1413,7 @@ export function createAgentAPI<State = unknown, Opts extends object = never>(
       opts?: Opts
     ): Promise<AgentChat<State, Opts>> {
       const snapshot = (await transport.getSnapshot(lookup, opts)) as
-        | SessionSnapshot<State>
-        | undefined;
+        SessionSnapshot<State> | undefined;
       if (!snapshot) {
         const id =
           'snapshotId' in lookup

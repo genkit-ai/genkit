@@ -41,7 +41,6 @@ import * as deepResearch from './deep-research.js';
 import * as embedder from './embedder.js';
 import * as gemini from './gemini.js';
 import * as lyria from './lyria.js';
-import * as veo from './veo.js';
 
 export {
   type GeminiInteraction,
@@ -60,11 +59,23 @@ export {
 export { type LyriaConfig } from './lyria.js';
 export { type GoogleAIPluginOptions };
 
+/**
+ * Veo models on the Gemini API have been shut down (Oct 22 2026; the server
+ * returns 404). Without this, `veo-*` names would resolve as Gemini models
+ * and fail with a confusing error. vertexAI still has Veo.
+ */
+const VEO_SHUT_DOWN_ERROR = (name: string) =>
+  new GenkitError({
+    status: 'NOT_FOUND',
+    message:
+      `Model '${name}' is not available: Veo models on the Gemini API have ` +
+      'been shut down. Use gemini-omni-1.1-flash instead.',
+  });
+
 async function initializer(options?: GoogleAIPluginOptions) {
   return [
     ...gemini.listKnownModels(options),
     ...embedder.listKnownModels(options),
-    ...veo.listKnownModels(options),
     ...deepResearch.listKnownModels(options),
     ...lyria.listKnownModels(options),
     ...antigravity.listKnownModels(options),
@@ -78,11 +89,8 @@ async function resolver(
 ): Promise<ResolvableAction | undefined> {
   switch (actionType) {
     case 'model':
-      if (
-        veo.isVeoModelName(actionName) ||
-        deepResearch.isDeepResearchModelName(actionName)
-      ) {
-        // These are background models. Do not define them here.
+      if (deepResearch.isDeepResearchModelName(actionName)) {
+        // A background model. Do not define it here.
         return undefined;
       } else if (actionName.startsWith('imagen-')) {
         // Otherwise these would resolve as Gemini models and fail with a
@@ -94,6 +102,8 @@ async function resolver(
             'Gemini API have been shut down. Use gemini-nano-banana-2.1 ' +
             'instead.',
         });
+      } else if (actionName.startsWith('veo-')) {
+        throw VEO_SHUT_DOWN_ERROR(actionName);
       } else if (lyria.isLyriaModelName(actionName)) {
         return lyria.defineModel(actionName, options);
       } else if (antigravity.isAntigravityModelName(actionName)) {
@@ -103,8 +113,8 @@ async function resolver(
         return gemini.defineModel(actionName, options);
       }
     case 'background-model':
-      if (veo.isVeoModelName(actionName)) {
-        return veo.defineModel(actionName, options);
+      if (actionName.startsWith('veo-')) {
+        throw VEO_SHUT_DOWN_ERROR(actionName);
       } else if (deepResearch.isDeepResearchModelName(actionName)) {
         return deepResearch.defineModel(actionName, options);
       }
@@ -131,7 +141,6 @@ async function listActions(
 
     return [
       ...gemini.listActions(allModels),
-      ...veo.listActions(allModels),
       ...deepResearch.listActions(allModels),
       ...lyria.listActions(allModels),
       ...antigravity.listActions(allModels),
@@ -186,10 +195,6 @@ export type GoogleAIPlugin = {
     config?: gemini.GeminiConfig
   ): ModelReference<gemini.GeminiConfigSchemaType>;
   model(
-    name: veo.KnownModels | (veo.VeoModelName & {}),
-    config?: veo.VeoConfig
-  ): ModelReference<veo.VeoConfigSchemaType>;
-  model(
     name: deepResearch.KnownModels | (deepResearch.DeepResearchModelName & {}),
     config?: deepResearch.DeepResearchConfig
   ): ModelReference<deepResearch.DeepResearchConfigSchemaType>;
@@ -217,9 +222,6 @@ export const googleAI = googleAIPlugin as GoogleAIPlugin;
   name: string,
   config?: any
 ): ModelReference<z.ZodTypeAny> => {
-  if (veo.isVeoModelName(name)) {
-    return veo.model(name, config);
-  }
   if (deepResearch.isDeepResearchModelName(name)) {
     return deepResearch.model(name, config);
   }

@@ -61,7 +61,6 @@ interface OutputSchema {
 
 @Component({
   selector: 'app-chatbot',
-  standalone: true,
   providers: [provideNativeDateAdapter()],
   imports: [
     FormsModule,
@@ -86,7 +85,7 @@ export class ChatbotComponent {
   id = Date.now() + '' + Math.floor(Math.random() * 1000000000);
   llmIndex: number | undefined;
 
-  llmNames = ['Gemini 1.5 Flash', 'Llama 3.1 405b'];
+  llmNames = ['Gemini Hydrogen', 'Llama 3.1 405b'];
 
   chatFormControl = new FormControl(
     'write a function that adds two number together',

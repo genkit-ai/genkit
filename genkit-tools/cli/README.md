@@ -66,10 +66,6 @@ Available commands (run `genkit help <command>` for the options of each command)
 
   list, search, and read Genkit documentation
 
-- `init:ai-tools [options]`
-
-  initialize AI tools in a workspace with context about Genkit (experimental)
-
 - `mcp [options]`
 
   run the Genkit MCP stdio server (experimental)

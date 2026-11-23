@@ -1676,7 +1676,6 @@ describe('toGeminiTool', () => {
       type: SchemaType.OBJECT,
       properties: {
         name: { type: SchemaType.STRING },
-        note: undefined,
         values: { type: SchemaType.ARRAY, items: undefined },
       },
       required: undefined,

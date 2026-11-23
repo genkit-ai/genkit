@@ -600,8 +600,7 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
         if (cached) return cached;
 
         const action = (await ai.registry.lookupAction(`/agent/${name}`)) as
-          | Agent
-          | undefined;
+          Agent | undefined;
         if (action) {
           agentCache.set(name, action);
         }

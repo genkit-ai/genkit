@@ -914,7 +914,7 @@ function loadPrompt(
         delete promptMetadata.input.schema.description;
       }
 
-      const metadata = {
+      const metadata: Record<string, any> = {
         ...promptMetadata.metadata,
         type: 'prompt',
         prompt: {

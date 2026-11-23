@@ -29,7 +29,7 @@ Example:
 
     # 1. Initialize Flask app and Genkit with GoogleAI
     app = Flask(__name__)
-    ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
+    ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
 
 
     # 2. Stack Flask route + Genkit handler + flow on one function

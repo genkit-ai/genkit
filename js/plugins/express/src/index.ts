@@ -126,7 +126,7 @@ export function expressHandler<
         return;
       }
       const streamIdToUse = randomUUID();
-      const headers = {
+      const headers: Record<string, string> = {
         'Content-Type': 'text/plain',
         'Transfer-Encoding': 'chunked',
       };

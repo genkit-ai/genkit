@@ -33,7 +33,7 @@ Example:
     enable_google_cloud_telemetry(project='my-project')
 
     # All subsequent Genkit actions automatically export telemetry
-    ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
+    ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
     await ai.generate(prompt='Hello, world!')
     # => Traces exported asynchronously to Cloud Trace (latency, tokens, status)
     ```

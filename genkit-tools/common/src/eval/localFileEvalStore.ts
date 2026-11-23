@@ -18,15 +18,18 @@ import fs from 'fs';
 import { readFile, unlink, writeFile } from 'fs/promises';
 import path from 'path';
 import { createInterface } from 'readline';
-import type { ListEvalKeysRequest, ListEvalKeysResponse } from '../types/apis';
+import type {
+  ListEvalKeysRequest,
+  ListEvalKeysResponse,
+} from '../types/apis.js';
 import {
   EvalRunKeySchema,
   EvalRunSchema,
   type EvalRun,
   type EvalRunKey,
   type EvalStore,
-} from '../types/eval';
-import { logger } from '../utils/logger';
+} from '../types/eval.js';
+import { logger } from '../utils/logger.js';
 
 /**
  * A local, file-based EvalStore implementation.
