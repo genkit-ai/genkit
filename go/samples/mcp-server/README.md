@@ -34,12 +34,12 @@ export GOOGLE_AI_API_KEY=your_key
 go run client.go
 ```
 
-The `GenkitMCPClient` instance automatically spawns the server and makes tools available to use with `client.GetActiveTools()`. You can use these tools with any `Generate` method or `ExecutablePrompt`.
+The `GenkitMCPClient` instance automatically spawns the server and makes tools available to use with `client.ActiveTools(ctx)`. You can use these tools with any `Generate` method or `ExecutablePrompt`.
 
-Alternatively, you can use the `MCPManager` for managing multiple servers:
+Alternatively, you can use `MCPHost` for managing multiple servers:
 
 ```go
-manager, _ := mcp.NewMCPManager(mcp.MCPManagerOptions{
+host, err := mcp.NewHost(mcp.MCPHostOptions{
     Name: "my-app",
     MCPServers: []mcp.MCPServerConfig{
         {
@@ -54,11 +54,16 @@ manager, _ := mcp.NewMCPManager(mcp.MCPManagerOptions{
         {
             Name: "otherServer",
             Config: mcp.MCPClientOptions{
-                URL: "http://localhost:8080/mcp",
+                StreamableHTTP: &mcp.StreamableHTTPConfig{
+                    BaseURL: "http://localhost:8080/mcp",
+                },
             },
         },
     },
 })
+if err != nil {
+    return err
+}
 ```
 
 This example demonstrates the following workflow:

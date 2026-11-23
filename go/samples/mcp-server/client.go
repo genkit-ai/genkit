@@ -48,7 +48,7 @@ func client() {
 	defer client.Disconnect()
 
 	// Import tools
-	tools, err := client.GetActiveTools(ctx, g)
+	tools, err := client.ActiveTools(ctx)
 	if err != nil {
 		logger.FromContext(ctx).Error("Failed to get tools from MCP server", "error", err)
 		return

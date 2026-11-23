@@ -56,76 +56,7 @@ func main() {
   if err != nil {
     log.Fatal(err)
   }
-}
-```
-
-## GenkitMCPManager - Multiple Server Management
-
-Manage connections to multiple MCP servers:
-
-```go
-package main
-
-import (
-    "context"
-    "log"
-
-    "github.com/firebase/genkit/go/genkit"
-    "github.com/firebase/genkit/go/plugins/mcp"
-)
-
-func main() {
-    ctx := context.Background()
-    g, _ := genkit.Init(ctx)
-
-    // Create manager with multiple servers
-    manager, err := mcp.NewMCPManager(mcp.MCPManagerOptions{
-        Name: "my-app",
-        MCPServers: map[string]mcp.MCPClientOptions{
-            "everything": {
-                Name: "everything-server",
-                Stdio: &mcp.StdioConfig{
-                    Command: "npx",
-                    Args: []string{"-y", "@modelcontextprotocol/server-everything"},
-                },
-            },
-            "filesystem": {
-                Name: "fs-server",
-                Stdio: &mcp.StdioConfig{
-                    Command: "npx",
-                    Args: []string{"@modelcontextprotocol/server-filesystem", "/tmp"},
-                },
-            },
-        },
-    })
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    // Connect to new server at runtime
-    err = manager.ConnectServer(ctx, "weather", mcp.MCPClientOptions{
-        Name: "weather-server",
-        Stdio: &mcp.StdioConfig{
-            Command: "python",
-            Args: []string{"weather_server.py"},
-        },
-    })
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    // Temporarily disable/enable servers
-    manager.DisableServer("filesystem")
-    manager.EnableServer("filesystem")
-
-    // Disconnect server
-    manager.DisconnectServer("weather")
-
-    // Get tools from all active servers
-    tools, err := manager.GetActiveTools(ctx, g)
-    if err != nil {
-        log.Fatal(err)
-    }
+  log.Printf("Loaded prompt %s and %d tools", simplePrompt.Name(), len(tools))
 }
 ```
 
@@ -201,7 +132,6 @@ func main() {
   }
   log.Printf("Found %d tools", len(tools))
 }
-
 ```
 
 `ActiveTools` returns detached tools; it does not register them with a Genkit
