@@ -34,7 +34,7 @@ from typing import Any
 from _ai import ai, reply_text
 from genkit_middleware import Filesystem, ToolApproval
 
-from genkit import ActionRunContext
+from genkit import FlowContext
 from genkit.exp.agent import FileSessionStore
 
 WORKSPACE_DIR = Path(__file__).resolve().parent / 'workspace'
@@ -62,7 +62,7 @@ coding_agent = ai.define_agent(
 
 
 @ai.flow()
-async def test_coding_agent(text: str, ctx: ActionRunContext) -> str:
+async def test_coding_agent(text: str, ctx: FlowContext) -> str:
     """Auto-approve every write so the agent can finish a task unattended."""
     chat = coding_agent.chat()
     turn = chat.send_stream(text or 'Create a Python hello world file called hello.py in the workspace.')

@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-import { GenkitToolsError } from '@genkit-ai/tools-common/manager';
 import { record } from '@genkit-ai/tools-common/utils';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import z from 'zod';
 import { McpRunToolEvent } from './analytics.js';
 import {
   McpToolOptions,
+  formatMcpError,
   getCommonSchema,
   resolveProjectRoot,
 } from './utils.js';
@@ -31,7 +31,7 @@ export function defineFlowTools(server: McpServer, options: McpToolOptions) {
     {
       title: 'List Genkit Flows',
       description:
-        'Use this to discover available Genkit flows or inspect the input schema of Genkit flows to know how to successfully call them.',
+        'Use this to discover available Genkit flows or inspect their input schemas before calling them (requires a running runtime; see `start_runtime`).',
       inputSchema: getCommonSchema(options.explicitProjectRoot),
     },
     async (opts) => {
@@ -43,24 +43,36 @@ export function defineFlowTools(server: McpServer, options: McpToolOptions) {
       );
       if (typeof rootOrError !== 'string') return rootOrError;
 
-      const runtimeManager = await options.manager.getManager(rootOrError);
-      const actions = await runtimeManager.listActions();
+      try {
+        const runtimeManager = await options.manager.getManager(rootOrError);
+        const actions = await runtimeManager.listActions();
 
-      let flows = '';
-      for (const key of Object.keys(actions)) {
-        if (key.startsWith('/flow/')) {
-          flows += ' - Flow name: ' + key.substring('/flow/'.length) + '\n';
-          if (actions[key].description) {
-            flows += '   Description: ' + actions[key].description + '\n';
+        let flows = '';
+        for (const key of Object.keys(actions)) {
+          if (key.startsWith('/flow/')) {
+            flows += ' - Flow name: ' + key.substring('/flow/'.length) + '\n';
+            if (actions[key].description) {
+              flows += '   Description: ' + actions[key].description + '\n';
+            }
+            flows +=
+              '   Input schema: ' +
+              JSON.stringify(actions[key].inputSchema, undefined, 2) +
+              '\n\n';
           }
-          flows +=
-            '   Input schema: ' +
-            JSON.stringify(actions[key].inputSchema, undefined, 2) +
-            '\n\n';
         }
-      }
 
-      return { content: [{ type: 'text', text: flows }] };
+        return { content: [{ type: 'text', text: flows }] };
+      } catch (e) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: 'text',
+              text: `Error: ${formatMcpError(e)}`,
+            },
+          ],
+        };
+      }
     }
   );
 
@@ -68,13 +80,14 @@ export function defineFlowTools(server: McpServer, options: McpToolOptions) {
     'run_flow',
     {
       title: 'Run Flow',
-      description: 'Executes a Genkit flow with the provided JSON input.',
+      description:
+        'Executes a Genkit flow with the provided JSON input (requires a running runtime; see `start_runtime`).',
       inputSchema: getCommonSchema(options.explicitProjectRoot, {
         flowName: z.string().describe('name of the flow; type: string'),
         input: z
           .string()
           .describe(
-            'Flow input as JSON object encoded as string (it will be passed through `JSON.parse`). Must conform to the schema; type: string.'
+            'Flow input serialized as a valid JSON string (passed to `JSON.parse`, e.g. \'"hello"\' for a string input or \'{"key":"value"}\' for an object input). Must conform to the flow inputSchema; type: string.'
           )
           .optional(),
       }),
@@ -101,14 +114,12 @@ export function defineFlowTools(server: McpServer, options: McpToolOptions) {
           ],
         };
       } catch (e) {
-        const errStr =
-          e instanceof GenkitToolsError ? e.formatError() : JSON.stringify(e);
         return {
           isError: true,
           content: [
             {
               type: 'text',
-              text: `Error: ${errStr}`,
+              text: `Error: ${formatMcpError(e)}`,
             },
           ],
         };

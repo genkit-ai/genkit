@@ -29,9 +29,9 @@ from genkit import GenkitError
 
 
 def test_extract_version_strips_all_pasted_prefixes() -> None:
-    assert extract_version('antigravity-preview-05-2026') == 'antigravity-preview-05-2026'
-    assert extract_version('googleai/antigravity-preview-05-2026') == 'antigravity-preview-05-2026'
-    assert extract_version('models/googleai/antigravity-preview-05-2026') == 'antigravity-preview-05-2026'
+    assert extract_version('antigravity-preview-09-2026') == 'antigravity-preview-09-2026'
+    assert extract_version('googleai/antigravity-preview-09-2026') == 'antigravity-preview-09-2026'
+    assert extract_version('models/googleai/antigravity-preview-09-2026') == 'antigravity-preview-09-2026'
 
 
 def test_partition_keys_is_non_mutating() -> None:
@@ -110,11 +110,11 @@ def test_client_overrides_from_config_reads_object() -> None:
 
     from genkit_google_genai._models._interactions_utils import client_overrides_from_config
 
-    cfg = SimpleNamespace(base_url='https://custom.api', api_version='v1', timeout=5000.0, custom_headers={'h': 'v'})
+    cfg = SimpleNamespace(base_url='https://custom.api', api_version='v1', timeout=5.0, custom_headers={'h': 'v'})
     opts = client_overrides_from_config(cfg)
     assert opts.base_url == 'https://custom.api'
     assert opts.api_version == 'v1'
-    assert opts.timeout == 5000.0
+    assert opts.timeout == 5000.0  # config seconds, ClientOptions milliseconds
     assert opts.custom_headers == {'h': 'v'}
 
 
@@ -141,17 +141,17 @@ def test_model_name_predicates_support_namespaces() -> None:
     )
 
     # Bare
-    assert is_antigravity_model_name('antigravity-preview-05-2026')
+    assert is_antigravity_model_name('antigravity-preview-09-2026')
     assert is_deep_research_model_name('deep-research-pro-preview-12-2025')
     assert is_lyria_model_name('lyria-3-clip-preview')
 
     # Namespaced
-    assert is_antigravity_model_name('googleai/antigravity-preview-05-2026')
+    assert is_antigravity_model_name('googleai/antigravity-preview-09-2026')
     assert is_deep_research_model_name('googleai/deep-research-pro-preview-12-2025')
     assert is_lyria_model_name('googleai/lyria-3-clip-preview')
 
     # Full action path
-    assert is_antigravity_model_name('models/googleai/antigravity-preview-05-2026')
+    assert is_antigravity_model_name('models/googleai/antigravity-preview-09-2026')
     assert is_deep_research_model_name('models/googleai/deep-research-pro-preview-12-2025')
     assert is_lyria_model_name('models/googleai/lyria-3-clip-preview')
 

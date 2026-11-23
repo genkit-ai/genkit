@@ -14,20 +14,23 @@
  * limitations under the License.
  */
 
+import { randomUUID } from 'crypto';
 import fs from 'fs';
 import { readFile, rm, writeFile } from 'fs/promises';
 import path from 'path';
-import { v4 as uuidv4 } from 'uuid';
-import type { CreateDatasetRequest, UpdateDatasetRequest } from '../types/apis';
+import type {
+  CreateDatasetRequest,
+  UpdateDatasetRequest,
+} from '../types/apis.js';
 import {
   DatasetSchema,
   type Dataset,
   type DatasetMetadata,
   type DatasetStore,
   type InferenceDataset,
-} from '../types/eval';
-import { generateTestCaseId } from '../utils';
-import { logger } from '../utils/logger';
+} from '../types/eval.js';
+import { generateTestCaseId } from '../utils/index.js';
+import { logger } from '../utils/logger.js';
 
 /**
  * A local, file-based DatasetStore implementation.
@@ -241,7 +244,7 @@ export class LocalFileDatasetStore implements DatasetStore {
       return this.testUniqueness(datasetId, keys);
     }
 
-    const id = uuidv4();
+    const id = randomUUID();
     return this.testUniqueness(id, keys);
   }
 

@@ -1,0 +1,10 @@
+{
+  "/chatbotFlow": {
+    "target": "http://127.0.0.1:3400",
+    "secure": false
+  },
+  "/streamCharacters": {
+    "target": "http://127.0.0.1:3400",
+    "secure": false
+  }
+}

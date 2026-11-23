@@ -17,9 +17,10 @@
 
 """Cancel a long-running detached turn with task.abort().
 
-Detach a turn, let it run for a moment, then abort it. The abort signal reaches the
-running tool so it can stop cleanly, and the snapshot settles in an ABORTED state —
-the cancel button for background agent work. Requires GEMINI_API_KEY.
+Detach a turn, let it run for a moment, then abort it. Cancelling the snapshot
+cancels the running agent task and its in-flight tool, and the snapshot settles
+in an ABORTED state — the cancel button for background agent work.
+Requires GEMINI_API_KEY.
 """
 
 from __future__ import annotations
@@ -28,7 +29,6 @@ import asyncio
 
 from genkit_google_genai import GoogleAI
 
-from genkit import GenkitError, ToolRunContext
 from genkit.exp import Genkit
 from genkit.exp.agent import InMemorySessionStore
 
@@ -37,17 +37,15 @@ store = InMemorySessionStore()
 
 
 @ai.tool(name='slowWork', description='Simulate long background work.')
-async def slow_work(_: dict, ctx: ToolRunContext) -> dict:
+async def slow_work(_: dict) -> dict:
     for _i in range(30):
-        if ctx.abort_signal.is_set():  # the abort propagates here so we can bail out cleanly
-            raise GenkitError(status='ABORTED', message='Task aborted')
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.5)  # task.abort() cancels the running task here
     return {'done': True}
 
 
 agent = ai.define_agent(
     name='longTaskAgent',
-    model=GoogleAI.gemini_model('gemini-flash-latest'),
+    model=GoogleAI.gemini('gemini-flash-latest'),
     system='When asked for a long task, call slowWork.',
     tools=[slow_work],
     store=store,
@@ -62,7 +60,7 @@ async def main() -> None:
     assert task.snapshot_id
     await asyncio.sleep(2.0)
 
-    # → abort_signal fires inside slowWork; the snapshot settles as ABORTED
+    # → cancels slowWork on the server; the snapshot settles as ABORTED
     await task.abort()
     await asyncio.sleep(1.0)  # let the background task unwind
 
