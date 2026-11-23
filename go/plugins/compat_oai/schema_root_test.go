@@ -28,6 +28,8 @@ import (
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/internal/base"
+	"github.com/firebase/genkit/go/plugins/compat_oai/internal/hooks"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 )
@@ -48,7 +50,7 @@ func TestHasObjectRoot(t *testing.T) {
 		want   bool
 	}{
 		{map[string]any{"type": "object", "properties": map[string]any{}}, true},
-		{map[string]any{"properties": map[string]any{"a": map[string]any{"type": "string"}}}, true},
+		{map[string]any{"properties": map[string]any{"a": map[string]any{"type": "string"}}}, false},
 		{personArray, false},
 		{map[string]any{"type": "string", "enum": []any{"a", "b"}}, false},
 		{map[string]any{"type": "integer"}, false},
@@ -97,6 +99,111 @@ func TestWrapSchemaRootKeepsDefinitionsAtRoot(t *testing.T) {
 	}
 }
 
+func TestWrapSchemaRootHoistsLocalRefs(t *testing.T) {
+	first := map[string]any{
+		"type":                 "object",
+		"properties":           map[string]any{"n": map[string]any{"type": "number"}},
+		"required":             []any{"n"},
+		"additionalProperties": false,
+	}
+	schema := map[string]any{
+		"type": "array",
+		"items": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"first":  first,
+				"second": map[string]any{"$ref": "#/items/properties/first"},
+				"all":    map[string]any{"$ref": "#"},
+				"a":      map[string]any{"$ref": "#/$defs/value"},
+				"remote": map[string]any{"$ref": "https://example.com/schema"},
+				"gone":   map[string]any{"$ref": "#/nowhere"},
+			},
+			"default": map[string]any{"$ref": "#/items"},
+		},
+		// A definition already named "value" pushes the hoisted root to
+		// "value_2".
+		"$defs": map[string]any{"value": map[string]any{"type": "string"}},
+	}
+	got := wrapSchemaRoot(schema)
+
+	want := map[string]any{
+		"type":                 "object",
+		"required":             []any{"value"},
+		"additionalProperties": false,
+		"properties":           map[string]any{"value": map[string]any{"$ref": "#/$defs/value_2"}},
+		"$defs": map[string]any{
+			"value": map[string]any{"type": "string"},
+			"value_2": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"first":  map[string]any{"$ref": "#/$defs/value_items_properties_first"},
+						"second": map[string]any{"$ref": "#/$defs/value_items_properties_first"},
+						"all":    map[string]any{"$ref": "#/$defs/value_2"},
+						"a":      map[string]any{"$ref": "#/$defs/value"},
+						"remote": map[string]any{"$ref": "https://example.com/schema"},
+						"gone":   map[string]any{"$ref": "#/nowhere"},
+					},
+					"default": map[string]any{"$ref": "#/items"},
+				},
+			},
+			"value_items_properties_first": first,
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		gotJSON, _ := json.MarshalIndent(got, "", "  ")
+		t.Errorf("wrapSchemaRoot() =\n%s", gotJSON)
+	}
+	if ref := schema["items"].(map[string]any)["properties"].(map[string]any)["all"].(map[string]any)["$ref"]; ref != "#" {
+		t.Errorf("wrapSchemaRoot mutated its input: $ref = %v", ref)
+	}
+}
+
+func TestWrappedSchemaResolvesLocalRefs(t *testing.T) {
+	// A recursive tree, as an array root: "#" refers back to the array and
+	// "#/items" to its item, both of which move under the wrapper.
+	schema := map[string]any{
+		"type": "array",
+		"items": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name": map[string]any{"type": "string"},
+				"kids": map[string]any{"type": "array", "items": map[string]any{"$ref": "#/items"}},
+				"all":  map[string]any{"$ref": "#"},
+			},
+			"required": []any{"name"},
+		},
+	}
+	wrapped := wrapSchemaRoot(schema)
+	valid := map[string]any{"value": []any{map[string]any{
+		"name": "a",
+		"kids": []any{map[string]any{"name": "b"}},
+		"all":  []any{map[string]any{"name": "c"}},
+	}}}
+	if err := base.ValidateValue(valid, wrapped); err != nil {
+		t.Errorf("valid tree failed validation: %v", err)
+	}
+	invalid := map[string]any{"value": []any{map[string]any{
+		"name": "a",
+		"kids": []any{map[string]any{"name": 1}},
+	}}}
+	if err := base.ValidateValue(invalid, wrapped); err == nil {
+		t.Error("a kid with a numeric name passed validation, want the rewritten $ref enforced")
+	}
+}
+
+func TestObjectSchemaRootHook(t *testing.T) {
+	var o OpenAICompatible
+	if o.objectSchemaRoot {
+		t.Fatal("objectSchemaRoot is on by default, want it off")
+	}
+	hooks.SetObjectSchemaRoot(&o)
+	if !o.objectSchemaRoot {
+		t.Error("hooks.SetObjectSchemaRoot did not turn objectSchemaRoot on")
+	}
+}
+
 func TestUnwrapText(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
 		{`{"value":[{"name":"a"}]}`, `[{"name":"a"}]`},
@@ -139,7 +246,11 @@ func TestStreamUnwrapper(t *testing.T) {
 		{"nested braces in the value", []string{`{"value":{"a":{"b":1}}}`}, `{"a":{"b":1}}`},
 		{"object closing before the array", []string{`{"value":[{"a":1}`, `]}`}, `[{"a":1}]`},
 		{"scalar", []string{`{"value":"he`, `llo"}`}, `"hello"`},
+		{"spaced opening whole", []string{"{" + strings.Repeat(" ", 42) + `"value":1}`}, "1"},
+		{"spaced opening one character at a time", strings.Split("{"+strings.Repeat(" ", 42)+`"value":1}`, ""), "1"},
 		{"not a wrapper", []string{`[1,`, `2]`}, `[1,2]`},
+		{"key that only starts like the wrapper's", strings.Split(`{"valuable":1}`, ""), `{"valuable":1}`},
+		{"other object one character at a time", strings.Split(`{"other":1}`, ""), `{"other":1}`},
 		{"long object that is not a wrapper", []string{`{"other":1,"more":"text that is long enough to decide"}`}, `{"other":1,"more":"text that is long enough to decide"}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

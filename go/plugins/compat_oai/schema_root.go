@@ -18,35 +18,48 @@ package compat_oai
 
 import (
 	"encoding/json"
-	"regexp"
+	"slices"
+	"strconv"
 	"strings"
+	"unicode"
+
+	"github.com/firebase/genkit/go/plugins/compat_oai/internal/hooks"
 )
+
+func init() {
+	hooks.SetObjectSchemaRoot = func(o any) {
+		o.(*OpenAICompatible).objectSchemaRoot = true
+	}
+}
 
 // Some OpenAI-compatible hosts (OpenAI itself, and gateways that forward to
 // it) only accept a json_schema response format whose root is type "object".
 // For those hosts, a schema with any other root (array, enum, scalar, anyOf)
 // is sent wrapped in an object, and the reply is unwrapped before the
-// framework parses it. See [OpenAICompatible.ObjectSchemaRoot].
+// framework parses it. Only the openai plugin turns this on, through
+// [hooks.SetObjectSchemaRoot].
 
 // wrapperKey is the property that holds the caller's value inside the
 // wrapper object.
 const wrapperKey = "value"
 
-// hasObjectRoot reports whether the schema's root is an object, which every
-// host accepts.
+// hasObjectRoot reports whether the schema's root is explicitly an object.
+// Anything else, including properties without a type (which also allows
+// non-object values), is wrapped.
 func hasObjectRoot(schema map[string]any) bool {
-	t, hasType := schema["type"]
-	if t == "object" {
-		return true
-	}
-	_, hasProperties := schema["properties"]
-	return !hasType && hasProperties
+	return schema["type"] == "object"
 }
 
 // wrapSchemaRoot wraps schema as the single required property of an object
 // schema. $schema, $defs and definitions stay at the root, so references
 // into the definitions still resolve.
+//
+// Any other local reference ("#", "#/items/...") pointed into the caller's
+// schema, which is no longer the root. Strict hosts accept references only to
+// top-level definitions, so each referenced subschema moves into $defs and
+// both its old place and every reference to it point there instead.
 func wrapSchemaRoot(schema map[string]any) map[string]any {
+	h := newRefHoister(schema)
 	inner := make(map[string]any, len(schema))
 	wrapped := map[string]any{
 		"type":                 "object",
@@ -55,14 +68,184 @@ func wrapSchemaRoot(schema map[string]any) map[string]any {
 	}
 	for k, v := range schema {
 		switch k {
-		case "$schema", "$defs", "definitions":
+		case "$schema":
 			wrapped[k] = v
+		case "definitions":
+			wrapped[k] = h.walk(v, "#/definitions")
+		case "$defs":
+			if defs, ok := v.(map[string]any); ok {
+				for name, def := range defs {
+					h.defs[name] = h.walk(def, "#/$defs/"+escapePointer(name))
+				}
+			} else {
+				wrapped[k] = v
+			}
 		default:
 			inner[k] = v
 		}
 	}
-	wrapped["properties"] = map[string]any{wrapperKey: inner}
+	wrapped["properties"] = map[string]any{wrapperKey: h.walk(inner, "#")}
+	if len(h.defs) > 0 {
+		wrapped["$defs"] = h.defs
+	}
 	return wrapped
+}
+
+// dataKeywords hold data rather than subschemas, so a $ref inside them is not
+// a reference.
+var dataKeywords = map[string]bool{"const": true, "enum": true, "default": true, "examples": true}
+
+// refHoister moves the subschemas that local references point at into $defs
+// as it copies a schema.
+type refHoister struct {
+	// targets maps each referenced JSON pointer to its name in defs.
+	targets map[string]string
+	defs    map[string]any
+}
+
+func newRefHoister(schema map[string]any) *refHoister {
+	h := &refHoister{targets: map[string]string{}, defs: map[string]any{}}
+	taken := map[string]bool{}
+	if defs, ok := schema["$defs"].(map[string]any); ok {
+		for name := range defs {
+			taken[name] = true
+		}
+	}
+	var refs []string
+	collectLocalRefs(schema, func(ref string) {
+		if _, seen := h.targets[ref]; !seen && resolvePointer(schema, ref) {
+			h.targets[ref] = ""
+			refs = append(refs, ref)
+		}
+	})
+	slices.Sort(refs)
+	for _, ref := range refs {
+		h.targets[ref] = uniqueDefName(ref, taken)
+	}
+	return h
+}
+
+// walk copies node, found at JSON pointer ptr in the caller's schema. A node
+// that a reference points at goes into defs, and a reference to it is left in
+// its place.
+func (h *refHoister) walk(node any, ptr string) any {
+	if name, ok := h.targets[ptr]; ok {
+		h.defs[name] = h.copy(node, ptr)
+		return map[string]any{"$ref": "#/$defs/" + name}
+	}
+	return h.copy(node, ptr)
+}
+
+func (h *refHoister) copy(node any, ptr string) any {
+	switch n := node.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(n))
+		for k, v := range n {
+			switch ref, isString := v.(string); {
+			case k == "$ref" && isString:
+				if name, ok := h.targets[ref]; ok {
+					ref = "#/$defs/" + name
+				}
+				out[k] = ref
+			case dataKeywords[k]:
+				out[k] = v
+			default:
+				out[k] = h.walk(v, ptr+"/"+escapePointer(k))
+			}
+		}
+		return out
+	case []any:
+		out := make([]any, len(n))
+		for i, v := range n {
+			out[i] = h.walk(v, ptr+"/"+strconv.Itoa(i))
+		}
+		return out
+	default:
+		return node
+	}
+}
+
+// collectLocalRefs calls found with every reference in node that points into
+// the schema itself rather than into $defs or definitions.
+func collectLocalRefs(node any, found func(string)) {
+	switch n := node.(type) {
+	case map[string]any:
+		for k, v := range n {
+			switch ref, isString := v.(string); {
+			case k == "$ref" && isString:
+				if isLocalRef(ref) {
+					found(ref)
+				}
+			case dataKeywords[k]:
+			default:
+				collectLocalRefs(v, found)
+			}
+		}
+	case []any:
+		for _, v := range n {
+			collectLocalRefs(v, found)
+		}
+	}
+}
+
+func isLocalRef(ref string) bool {
+	if ref != "#" && !strings.HasPrefix(ref, "#/") {
+		return false
+	}
+	for _, defs := range []string{"#/$defs", "#/definitions"} {
+		if ref == defs || strings.HasPrefix(ref, defs+"/") {
+			return false
+		}
+	}
+	return true
+}
+
+// resolvePointer reports whether the JSON pointer ref names a schema inside
+// schema.
+func resolvePointer(schema map[string]any, ref string) bool {
+	var node any = schema
+	for _, seg := range strings.Split(strings.TrimPrefix(ref, "#"), "/")[1:] {
+		seg = strings.ReplaceAll(strings.ReplaceAll(seg, "~1", "/"), "~0", "~")
+		switch n := node.(type) {
+		case map[string]any:
+			next, ok := n[seg]
+			if !ok {
+				return false
+			}
+			node = next
+		case []any:
+			i, err := strconv.Atoi(seg)
+			if err != nil || i < 0 || i >= len(n) {
+				return false
+			}
+			node = n[i]
+		default:
+			return false
+		}
+	}
+	_, isSchema := node.(map[string]any)
+	return isSchema
+}
+
+func escapePointer(key string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(key, "~", "~0"), "/", "~1")
+}
+
+// uniqueDefName names the definition a referenced pointer moves to, avoiding
+// the names already taken.
+func uniqueDefName(ref string, taken map[string]bool) string {
+	base := strings.Map(func(r rune) rune {
+		if r == '_' || r == '-' || unicode.IsLetter(r) || unicode.IsDigit(r) {
+			return r
+		}
+		return '_'
+	}, wrapperKey+strings.TrimPrefix(ref, "#"))
+	name := base
+	for i := 2; taken[name]; i++ {
+		name = base + "_" + strconv.Itoa(i)
+	}
+	taken[name] = true
+	return name
 }
 
 // unwrapText returns the wrapped value's JSON from text, or text unchanged
@@ -80,19 +263,53 @@ func unwrapText(text string) string {
 	return string(value)
 }
 
-var wrapperPrefix = regexp.MustCompile(`^\s*\{\s*"` + wrapperKey + `"\s*:\s*`)
+// prefixTokens is the wrapper's opening, as the tokens it is made of.
+// Whitespace may sit before and between them.
+var prefixTokens = []string{"{", `"` + wrapperKey + `"`, ":"}
 
-// maxPrefixWait is how much text the stream unwrapper buffers, waiting to
-// see the wrapper prefix, before it gives up and passes text through.
-const maxPrefixWait = 40
+// prefixMatch is how far text matches the wrapper's opening.
+type prefixMatch int
+
+const (
+	prefixNo      prefixMatch = iota // text cannot become the opening
+	prefixPartial                    // text could still become the opening
+	prefixFull                       // the opening is all there
+)
+
+// matchPrefix matches the start of text against the wrapper's opening. On a
+// full match it also returns the opening's length, trailing whitespace
+// included.
+func matchPrefix(text string) (prefixMatch, int) {
+	i := 0
+	skipSpace := func() {
+		for i < len(text) && unicode.IsSpace(rune(text[i])) {
+			i++
+		}
+	}
+	for _, token := range prefixTokens {
+		skipSpace()
+		rest := text[i:min(i+len(token), len(text))]
+		if rest != token {
+			if strings.HasPrefix(token, rest) && i+len(rest) == len(text) {
+				return prefixPartial, 0
+			}
+			return prefixNo, 0
+		}
+		i += len(token)
+	}
+	skipSpace()
+	return prefixFull, i
+}
 
 // streamUnwrapper strips the {"value": prefix and the closing brace from
 // streamed text, so chunks read as the caller's value (such as [{...}, for
 // an array) and the format's chunk parser sees what it expects.
 //
-// Text is held back until the prefix is seen. Trailing whitespace and braces
-// are then held until more text arrives, because the last brace belongs to
-// the wrapper only if nothing follows it; flush drops it.
+// Text is held back for as long as it could still be the start of the
+// wrapper, so the result does not depend on how the stream is split.
+// Trailing whitespace and braces are then held until more text arrives,
+// because the last brace belongs to the wrapper only if nothing follows it;
+// flush drops it. A reply that is not a wrapper passes through unchanged.
 type streamUnwrapper struct {
 	started bool
 	wrapped bool
@@ -107,22 +324,18 @@ func (u *streamUnwrapper) push(delta string) string {
 		return u.release(delta)
 	}
 	u.head += delta
-	if loc := wrapperPrefix.FindStringIndex(u.head); loc != nil {
-		u.started, u.wrapped = true, true
-		rest := u.head[loc[1]:]
-		u.head = ""
-		return u.release(rest)
+	match, n := matchPrefix(u.head)
+	if match == prefixPartial {
+		return ""
 	}
-	// Not a wrapper, or not enough text yet to tell: keep buffering unless it
-	// can no longer become one.
-	lead := strings.TrimLeft(u.head, " \t\r\n")
-	if lead != "" && (lead[0] != '{' || len(u.head) > maxPrefixWait) {
-		u.started = true
-		out := u.head
-		u.head = ""
-		return u.release(out)
+	u.started = true
+	out := u.head
+	u.head = ""
+	if match == prefixFull {
+		u.wrapped = true
+		out = out[n:]
 	}
-	return ""
+	return u.release(out)
 }
 
 func (u *streamUnwrapper) release(text string) string {

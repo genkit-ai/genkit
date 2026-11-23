@@ -54,7 +54,7 @@ type ModelGenerator struct {
 	mediaTypes []string
 	// classify is the provider's [OpenAICompatible.ClassifyError].
 	classify func(*openai.Error) status.Name
-	// objectSchemaRoot is [OpenAICompatible.ObjectSchemaRoot].
+	// objectSchemaRoot is the provider's OpenAICompatible.objectSchemaRoot.
 	objectSchemaRoot bool
 	// unwrapRoot records that the request's schema went out wrapped, so the
 	// reply's text is unwrapped before the framework parses it.
@@ -88,7 +88,7 @@ func (g *ModelGenerator) withSeparateReasoning(separate bool) *ModelGenerator {
 }
 
 // withObjectSchemaRoot records that the provider takes only an object at the
-// schema root; see [OpenAICompatible.ObjectSchemaRoot].
+// schema root; see [hooks.SetObjectSchemaRoot].
 func (g *ModelGenerator) withObjectSchemaRoot(objectOnly bool) *ModelGenerator {
 	g.objectSchemaRoot = objectOnly
 	return g

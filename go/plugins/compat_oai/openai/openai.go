@@ -23,6 +23,7 @@ import (
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/compat_oai"
+	"github.com/firebase/genkit/go/plugins/compat_oai/internal/hooks"
 	"github.com/firebase/genkit/go/plugins/internal"
 	openaiGo "github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
@@ -347,7 +348,7 @@ func (o *OpenAI) Init(ctx context.Context) []api.Action {
 
 	o.openAICompatible.Provider = provider
 	o.openAICompatible.MediaTypes = mediaTypes
-	o.openAICompatible.ObjectSchemaRoot = true
+	hooks.SetObjectSchemaRoot(&o.openAICompatible)
 	actions := o.openAICompatible.Init(ctx)
 
 	// define default models

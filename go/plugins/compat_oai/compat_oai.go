@@ -225,13 +225,13 @@ type OpenAICompatible struct {
 	// is sent as an image and is not checked.
 	MediaTypes []string
 
-	// ObjectSchemaRoot records that the provider's json_schema response
+	// objectSchemaRoot records that the provider's json_schema response
 	// format accepts only an object at the schema root, as OpenAI's does.
 	// A JSON output schema with any other root (an array, enum, scalar or
 	// anyOf) is then sent wrapped as the single property "value" of an
-	// object, and the reply is unwrapped before it is parsed. Left false,
-	// the schema is sent as given.
-	ObjectSchemaRoot bool
+	// object, and the reply is unwrapped before it is parsed. It is not
+	// public: the openai plugin sets it through [hooks.SetObjectSchemaRoot].
+	objectSchemaRoot bool
 
 	// descs caches the action descriptors of listed models by name; they are
 	// deterministic per name, and rebuilding a full model action per listed
@@ -358,7 +358,7 @@ func (o *OpenAICompatible) DefineModel(provider, id string, opts ai.ModelOptions
 		return NewModelGenerator(o.client, id).
 			withSeparateReasoning(o.SeparateReasoningTokens).
 			withMediaTypes(o.MediaTypes).
-			withObjectSchemaRoot(o.ObjectSchemaRoot).
+			withObjectSchemaRoot(o.objectSchemaRoot).
 			WithMessages(input.Messages).
 			WithConfig(input.Config).
 			WithTools(input.Tools).
@@ -391,7 +391,7 @@ func newSDKModel(o *OpenAICompatible, id string, opts ai.ModelOptions) *ai.Model
 		return NewModelGenerator(o.client, id).
 			withSeparateReasoning(o.SeparateReasoningTokens).
 			withMediaTypes(o.MediaTypes).
-			withObjectSchemaRoot(o.ObjectSchemaRoot).
+			withObjectSchemaRoot(o.objectSchemaRoot).
 			WithParams(config).
 			WithMessages(input.Messages).
 			WithTools(input.Tools).
@@ -474,7 +474,7 @@ func NewChatModel[Config ChatConfig](o *OpenAICompatible, id string, opts ai.Mod
 		g := NewModelGenerator(o.clientForKey(config.RequestAPIKey()), id).
 			withSeparateReasoning(o.SeparateReasoningTokens).
 			withMediaTypes(o.MediaTypes).
-			withObjectSchemaRoot(o.ObjectSchemaRoot).
+			withObjectSchemaRoot(o.objectSchemaRoot).
 			WithParams(params).
 			WithMessages(input.Messages).
 			WithTools(input.Tools).

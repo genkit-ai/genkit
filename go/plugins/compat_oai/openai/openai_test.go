@@ -18,9 +18,11 @@ package openai
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -543,5 +545,47 @@ func TestModelsOverride(t *testing.T) {
 	info := embedder.(*ai.EmbedderAction).Desc().Metadata["info"].(map[string]any)
 	if got := info["dimensions"]; got != 64 {
 		t.Errorf("dimensions = %v (%T), want the override's 64", got, got)
+	}
+}
+
+// TestWrapsNonObjectOutputSchemaRoot pins that the openai plugin wraps a
+// non-object output schema root, which OpenAI rejects, and unwraps the reply.
+func TestWrapsNonObjectOutputSchemaRoot(t *testing.T) {
+	var sent map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			ResponseFormat struct {
+				JSONSchema struct {
+					Schema map[string]any `json:"schema"`
+				} `json:"json_schema"`
+			} `json:"response_format"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		sent = body.ResponseFormat.JSONSchema.Schema
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{
+			"id":"c1","object":"chat.completion","created":1,"model":"gpt-4o",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"{\"value\":[\"a\",\"b\"]}"},"finish_reason":"stop"}]
+		}`)
+	}))
+	defer server.Close()
+
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	g := genkit.Init(context.Background(), genkit.WithPlugins(&OpenAI{Opts: []option.RequestOption{option.WithBaseURL(server.URL)}}))
+	got, _, err := genkit.GenerateData[[]string](context.Background(), g,
+		ai.WithModelName("openai/gpt-4o"), ai.WithPrompt("list two letters"))
+	if err != nil {
+		t.Fatalf("GenerateData() error = %v", err)
+	}
+	if sent["type"] != "object" {
+		t.Errorf("sent schema type = %v, want the array wrapped in an object", sent["type"])
+	}
+	if value, _ := sent["properties"].(map[string]any)["value"].(map[string]any); value["type"] != "array" {
+		t.Errorf("sent schema = %v, want the array under properties.value", sent)
+	}
+	if want := []string{"a", "b"}; !slices.Equal(*got, want) {
+		t.Errorf("output = %v, want %v", *got, want)
 	}
 }
