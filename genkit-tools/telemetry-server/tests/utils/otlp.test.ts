@@ -14,13 +14,12 @@
  * limitations under the License.
  */
 
-import * as assert from 'assert';
-import { describe, it } from 'node:test';
+import { describe, expect, it } from 'vitest';
 import {
   decodeOtlpProtobuf,
   logDataFromOtlp,
   traceDataFromOtlp,
-} from '../src/utils/otlp.js';
+} from '../../src/utils/otlp.js';
 
 function pbVarint(val: bigint | number): Buffer {
   let v = BigInt.asUintN(64, BigInt(val));
@@ -191,7 +190,7 @@ describe('otlp-traces', () => {
     ];
 
     const result = traceDataFromOtlp(otlpPayload as any);
-    assert.deepStrictEqual(result, expectedTraceData);
+    expect(result).toEqual(expectedTraceData);
   });
 
   it('should transform OTLP payload with non-zero status to TraceData', () => {
@@ -256,7 +255,7 @@ describe('otlp-traces', () => {
     ];
 
     const result = traceDataFromOtlp(otlpPayload as any);
-    assert.deepStrictEqual(result, expectedTraceData);
+    expect(result).toEqual(expectedTraceData);
   });
 });
 
@@ -342,7 +341,7 @@ describe('otlp-logs', () => {
     const result = logDataFromOtlp(otlpPayload);
     // Overwrite the random logId generator for deep strict equal
     result.forEach((log) => (log.logId = ''));
-    assert.deepStrictEqual(result, expectedLogData);
+    expect(result).toEqual(expectedLogData);
   });
 });
 
@@ -411,7 +410,7 @@ describe('otlp-protobuf', () => {
     const decoded = decodeOtlpProtobuf(exportTraceReqBuf, 'traces');
     const result = traceDataFromOtlp(decoded);
 
-    assert.deepStrictEqual(result, [
+    expect(result).toEqual([
       {
         traceId: traceIdHex,
         spans: {
@@ -502,7 +501,7 @@ describe('otlp-protobuf', () => {
     const result = logDataFromOtlp(decoded);
     result.forEach((log) => (log.logId = ''));
 
-    assert.deepStrictEqual(result, [
+    expect(result).toEqual([
       {
         logId: '',
         traceId: traceIdHex,
@@ -568,38 +567,33 @@ describe('otlp-protobuf', () => {
 
     const decodedTrace = decodeOtlpProtobuf(traceReqBuf, 'traces');
     const traceResult = traceDataFromOtlp(decodedTrace);
-    assert.strictEqual(traceResult.length, 1);
-    assert.deepStrictEqual(
-      traceResult[0].spans[spanIdHex].attributes['nested'],
-      { innerStr: 'hello', innerInt: 7 }
-    );
-    assert.strictEqual(
-      traceResult[0].spans[spanIdHex].attributes['raw'],
+    expect(traceResult).toHaveLength(1);
+    expect(traceResult[0].spans[spanIdHex].attributes['nested']).toEqual({
+      innerStr: 'hello',
+      innerInt: 7,
+    });
+    expect(traceResult[0].spans[spanIdHex].attributes['raw']).toBe(
       rawBytes.toString('base64')
     );
   });
 
   it('throws on truncated or malformed protobuf payloads', () => {
-    assert.throws(() =>
+    expect(() =>
       decodeOtlpProtobuf(Buffer.from([0x0a, 0x10, 0x01]), 'traces')
-    );
+    ).toThrow();
     // Unclosed group (wire type 3 without matching wire type 4)
-    assert.throws(
-      () =>
-        decodeOtlpProtobuf(
-          Buffer.concat([pbTag(2, 3), pbVarintField(1, 1)]),
-          'traces'
-        ),
-      /unexpected EOF in group/
-    );
+    expect(() =>
+      decodeOtlpProtobuf(
+        Buffer.concat([pbTag(2, 3), pbVarintField(1, 1)]),
+        'traces'
+      )
+    ).toThrow(/unexpected EOF in group/);
     // Mismatched end-group field number
-    assert.throws(
-      () =>
-        decodeOtlpProtobuf(
-          Buffer.concat([pbTag(2, 3), pbVarintField(1, 1), pbTag(3, 4)]),
-          'traces'
-        ),
-      /mismatched end-group field number/
-    );
+    expect(() =>
+      decodeOtlpProtobuf(
+        Buffer.concat([pbTag(2, 3), pbVarintField(1, 1), pbTag(3, 4)]),
+        'traces'
+      )
+    ).toThrow(/mismatched end-group field number/);
   });
 });

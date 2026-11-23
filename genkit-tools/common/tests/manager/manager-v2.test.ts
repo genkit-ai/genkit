@@ -16,12 +16,12 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
-import { RuntimeManagerV2 } from '../src/manager/manager-v2.js';
+import { RuntimeManagerV2 } from '../../src/manager/manager-v2.js';
 import {
   REFLECTION_AUTH_ERROR_CODE,
   REFLECTION_SECRET_ENV,
-} from '../src/manager/reflection-auth.js';
-import { RuntimeEvent } from '../src/manager/types.js';
+} from '../../src/manager/reflection-auth.js';
+import { RuntimeEvent } from '../../src/manager/types.js';
 
 describe('RuntimeManagerV2', () => {
   let manager: RuntimeManagerV2;
@@ -52,7 +52,7 @@ describe('RuntimeManagerV2', () => {
           try {
             expect(runtime.id).toBe('test-runtime-1');
             expect(runtime.pid).toBe(1234);
-            expect(manager.listRuntimes().length).toBe(1);
+            expect(manager.listRuntimes()).toHaveLength(1);
             unsubscribe();
             resolve();
           } catch (err) {

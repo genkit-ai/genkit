@@ -264,10 +264,6 @@ describe('localFileDatasetStore', () => {
         Promise.resolve(JSON.stringify({}) as any)
       );
       fs.existsSync = vi.fn(() => false);
-      const dataset: Dataset = SAMPLE_DATASET_1_V1.map((s) => ({
-        testCaseId: TEST_CASE_ID,
-        ...s,
-      }));
 
       const datasetMetadata = await DatasetStore.createDataset({
         ...CREATE_DATASET_REQUEST_WITH_SCHEMA,
@@ -284,7 +280,7 @@ describe('localFileDatasetStore', () => {
           $schema: 'http://json-schema.org/draft-07/schema#',
         },
       });
-      expect(datasetMetadata.targetAction).toEqual('/flow/my-flow');
+      expect(datasetMetadata.targetAction).toBe('/flow/my-flow');
     });
 
     it('creates new dataset, with metrics', async () => {
@@ -295,10 +291,6 @@ describe('localFileDatasetStore', () => {
         Promise.resolve(JSON.stringify({}) as any)
       );
       fs.existsSync = vi.fn(() => false);
-      const dataset: Dataset = SAMPLE_DATASET_1_V1.map((s) => ({
-        testCaseId: TEST_CASE_ID,
-        ...s,
-      }));
 
       const datasetMetadata = await DatasetStore.createDataset({
         ...CREATE_DATASET_REQUEST,
@@ -500,7 +492,7 @@ describe('localFileDatasetStore', () => {
           $schema: 'http://json-schema.org/draft-07/schema#',
         },
       });
-      expect(datasetMetadata.targetAction).toEqual('/flow/my-flow-2');
+      expect(datasetMetadata.targetAction).toBe('/flow/my-flow-2');
     });
 
     it('succeeds for existing dataset -- with metrics', async () => {
@@ -656,9 +648,7 @@ describe('localFileDatasetStore', () => {
       expect(fetchedDataset).toMatchObject(dataset);
     });
 
-    it('fails for non existing dataset', async () => {
-      // TODO: Implement this.
-    });
+    it.todo('fails for non existing dataset');
   });
 
   describe('deleteDataset', () => {

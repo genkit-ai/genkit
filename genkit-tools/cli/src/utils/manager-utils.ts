@@ -20,8 +20,11 @@ import {
   startTelemetryServer,
 } from '@genkit-ai/telemetry-server';
 import type { Status } from '@genkit-ai/tools-common';
-import {
+import type {
   BaseRuntimeManager,
+  GenkitToolsError,
+} from '@genkit-ai/tools-common/manager';
+import {
   DEFAULT_REFLECTION_V2_HOST,
   ProcessManager,
   REFLECTION_SECRET_ENV,
@@ -29,7 +32,6 @@ import {
   RuntimeManager,
   generateReflectionSecret,
   reflectionV2Url,
-  type GenkitToolsError,
 } from '@genkit-ai/tools-common/manager';
 import { logger } from '@genkit-ai/tools-common/utils';
 import getPort, { portNumbers } from 'get-port';

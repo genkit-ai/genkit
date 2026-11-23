@@ -425,7 +425,7 @@ export async function startTelemetryServer(params: {
     }
   );
 
-  api.use((err: any, req: any, res: any, next: any) => {
+  api.use((err: any, req: any, res: any, _next: any) => {
     logger.error(err.stack);
     const error = err as Error;
     const { message, stack } = error;
@@ -449,7 +449,9 @@ export async function startTelemetryServer(params: {
     logger.error(error);
   });
 
-  process.on('SIGTERM', async () => await stopTelemetryApi());
+  process.on('SIGTERM', () => {
+    void stopTelemetryApi();
+  });
 }
 
 /**

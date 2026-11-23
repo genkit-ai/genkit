@@ -120,13 +120,15 @@ const mockReadlineForMigration = (keys: EvalRunKey[]) => {
 };
 
 const mockIndexFile = (keys: Record<string, EvalRunKey>) => {
-  fs.promises.readFile = vi.fn<any>().mockResolvedValue(JSON.stringify(keys));
+  vi.spyOn(fs.promises, 'readFile').mockResolvedValue(
+    JSON.stringify(keys) as any
+  );
 };
 
 const mockEvalRunFile = (evalRun: EvalRun) => {
-  fs.promises.readFile = vi
-    .fn<any>()
-    .mockImplementation(async () => JSON.stringify(evalRun));
+  vi.spyOn(fs.promises, 'readFile').mockImplementation(
+    async () => JSON.stringify(evalRun) as any
+  );
 };
 
 describe('localFileEvalStore', () => {
@@ -138,9 +140,9 @@ describe('localFileEvalStore', () => {
 
     // Setup default mocks for a clean state before each test
     mockFsExists(() => false);
-    fs.promises.writeFile = vi.fn<any>().mockResolvedValue(undefined);
-    fs.promises.unlink = vi.fn<any>().mockResolvedValue(undefined);
-    fs.writeFileSync = vi.fn<any>().mockImplementation(() => {});
+    vi.spyOn(fs.promises, 'writeFile').mockResolvedValue(undefined);
+    vi.spyOn(fs.promises, 'unlink').mockResolvedValue(undefined);
+    vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
 
     evalStore = await LocalFileEvalStore.getEvalStore();
   });
@@ -160,7 +162,7 @@ describe('localFileEvalStore', () => {
     it('migrates to json file if txt index is found', async () => {
       LocalFileEvalStore.reset();
       mockFsExists((path) => path.toString().endsWith('index.txt'));
-      fs.createReadStream = vi.fn<any>().mockReturnValue({} as any);
+      vi.spyOn(fs, 'createReadStream').mockReturnValue({} as any);
       mockReadlineForMigration([EVAL_RUN_WITH_ACTION.key]);
 
       await LocalFileEvalStore.getEvalStore();
@@ -179,7 +181,7 @@ describe('localFileEvalStore', () => {
   });
 
   describe('save', () => {
-    const testSave = async (evalRun: EvalRun) => {
+    const assertSave = async (evalRun: EvalRun) => {
       await evalStore.save(evalRun);
 
       expect(fs.promises.writeFile).toHaveBeenCalledWith(
@@ -196,11 +198,11 @@ describe('localFileEvalStore', () => {
     };
 
     it('writes and updates index for eval run with actionId', async () => {
-      await testSave(EVAL_RUN_WITH_ACTION);
+      await assertSave(EVAL_RUN_WITH_ACTION);
     });
 
     it('persists a new evalRun file without an actionId', async () => {
-      await testSave(EVAL_RUN_WITHOUT_ACTION);
+      await assertSave(EVAL_RUN_WITHOUT_ACTION);
     });
   });
 

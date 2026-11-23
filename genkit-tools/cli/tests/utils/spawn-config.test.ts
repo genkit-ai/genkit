@@ -17,7 +17,7 @@
 import * as fs from 'fs/promises';
 import { beforeEach, describe, expect, it, vi, type Mocked } from 'vitest';
 import { SERVER_HARNESS_COMMAND } from '../../src/commands/server-harness.js';
-import { type CLIRuntimeInfo } from '../../src/utils/runtime-detector.js';
+import type { CLIRuntimeInfo } from '../../src/utils/runtime-detector.js';
 import {
   buildServerHarnessSpawnConfig,
   validateExecutablePath,

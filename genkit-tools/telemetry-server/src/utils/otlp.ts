@@ -14,7 +14,11 @@
  * limitations under the License.
  */
 
-import { LogRecordData, SpanData, TraceData } from '@genkit-ai/tools-common';
+import type {
+  LogRecordData,
+  SpanData,
+  TraceData,
+} from '@genkit-ai/tools-common';
 
 // These interfaces are based on the OTLP JSON format.
 // A full definition can be found at:

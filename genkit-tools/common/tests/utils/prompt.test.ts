@@ -16,7 +16,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type { MessageData } from '../../src/types/model.js';
-import { PromptFrontmatter } from '../../src/types/prompt.js';
+import type { PromptFrontmatter } from '../../src/types/prompt.js';
 import {
   renderPromptFile,
   toFrontmatterInput,
