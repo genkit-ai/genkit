@@ -1,4 +1,7 @@
 node_modules
+tests/check-public-types.mjs
+tests/public-types.cts
+tests/public-types.mts
 tsconfig.json
 tsconfig.public-types.json
 tsup.config.ts

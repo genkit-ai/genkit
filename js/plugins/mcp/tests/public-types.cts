@@ -14,15 +14,31 @@
  * limitations under the License.
  */
 
-export {
+import {
   createMcpClient,
   createMcpHost,
   createMcpServer,
   defineMcpClient,
   defineMcpHost,
+  type McpClientOptions,
+  type McpClientOptionsWithCache,
+  type McpHostOptions,
+  type McpHostOptionsWithCache,
+  type McpServerOptions,
 } from '@genkit-ai/mcp';
-export type {
-  McpClientOptions,
-  McpHostOptions,
-  McpServerOptions,
-} from '@genkit-ai/mcp';
+import type { Genkit } from 'genkit';
+
+export function verifyPublicTypes(
+  ai: Genkit,
+  clientOptions: McpClientOptions,
+  clientOptionsWithCache: McpClientOptionsWithCache,
+  hostOptions: McpHostOptions,
+  hostOptionsWithCache: McpHostOptionsWithCache,
+  serverOptions: McpServerOptions
+): void {
+  createMcpClient(clientOptions);
+  defineMcpClient(ai, clientOptionsWithCache);
+  createMcpHost(hostOptions);
+  defineMcpHost(ai, hostOptionsWithCache);
+  createMcpServer(ai, serverOptions);
+}
