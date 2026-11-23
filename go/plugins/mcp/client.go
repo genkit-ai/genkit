@@ -27,6 +27,8 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
+const defaultMCPVersion = "1.0.0"
+
 // StdioConfig holds configuration for a stdio-based MCP server process.
 type StdioConfig struct {
 	Command string
@@ -91,18 +93,23 @@ type ServerRef struct {
 type GenkitMCPClient struct {
 	options MCPClientOptions
 	server  *ServerRef
+	cancel  context.CancelFunc
+}
+
+func normalizeClientOptions(options MCPClientOptions) MCPClientOptions {
+	if options.Name == "" {
+		options.Name = "unnamed"
+	}
+	if options.Version == "" {
+		options.Version = defaultMCPVersion
+	}
+	return options
 }
 
 // NewGenkitMCPClient creates a new GenkitMCPClient with the given options.
 // Returns an error if the initial connection fails.
 func NewGenkitMCPClient(options MCPClientOptions) (*GenkitMCPClient, error) {
-	// Set default values
-	if options.Name == "" {
-		options.Name = "unnamed"
-	}
-	if options.Version == "" {
-		options.Version = "1.0.0"
-	}
+	options = normalizeClientOptions(options)
 
 	client := &GenkitMCPClient{
 		options: options,
@@ -119,10 +126,16 @@ func NewGenkitMCPClient(options MCPClientOptions) (*GenkitMCPClient, error) {
 func (c *GenkitMCPClient) connect(options MCPClientOptions) error {
 	// Close existing connection if any
 	if c.server != nil {
-		if err := c.server.Client.Close(); err != nil {
+		previous := c.server
+		c.server = nil
+		if err := previous.Client.Close(); err != nil {
 			ctx := context.Background()
 			logger.Warn(ctx, "error closing previous MCP transport", "client", c.options.Name, "error", err)
 		}
+	}
+	if c.cancel != nil {
+		c.cancel()
+		c.cancel = nil
 	}
 
 	// Create and configure transport
@@ -131,9 +144,11 @@ func (c *GenkitMCPClient) connect(options MCPClientOptions) error {
 		return err
 	}
 
-	// Start the transport
-	ctx := context.Background()
+	// Start the transport with a client-owned context so a failed handshake can
+	// terminate a stdio subprocess before Close waits on it.
+	ctx, cancel := context.WithCancel(context.Background())
 	if err := transport.Start(ctx); err != nil {
+		cancel()
 		return fmt.Errorf("failed to start transport: %w", err)
 	}
 
@@ -141,16 +156,21 @@ func (c *GenkitMCPClient) connect(options MCPClientOptions) error {
 	mcpClient := client.NewClient(transport)
 
 	// Initialize the client if not disabled
-	var serverError string
 	if !options.Disabled {
-		serverError = c.initializeClient(ctx, mcpClient, options.Version)
+		if err := c.initializeClient(ctx, mcpClient, options.Version); err != nil {
+			cancel()
+			if closeErr := mcpClient.Close(); closeErr != nil {
+				logger.Warn(context.Background(), "error closing MCP transport after initialization failure", "client", c.options.Name, "error", closeErr)
+			}
+			return fmt.Errorf("MCP handshake failed: %w", err)
+		}
 	}
 
 	c.server = &ServerRef{
 		Client:    mcpClient,
 		Transport: transport,
-		Error:     serverError,
 	}
+	c.cancel = cancel
 
 	return nil
 }
@@ -205,7 +225,7 @@ func (c *GenkitMCPClient) createTransport(options MCPClientOptions) (transport.I
 }
 
 // initializeClient initializes the MCP client connection
-func (c *GenkitMCPClient) initializeClient(ctx context.Context, mcpClient *client.Client, version string) string {
+func (c *GenkitMCPClient) initializeClient(ctx context.Context, mcpClient *client.Client, version string) error {
 	initReq := mcp.InitializeRequest{
 		Params: mcp.InitializeParams{
 			ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION,
@@ -218,11 +238,7 @@ func (c *GenkitMCPClient) initializeClient(ctx context.Context, mcpClient *clien
 	}
 
 	_, err := mcpClient.Initialize(ctx, initReq)
-	if err != nil {
-		return err.Error()
-	}
-
-	return ""
+	return err
 }
 
 // Name returns the client name
@@ -247,7 +263,10 @@ func (c *GenkitMCPClient) Disable() {
 func (c *GenkitMCPClient) Reenable() {
 	if c.options.Disabled {
 		c.options.Disabled = false
-		c.connect(c.options)
+		if err := c.connect(c.options); err != nil {
+			c.options.Disabled = true
+			logger.Error(context.Background(), "failed to reenable MCP client", "client", c.options.Name, "error", err)
+		}
 	}
 }
 
@@ -261,6 +280,11 @@ func (c *GenkitMCPClient) Restart(ctx context.Context) error {
 
 // Disconnect closes the connection to the MCP server
 func (c *GenkitMCPClient) Disconnect() error {
+	cancel := c.cancel
+	c.cancel = nil
+	if cancel != nil {
+		defer cancel()
+	}
 	if c.server != nil {
 		err := c.server.Client.Close()
 		c.server = nil

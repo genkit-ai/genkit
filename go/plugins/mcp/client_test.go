@@ -15,12 +15,19 @@
 package mcp
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,6 +39,216 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+func TestNewGenkitMCPClientReturnsInitializationError(t *testing.T) {
+	sentinel := errors.New("test MCP handshake failure")
+	client, err := NewGenkitMCPClient(MCPClientOptions{
+		StreamableHTTP: &StreamableHTTPConfig{
+			BaseURL: "http://example.com/mcp",
+			HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return nil, sentinel
+			})},
+		},
+	})
+	if client != nil {
+		t.Cleanup(func() { client.Disconnect() })
+		t.Errorf("NewGenkitMCPClient() client = %v, want nil", client)
+	}
+	if !errors.Is(err, sentinel) {
+		t.Errorf("NewGenkitMCPClient() error = %v, want wrapped %v", err, sentinel)
+	}
+}
+
+func TestHelperStdioRejectInit(t *testing.T) {
+	if os.Getenv("GENKIT_MCP_TEST_HELPER") != "reject-init" {
+		return
+	}
+	if pidFile := os.Getenv("GENKIT_MCP_TEST_PID_FILE"); pidFile != "" {
+		if err := os.WriteFile(pidFile, []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+			os.Exit(1)
+		}
+	}
+
+	reader := bufio.NewReader(os.Stdin)
+	line, err := reader.ReadBytes('\n')
+	if err != nil {
+		os.Exit(2)
+	}
+	var req struct {
+		ID json.RawMessage `json:"id"`
+	}
+	if err := json.Unmarshal(line, &req); err != nil {
+		os.Exit(3)
+	}
+	if len(req.ID) == 0 {
+		req.ID = json.RawMessage("1")
+	}
+
+	if _, err := fmt.Fprintf(os.Stdout, `{"jsonrpc":"2.0","id":%s,"error":{"code":-32600,"message":"test stdio handshake rejected"}}`+"\n", req.ID); err != nil {
+		os.Exit(4)
+	}
+
+	// Drain stdin to EOF and stay alive afterward so Stdio.Close's cmd.Wait
+	// would hang unless the client cancels the subprocess context.
+	_, _ = io.Copy(io.Discard, reader)
+	time.Sleep(30 * time.Second)
+	os.Exit(0)
+}
+
+func TestNewGenkitMCPClientTerminatesStdioSubprocessOnInitError(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable(): %v", err)
+	}
+	pidFile := filepath.Join(t.TempDir(), "child.pid")
+
+	type result struct {
+		client *GenkitMCPClient
+		err    error
+	}
+	done := make(chan result, 1)
+	go func() {
+		client, err := NewGenkitMCPClient(MCPClientOptions{
+			Name: "rejecting-stdio",
+			Stdio: &StdioConfig{
+				Command: exe,
+				Args:    []string{"-test.run=^TestHelperStdioRejectInit$"},
+				Env: []string{
+					"GENKIT_MCP_TEST_HELPER=reject-init",
+					"GENKIT_MCP_TEST_PID_FILE=" + pidFile,
+				},
+			},
+		})
+		done <- result{client: client, err: err}
+	}()
+
+	var res result
+	select {
+	case res = <-done:
+	case <-time.After(5 * time.Second):
+		if data, err := os.ReadFile(pidFile); err == nil {
+			if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
+				if proc, err := os.FindProcess(pid); err == nil {
+					_ = proc.Kill()
+				}
+			}
+		}
+		t.Fatal("NewGenkitMCPClient() hung waiting for stdio subprocess that stays alive after EOF")
+	}
+
+	if res.client != nil {
+		t.Cleanup(func() { res.client.Disconnect() })
+		t.Errorf("NewGenkitMCPClient() client = %v, want nil", res.client)
+	}
+	if res.err == nil || !strings.Contains(res.err.Error(), "test stdio handshake rejected") {
+		t.Fatalf("NewGenkitMCPClient() error = %v, want stdio handshake rejection", res.err)
+	}
+
+	data, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatalf("reading child pid file: %v", err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		t.Fatalf("parsing child pid %q: %v", string(data), err)
+	}
+	assertProcessReaped(t, pid)
+}
+
+func TestReenableLeavesClientDisabledAfterInitializationError(t *testing.T) {
+	client, err := NewGenkitMCPClient(MCPClientOptions{
+		Disabled: true,
+		StreamableHTTP: &StreamableHTTPConfig{
+			BaseURL: "http://example.com/mcp",
+			HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return nil, errors.New("test MCP handshake failure")
+			})},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { client.Disconnect() })
+
+	client.Reenable()
+	if client.IsEnabled() {
+		t.Error("Reenable() left a failed client enabled")
+	}
+	if client.server != nil {
+		t.Error("Reenable() retained a failed connection")
+	}
+}
+
+func TestMCPHostReconnectAfterFailedStartup(t *testing.T) {
+	var available atomic.Bool
+	httpClient := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if !available.Load() {
+			return nil, errors.New("server unavailable")
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body: io.NopCloser(strings.NewReader(
+				`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{},"serverInfo":{"name":"test","version":"1.0.0"}}}`,
+			)),
+			Request: req,
+		}, nil
+	})}
+
+	host, err := NewMCPHost(nil, MCPHostOptions{
+		MCPServers: []MCPServerConfig{{
+			Name: "recovering-server",
+			Config: MCPClientOptions{StreamableHTTP: &StreamableHTTPConfig{
+				BaseURL: "http://example.com/mcp", HTTPClient: httpClient,
+			}},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { host.Disconnect(context.Background(), "recovering-server") })
+	if host.clients["recovering-server"].server != nil {
+		t.Fatal("failed startup retained a live server connection")
+	}
+
+	available.Store(true)
+	if err := host.Reconnect(context.Background(), "recovering-server"); err != nil {
+		t.Fatalf("Reconnect() after server recovery: %v", err)
+	}
+	if host.clients["recovering-server"].server == nil {
+		t.Error("Reconnect() did not establish a server connection")
+	}
+}
+
+func TestMCPHostRetainsDefaultOptionsAfterFailedConnect(t *testing.T) {
+	host, err := NewMCPHost(nil, MCPHostOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = host.Connect(context.Background(), nil, "", MCPClientOptions{
+		StreamableHTTP: &StreamableHTTPConfig{
+			BaseURL: "http://example.com/mcp",
+			HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return nil, errors.New("server unavailable")
+			})},
+		},
+	})
+	if err == nil {
+		t.Fatal("Connect() error = nil, want failure")
+	}
+
+	retained := host.clients[""]
+	if retained == nil {
+		t.Fatal("Connect() did not retain failed client config")
+	}
+	if got := retained.GetToolNameWithNamespace("echo"); got != "unnamed_echo" {
+		t.Errorf("GetToolNameWithNamespace() = %q, want %q", got, "unnamed_echo")
+	}
+	if retained.options.Version != defaultMCPVersion {
+		t.Errorf("retained client version = %q, want %q", retained.options.Version, defaultMCPVersion)
+	}
 }
 
 // TestCreateTransportHonorsStreamableHTTPClient verifies that a custom
