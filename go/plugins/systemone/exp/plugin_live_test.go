@@ -21,12 +21,14 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
 	"math"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -374,6 +376,286 @@ func TestWorkersAILive(t *testing.T) {
 			t.Errorf("red = %v on a red clip", out.Red.Probability)
 		}
 	})
+}
+
+// The Gemini checks run Gemini Decision 1 through the Gemini API, with
+// every question type, guidance as text, each kind of media, and media
+// fetched by URL.
+func TestGoogleAILive(t *testing.T) {
+	if os.Getenv("GEMINI_API_KEY") == "" && os.Getenv("GOOGLE_API_KEY") == "" {
+		t.Skip("GEMINI_API_KEY or GOOGLE_API_KEY is not set")
+	}
+	g := genkit.Init(t.Context(), genkit.WithPlugins(GoogleAI()))
+	const model = "googleai-decisions/gemini-decision-1"
+
+	t.Run("decision", func(t *testing.T) {
+		out, resp, err := genkit.GenerateData[triage](t.Context(), g,
+			ai.WithModelName(model),
+			ai.WithPromptParts(ai.NewDataPart(map[string]any{
+				"ticket":       "I was charged twice for one order and I need the duplicate refunded today.",
+				"account_tier": "business",
+			})))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("answers: %s", base.JSONString(out))
+		t.Logf("info: %s, usage: %s", base.JSONString(ResponseInfo(resp)), base.JSONString(resp.Usage))
+		if out.Department.Choice != "billing" {
+			t.Errorf("department = %q, want billing for a double charge", out.Department.Choice)
+		}
+		var mass float64
+		for _, p := range out.Department.Probabilities {
+			mass += p
+		}
+		if math.Abs(mass-1) > 0.05 {
+			t.Errorf("probabilities sum to %v, want about 1: %v", mass, out.Department.Probabilities)
+		}
+		if out.IsUrgent.Probability < 0.5 {
+			t.Errorf("is_urgent = %v, want over 0.5 for \"today\"", out.IsUrgent.Probability)
+		}
+		if out.IsUrgent.Confidence <= 0 || out.IsUrgent.Confidence > 1 {
+			t.Errorf("is_urgent confidence = %v, want within (0, 1]", out.IsUrgent.Confidence)
+		}
+		if out.Frustration.Score < 0 || out.Frustration.Score > 2 || len(out.Frustration.Legend) != 3 {
+			t.Errorf("frustration = %+v", out.Frustration)
+		}
+		if resp.Usage == nil || resp.Usage.InputTokens == 0 || resp.Usage.OutputTokens != 0 {
+			t.Errorf("usage = %+v, want input tokens and no output tokens", resp.Usage)
+		}
+		if ResponseInfo(resp).Model != "gemini-decision-1" {
+			t.Errorf("model = %q, want the model the request named", ResponseInfo(resp).Model)
+		}
+	})
+
+	t.Run("guidance as text", func(t *testing.T) {
+		out, _, err := genkit.GenerateData[guidedTriage](t.Context(), g,
+			ai.WithModelName(model),
+			ai.WithSystem("The state is a support ticket from a customer of an online store."),
+			ai.WithPrompt("THIS IS THE THIRD TIME. I was charged twice and I want my money back TODAY."))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("answers: %s", base.JSONString(out))
+		if out.Department.Choice != "billing" {
+			t.Errorf("department = %q, want billing", out.Department.Choice)
+		}
+		if out.Frustration.Legend["2"] != "Very angry" {
+			t.Errorf("legend = %v, want the rubric strings", out.Frustration.Legend)
+		}
+	})
+
+	t.Run("enum", func(t *testing.T) {
+		resp, err := genkit.Generate(t.Context(), g,
+			ai.WithModelName(model),
+			ai.WithSystem("Which team should handle this ticket?"),
+			ai.WithOutputEnums("billing", "technical", "sales"),
+			ai.WithPrompt("The API returns 500 errors since this morning's deploy."))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.Text() != "technical" {
+			t.Errorf("text = %q, want technical", resp.Text())
+		}
+	})
+
+	t.Run("history as state", func(t *testing.T) {
+		type handoff struct {
+			WantsHuman Noul `json:"wants_human" jsonschema_description:"Does the user ask to talk to a human?"`
+		}
+		out, _, err := genkit.GenerateData[handoff](t.Context(), g,
+			ai.WithModelName(model),
+			ai.WithMessages(
+				ai.NewUserMessage(ai.NewTextPart("Hi, I cannot log in.")),
+				ai.NewModelMessage(ai.NewTextPart("Let me help. Have you tried resetting your password?")),
+				ai.NewUserMessage(ai.NewTextPart("Yes, three times. Can I please just talk to a person?")),
+			))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out.WantsHuman.Probability < 0.5 {
+			t.Errorf("wants_human = %v, want over 0.5", out.WantsHuman.Probability)
+		}
+	})
+
+	t.Run("runtime questions with structured instructions", func(t *testing.T) {
+		resp, err := genkit.Generate(t.Context(), g,
+			ai.WithModelName(model),
+			ai.WithSystem("The state is a request a user made to an assistant."),
+			ai.WithOutputSchema(Schema(map[string]Question{
+				"tool": ChoiceQuestion{
+					Instructions: "Which tool serves the request?",
+					Options: []ChoiceOption{
+						{Name: "web_search", Criteria: "Look up facts, news, or prices on the web"},
+						{Name: "calendar", Criteria: "Read or change the user's own calendar", Guidance: map[string]any{
+							"examples": []string{"What meetings do I have on Friday?"},
+						}},
+						{Name: "none", Criteria: "No tool fits the request"},
+					},
+				},
+				"effort": ScoreQuestion{
+					Instructions: map[string]any{"question": "How much work does fulfilling the request take?"},
+					Levels:       []string{"A single lookup", "A few steps", "A multi-step project"},
+				},
+			})),
+			ai.WithPromptParts(ai.NewDataPart(map[string]any{"request": "What is on my calendar tomorrow morning?"})))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var answers map[string]Answer
+		if err := resp.Output(&answers); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("answers: %s", base.JSONString(answers))
+		if a := answers["tool"]; a.Choice != "calendar" {
+			t.Errorf("tool = %+v, want calendar", a)
+		}
+		if a := answers["effort"]; a.Score < 0 || a.Score > 2 {
+			t.Errorf("effort = %+v", a)
+		}
+	})
+
+	t.Run("images", func(t *testing.T) {
+		for _, tt := range []struct {
+			name  string
+			color color.RGBA
+			red   bool
+		}{{"red", color.RGBA{R: 255, A: 255}, true}, {"blue", color.RGBA{B: 255, A: 255}, false}} {
+			out, resp, err := genkit.GenerateData[redCheck](t.Context(), g,
+				ai.WithModelName(model),
+				ai.WithConfig(&Config{MediaResolution: "low"}),
+				ai.WithMessages(ai.NewUserMessage(ai.NewTextPart("Photo from the customer."), ai.NewMediaPart("image/png", solidPNG(t, tt.color)))))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("%s: red = %v, usage = %s", tt.name, out.Red.Probability, base.JSONString(resp.Usage))
+			if got := out.Red.Probability > 0.5; got != tt.red {
+				t.Errorf("%s square: red = %v", tt.name, out.Red.Probability)
+			}
+			if resp.Usage.Custom["inputImageTokens"] <= 0 {
+				t.Errorf("usage custom = %v, want image tokens", resp.Usage.Custom)
+			}
+		}
+	})
+
+	t.Run("image alone", func(t *testing.T) {
+		out, _, err := genkit.GenerateData[redCheck](t.Context(), g,
+			ai.WithModelName(model),
+			ai.WithMessages(ai.NewUserMessage(ai.NewMediaPart("image/png", solidPNG(t, color.RGBA{R: 255, A: 255})))))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out.Red.Probability <= 0.5 {
+			t.Errorf("red = %v on a red square", out.Red.Probability)
+		}
+	})
+
+	t.Run("audio", func(t *testing.T) {
+		for _, tt := range []struct {
+			name string
+			hz   float64
+			tone bool
+		}{{"tone", 880, true}, {"silence", 0, false}} {
+			out, _, err := genkit.GenerateData[toneCheck](t.Context(), g,
+				ai.WithModelName(model),
+				ai.WithMessages(ai.NewUserMessage(ai.NewTextPart("A recording from the device."), ai.NewMediaPart("audio/wav", sineWAV(tt.hz)))))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("%s: tone = %v", tt.name, out.Tone.Probability)
+			if got := out.Tone.Probability > 0.5; got != tt.tone {
+				t.Errorf("%s: tone = %v", tt.name, out.Tone.Probability)
+			}
+		}
+	})
+
+	t.Run("video", func(t *testing.T) {
+		clip, err := os.ReadFile("testdata/red.mp4")
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, _, err := genkit.GenerateData[redCheck](t.Context(), g,
+			ai.WithModelName(model),
+			ai.WithConfig(&Config{MediaResolution: "ultra_high"}), // images only, so the video keeps the default
+			ai.WithMessages(ai.NewUserMessage(ai.NewTextPart("A clip from the camera."), ai.NewMediaPart("video/mp4", "data:video/mp4;base64,"+base64.StdEncoding.EncodeToString(clip)))))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out.Red.Probability <= 0.5 {
+			t.Errorf("red = %v on a red clip", out.Red.Probability)
+		}
+	})
+
+	t.Run("pdf", func(t *testing.T) {
+		type invoice struct {
+			Overdue Noul `json:"overdue" jsonschema_description:"Does the attached document say the invoice is overdue?"`
+		}
+		for _, tt := range []struct {
+			text    string
+			overdue bool
+		}{{"INVOICE 1042. STATUS: OVERDUE. Payment was due 30 days ago.", true}, {"INVOICE 1042. STATUS: PAID IN FULL. Thank you.", false}} {
+			out, resp, err := genkit.GenerateData[invoice](t.Context(), g,
+				ai.WithModelName(model),
+				ai.WithMessages(ai.NewUserMessage(ai.NewTextPart("An invoice from a supplier."), ai.NewMediaPart("application/pdf", textPDF(tt.text)))))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("%q: overdue = %v, usage = %s", tt.text, out.Overdue.Probability, base.JSONString(resp.Usage))
+			if got := out.Overdue.Probability > 0.5; got != tt.overdue {
+				t.Errorf("%q: overdue = %v", tt.text, out.Overdue.Probability)
+			}
+		}
+	})
+
+	t.Run("image by URL", func(t *testing.T) {
+		type logo struct {
+			Text Noul `json:"text" jsonschema_description:"Does the image show a word written in letters?"`
+		}
+		out, _, err := genkit.GenerateData[logo](t.Context(), g,
+			ai.WithModelName(model),
+			ai.WithMessages(ai.NewUserMessage(ai.NewMediaPart("image/png", "https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png"))))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out.Text.Probability <= 0.5 {
+			t.Errorf("text = %v on a logo of a word", out.Text.Probability)
+		}
+	})
+
+	t.Run("unknown model", func(t *testing.T) {
+		_, _, err := genkit.GenerateData[triage](t.Context(), g,
+			ai.WithModelName("googleai-decisions/gemini-decision-0"),
+			ai.WithPrompt("I was charged twice."))
+		t.Logf("unknown model: %v", err)
+		if err == nil {
+			t.Error("an unknown model answered")
+		}
+	})
+}
+
+// textPDF is a data URL of a one-page PDF that shows one line of text.
+func textPDF(text string) string {
+	content := "BT /F1 18 Tf 40 700 Td (" + text + ") Tj ET"
+	objects := []string{
+		"<< /Type /Catalog /Pages 2 0 R >>",
+		"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+		"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+		"<< /Length " + strconv.Itoa(len(content)) + " >>\nstream\n" + content + "\nendstream",
+		"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+	}
+	var buf bytes.Buffer
+	buf.WriteString("%PDF-1.4\n")
+	offsets := make([]int, len(objects))
+	for i, obj := range objects {
+		offsets[i] = buf.Len()
+		fmt.Fprintf(&buf, "%d 0 obj\n%s\nendobj\n", i+1, obj)
+	}
+	xref := buf.Len()
+	fmt.Fprintf(&buf, "xref\n0 %d\n0000000000 65535 f \n", len(objects)+1)
+	for _, off := range offsets {
+		fmt.Fprintf(&buf, "%010d 00000 n \n", off)
+	}
+	fmt.Fprintf(&buf, "trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", len(objects)+1, xref)
+	return "data:application/pdf;base64," + base64.StdEncoding.EncodeToString(buf.Bytes())
 }
 
 // redCheck asks whether the media is red, which a model can answer only

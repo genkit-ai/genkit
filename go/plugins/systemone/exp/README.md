@@ -1,8 +1,8 @@
 # System One decision models for Genkit Go
 
 Adds decision models to Genkit Go: models that speak System One, the protocol
-TypeSafe AI introduced with jev and that Liquid AI's d1, Cloudflare's Clef, and
-the gateways serving them also speak. A decision model does not generate text.
+TypeSafe AI introduced with jev and that Liquid AI's d1, Cloudflare's Clef,
+Google's Gemini Decision 1, and the gateways serving them also speak. A decision model does not generate text.
 It evaluates a state against typed questions and returns one typed answer per
 question, with calibrated probabilities, in a few hundred milliseconds. That
 makes it a fit for the decisions inside an application: routing,
@@ -85,7 +85,7 @@ the token counters.
 | ---------------- | ------------------------- | ----------------------------------------------- |
 | `Choice[T]`      | pick one of `T.Criteria()` | `Choice`, `Probabilities` per option, `Confidence` |
 | `Score[L]`       | rate on `L.Levels()`       | `Score` (expected level, fractional), `Probabilities`, `Confidence`, `Legend` |
-| `Noul`           | is this true?              | `Probability`; near 0.5 means "could not tell"    |
+| `Noul`           | is this true?              | `Probability`; near 0.5 means "could not tell"; `Confidence` where the server sends one, as the Gemini API does |
 | `NoulOf[C]`      | is this true, where `C.Criteria()` says what yes and no mean | as `Noul`, which is `NoulOf` with no criteria |
 
 A `Choice` also answers `Ranked()`, the options from most to least likely,
@@ -179,7 +179,8 @@ if a := (*answers)["tool"]; a.Confidence >= 0.8 {
 `ChoiceQuestion`, `ScoreQuestion`, and `NoulQuestion` take what the question
 types take from their type parameters: options with criteria and guidance,
 levels with guidance by index, and yes and no criteria. A choice's options go
-out in the order given. Instructions can be a string or any JSON value, such
+out in the order given, except to the Gemini API, whose SDK sends them in key
+order. Instructions can be a string or any JSON value, such
 as an object that describes the field of the state a question is about; a
 system message goes beside structured instructions as the first element of an
 array.
@@ -219,7 +220,10 @@ text of the same messages stays the state; a message of media alone is a turn
 with empty text. A request may carry media and no text, except to Ollama. Media
 goes out as a base64 data URL, or as raw base64 to Ollama; a part given as a URL
 is refused rather than fetched, so download it first, for example with the
-`ai.DownloadRequestMedia` middleware. Any other media type is refused.
+`ai.DownloadRequestMedia` middleware. Any other media type is refused. The
+Gemini API is the exception on all three counts: it also reads PDFs, it takes
+an HTTPS URL that it fetches itself, and it gets media as content blocks; see
+[Gemini API](#gemini-api).
 
 ```go
 damage, _, err := genkit.GenerateData[Damage](ctx, g,
@@ -233,8 +237,8 @@ Media is an extension to the protocol, and a server that does not know a field
 can drop it and answer as if nothing had been sent. A plugin therefore refuses
 media before the request is sent, kind by kind, unless its `Images`, `Audio`, or
 `Video` is `systemonex.MediaSupported`. `Ollama()` and `WorkersAI(accountID)`
-set `Images`, and so does a server of your own that takes images, such as
-Liquid's in [Any other server](#any-other-server). Then a model is sent that
+set `Images`, `GoogleAI()` sets all three, and a server of your own that takes
+images sets `Images`, such as Liquid's in [Any other server](#any-other-server). Then a model is sent that
 kind, and the server refuses it for a model that cannot read it, so a new model
 needs no setup. A model's `ModelSpec` overrides the plugin's setting, kind by
 kind, either way: Clef-omni on Workers AI also reads audio and video. Its zero
@@ -271,12 +275,14 @@ on the day it ships.
 | `TypeSafe()`   | `typesafe/jev-1.13.0`                   | `TYPESAFE_API_KEY`   | `TYPESAFE_BASE_URL` is read too; lists models; text only |
 | `OpenRouter()` | `openrouter-decisions/liquid/d1`, `openrouter-decisions/typesafe/jev-1.13`, `openrouter-decisions/~typesafe/jev-latest` | `OPENROUTER_API_KEY` | alpha Decisions API; lists OpenRouter's decision models; cost in `resp.Usage.Custom["cost"]`; text only |
 | `Ollama()`     | `ollama-decisions/clef`                 | none                 | `http://localhost:11434` unless `BaseURL` is set; images as raw base64; a request needs text |
+| `GoogleAI()`   | `googleai-decisions/gemini-decision-1`  | `GEMINI_API_KEY`, then `GOOGLE_API_KEY` | Gemini API's Decisions API; images, audio, video, and PDFs, inline or by HTTPS URL; `MediaResolution`; input tokens by modality in `resp.Usage.Custom` |
 | `WorkersAI(accountID)` | `cloudflare-decisions/@cf/cloudflare/clef`, `cloudflare-decisions/@cf/cloudflare/clef-flash`, `cloudflare-decisions/@cf/cloudflare/clef-omni`, `cloudflare-decisions/typesafe/jev` | `CLOUDFLARE_API_TOKEN` | `CLOUDFLARE_ACCOUNT_ID` when `accountID` is empty; Clef models read images, Clef-omni audio and video too; a long state is truncated; no versions to pin |
 
 A gateway serves several vendors' models under one key, so one plugin reaches
 all of them. OpenRouter's is named `openrouter-decisions` because the plugin for
 its chat models already has `openrouter`, and an app often uses both; Ollama's
-is `ollama-decisions` for the same reason.
+is `ollama-decisions`, and the Gemini API's `googleai-decisions`, for the same
+reason.
 
 A constructor returns a `*SystemOne` set up for its server, and its fields can
 still be changed before `genkit.Init`, such as to pass a key from a secret
@@ -336,6 +342,66 @@ damage, _, err := genkit.GenerateData[Damage](ctx, g,
 		ai.NewTextPart("Customer's note: arrived like this."), // Ollama needs text beside images
 		ai.NewMediaPart("image/jpeg", photoDataURL))))
 ```
+
+### Gemini API
+
+The Gemini API's Decisions API serves Gemini Decision 1, with the key the
+`googlegenai` plugin reads. Its models read images, audio, video, and PDFs.
+The plugin reaches it through the genai SDK's Decisions client, on `v1beta`,
+the only version that serves it.
+
+```go
+g := genkit.Init(ctx, genkit.WithPlugins(systemonex.GoogleAI())) // GEMINI_API_KEY
+
+out, resp, err := genkit.GenerateData[Triage](ctx, g,
+	ai.WithModelName("googleai-decisions/gemini-decision-1"),
+	ai.WithPrompt(ticket))
+```
+
+The API speaks its own wire, which the plugin translates, so the decision
+types are the same as for every other server:
+
+- The input is the media as content blocks, then the state as text. A state
+  that is not a string goes as its JSON, as it does to the other servers.
+- Media goes inline, or as an HTTPS URL that the API fetches, such as a Files
+  API URI or a signed URL. A part given by URL needs its content type, and
+  `gs://` URLs are refused.
+- `Config.MediaResolution` sets how closely images and video are read: `low`,
+  `medium`, `high`, or `ultra_high`, which is for images only and leaves video
+  at the API's default. Any other server refuses it.
+- Criteria and instructions are text only on this API, so guidance and
+  structured instructions go to the model as their JSON text. A choice's
+  options go in key order, since the SDK holds them in a map.
+- Every answer has a confidence, a noul's too, which `Noul.Confidence` holds.
+  The API sends more than the answer types declare, such as log likelihoods
+  and, for a score, its variance; `systemonex.ResponseInfo(resp).Answers` has
+  them.
+- An input the API refuses as unsafe is a response with
+  `ai.FinishReasonBlocked` and the API's message in `FinishMessage`, not an
+  error.
+- The usage has the input tokens per modality, as `inputTextTokens`,
+  `inputImageTokens`, and the like in `resp.Usage.Custom`. Output tokens are
+  always 0.
+- The response names no model version, so `ResponseInfo(resp).Model` is the
+  model the request named.
+
+```go
+invoice, _, err := genkit.GenerateData[Invoice](ctx, g,
+	ai.WithModelName("googleai-decisions/gemini-decision-1"),
+	ai.WithConfig(&systemonex.Config{MediaResolution: "low"}),
+	ai.WithMessages(ai.NewUserMessage(
+		ai.NewTextPart("An invoice from a supplier."),
+		ai.NewMediaPart("application/pdf", pdfDataURL),
+		ai.NewMediaPart("image/png", "https://example.com/stamp.png"))))
+```
+
+A request takes up to 1,000 questions and 262,144 tokens of input and
+questions together, and a choice or a score up to 255 options or levels. The
+API is in `v1beta`, and Vertex AI does not serve it yet. The SDK builds the
+whole request and retries it on its own policy, so `Config.Extra` is refused,
+and `Path`, `ModelsPath`, `Route`, and `Unwrap` do not apply. `BaseURL` can
+point at a proxy that forwards the Gemini API, and `HTTPClient` and `Headers`
+reach the SDK's transport.
 
 ### Cloudflare Workers AI
 
@@ -455,10 +521,12 @@ listing adds, which is kept for five minutes. The fields are read once, when
 Genkit initializes the plugin. `HTTPClient` and `Headers` are the escape hatches
 to the transport, and `Config.Extra` merges fields into the request body that
 the plugin does not model, such as a gateway's `session_id` or `trace`; it
-cannot replace a field the request builds itself.
+cannot replace a field the request builds itself, and the Gemini API, reached
+through its SDK, takes none.
 
 Requests that fail to connect, time out, are rate limited, or hit a server
-error are retried twice, with `Retry-After` honored.
+error are retried twice, with `Retry-After` honored. The Gemini API's SDK
+retries on its own policy instead.
 
 Pin a version in production where the server offers one. Confidence thresholds
 tuned against one release do not carry over to the next, nor from one model to
@@ -489,4 +557,7 @@ decision, guidance, enum, history, runtime-question, document, listing, and
 model-version paths against jev and d1 through OpenRouter. With
 `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` set, `TestWorkersAILive` runs
 a decision on Clef-flash, images on Clef, Clef-flash, and Clef-omni, and audio
-and video on Clef-omni.
+and video on Clef-omni. With `GEMINI_API_KEY` or `GOOGLE_API_KEY` set,
+`TestGoogleAILive` runs the decision, guidance, enum, history, and
+runtime-question paths, and images, audio, video, a PDF, and an image by URL,
+against Gemini Decision 1.
