@@ -62,6 +62,13 @@ func isTunedGeminiName(name string) bool {
 	return false
 }
 
+// isDecisionModel reports whether name is a Gemini decision model, such as
+// gemini-decision-1, which the Decisions API serves rather than
+// generateContent. The systemonex.GoogleAI plugin serves it.
+func isDecisionModel(name string) bool {
+	return strings.HasPrefix(name, "gemini-decision")
+}
+
 // ActionType returns the appropriate API action type for this model type.
 func (mt ModelType) ActionType() api.ActionType {
 	switch mt {

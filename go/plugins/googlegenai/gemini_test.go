@@ -29,6 +29,7 @@ import (
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/base"
 	"google.golang.org/genai"
 )
@@ -2308,5 +2309,18 @@ func TestToGeminiRequestResponseModalities(t *testing.T) {
 				t.Errorf("ResponseModalities = %v, want %v", gcc.ResponseModalities, tt.want)
 			}
 		})
+	}
+}
+
+// A decision model named on this plugin fails before any request, with an
+// error that names the plugin that serves it.
+func TestGenerateRefusesDecisionModel(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected request to %s", r.URL.Path)
+	}))
+	defer srv.Close()
+	_, err := generate(t.Context(), newTestClient(t, srv.URL), "gemini-decision-1", streamInput(), &genai.GenerateContentConfig{}, nil)
+	if !errors.Is(err, status.ErrInvalidArgument) || !strings.Contains(err.Error(), "googleai-decisions/gemini-decision-1") {
+		t.Errorf("error = %v, want INVALID_ARGUMENT naming googleai-decisions/gemini-decision-1", err)
 	}
 }

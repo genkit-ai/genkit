@@ -562,7 +562,11 @@ func listGenaiModels(ctx context.Context, client *genai.Client) (genaiModels, er
 			continue
 		}
 
-		// Only include models with known generative prefixes.
+		// Only include models with known generative prefixes. Decision
+		// models answer questions on their own endpoint, not generateContent.
+		if isDecisionModel(name) {
+			continue
+		}
 		if strings.HasPrefix(name, "gemini") || strings.HasPrefix(name, "gemma") {
 			models.gemini = append(models.gemini, name)
 		}

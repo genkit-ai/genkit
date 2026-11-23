@@ -157,6 +157,10 @@ func generate(
 	if model == "" {
 		return nil, status.Errorf(status.ErrInvalidArgument, "model not provided")
 	}
+	if isDecisionModel(model) {
+		return nil, status.Errorf(status.ErrInvalidArgument,
+			"%s is a decision model, which generateContent does not serve; register systemonex.GoogleAI() from github.com/firebase/genkit/go/plugins/systemone/exp and use googleai-decisions/%s", model, model)
+	}
 	model = resolveVertexModelName(client, model)
 
 	cache, inline, err := handleCache(ctx, client, input, model)
