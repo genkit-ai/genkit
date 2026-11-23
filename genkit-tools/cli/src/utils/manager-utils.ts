@@ -204,11 +204,11 @@ export async function getDevEnvVars(
 
   if (useOtel) {
     // Drive the app's own OTel SDK to the dev telemetry server's OTLP endpoints.
-    // The server only parses JSON bodies (express.json), so http/json is
-    // required; per-signal endpoints are used verbatim (no /v1/* appended), so
-    // the full path is spelled out. Metrics are deliberately not redirected:
-    // the server doesn't ingest them, so they go wherever the app's own OTel
-    // config sends them.
+    // The server accepts both http/json and http/protobuf, so protocol env vars
+    // are left unset for each SDK to use its default; per-signal endpoints are
+    // used verbatim (no /v1/* appended), so the full path is spelled out.
+    // Metrics are deliberately not redirected: the server doesn't ingest them,
+    // so they go wherever the app's own OTel config sends them.
     //
     // GENKIT_TELEMETRY_SERVER is blanked rather than omitted: the child
     // inherits process.env, so a value exported in the shell (the
@@ -221,9 +221,7 @@ export async function getDevEnvVars(
     // with one, and naive concatenation would yield a double slash.
     const baseUrl = telemetryServerUrl.replace(/\/+$/, '');
     envVars.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = `${baseUrl}/api/otlp/v1/traces`;
-    envVars.OTEL_EXPORTER_OTLP_TRACES_PROTOCOL = 'http/json';
     envVars.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT = `${baseUrl}/api/otlp/v1/logs`;
-    envVars.OTEL_EXPORTER_OTLP_LOGS_PROTOCOL = 'http/json';
   } else {
     envVars.GENKIT_TELEMETRY_SERVER = telemetryServerUrl;
     if (!disableRealtimeTelemetry) {

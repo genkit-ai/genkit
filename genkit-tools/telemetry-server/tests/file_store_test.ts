@@ -15,10 +15,11 @@
  */
 
 import type { TraceData, TraceQueryFilter } from '@genkit-ai/tools-common';
+import { logger } from '@genkit-ai/tools-common/utils';
 import * as assert from 'assert';
 import fs from 'fs';
 import getPort from 'get-port';
-import { afterEach, beforeEach, describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import os from 'os';
 import path from 'path';
 import { Index } from '../src/file-trace-store.js';
@@ -1334,6 +1335,165 @@ describe('otlp-endpoint', () => {
       body: 'invalid json',
     });
     assert.strictEqual(res.status, 500);
+  });
+
+  it('saves protobuf traces on /api/otlp/v1/traces', async () => {
+    const traceIdHex = '0102030405060708090a0b0c0d0e0f10';
+    const spanIdHex = '1112131415161718';
+    const startTimeBuf = Buffer.alloc(8);
+    startTimeBuf.writeBigUInt64LE(1760827335359000000n, 0);
+    const endTimeBuf = Buffer.alloc(8);
+    endTimeBuf.writeBigUInt64LE(1760827336695000000n, 0);
+
+    const spanBuf = Buffer.concat([
+      Buffer.from([0x0a, 0x10]),
+      Buffer.from(traceIdHex, 'hex'),
+      Buffer.from([0x12, 0x08]),
+      Buffer.from(spanIdHex, 'hex'),
+      Buffer.from([0x2a, 0x05]),
+      Buffer.from('span1'),
+      Buffer.from([0x30, 0x01]),
+      Buffer.from([0x39]),
+      startTimeBuf,
+      Buffer.from([0x41]),
+      endTimeBuf,
+    ]);
+    const scopeBuf = Buffer.concat([
+      Buffer.from([0x0a, 0x0a]),
+      Buffer.from('test-scope'),
+    ]);
+    const scopeSpansBuf = Buffer.concat([
+      Buffer.from([0x0a, scopeBuf.length]),
+      scopeBuf,
+      Buffer.from([0x12, spanBuf.length]),
+      spanBuf,
+    ]);
+    const resourceSpansBuf = Buffer.concat([
+      Buffer.from([0x12, scopeSpansBuf.length]),
+      scopeSpansBuf,
+    ]);
+    const reqBuf = Buffer.concat([
+      Buffer.from([0x0a, resourceSpansBuf.length]),
+      resourceSpansBuf,
+    ]);
+
+    const res = await fetch(`${url}/api/otlp/v1/traces`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-protobuf' },
+      body: reqBuf,
+    });
+    assert.strictEqual(res.status, 200);
+
+    const getResp = await fetch(`${url}/api/traces/${traceIdHex}`);
+    assert.strictEqual(getResp.status, 200);
+    const trace = await getResp.json();
+    assert.strictEqual(trace.traceId, traceIdHex);
+    assert.strictEqual(trace.spans[spanIdHex].spanId, spanIdHex);
+    assert.strictEqual(trace.spans[spanIdHex].displayName, 'span1');
+    assert.strictEqual(trace.spans[spanIdHex].startTime, 1760827335359);
+    assert.strictEqual(trace.spans[spanIdHex].endTime, 1760827336695);
+  });
+
+  it('saves protobuf logs on /api/otlp/v1/logs', async () => {
+    const traceIdHex = '0102030405060708090a0b0c0d0e0f10';
+    const spanIdHex = '1112131415161718';
+    const timeBuf = Buffer.alloc(8);
+    timeBuf.writeBigUInt64LE(1760827335359000000n, 0);
+    const bodyValueBuf = Buffer.concat([
+      Buffer.from([0x0a, 0x09]),
+      Buffer.from('hello log'),
+    ]);
+
+    const logRecordBuf = Buffer.concat([
+      Buffer.from([0x09]),
+      timeBuf,
+      Buffer.from([0x10, 0x09]), // severity_number = 9
+      Buffer.from([0x1a, 0x04]),
+      Buffer.from('INFO'),
+      Buffer.from([0x2a, bodyValueBuf.length]),
+      bodyValueBuf,
+      Buffer.from([0x4a, 0x10]),
+      Buffer.from(traceIdHex, 'hex'),
+      Buffer.from([0x52, 0x08]),
+      Buffer.from(spanIdHex, 'hex'),
+    ]);
+    const scopeBuf = Buffer.concat([
+      Buffer.from([0x0a, 0x0a]),
+      Buffer.from('test-scope'),
+    ]);
+    const scopeLogsBuf = Buffer.concat([
+      Buffer.from([0x0a, scopeBuf.length]),
+      scopeBuf,
+      Buffer.from([0x12, logRecordBuf.length]),
+      logRecordBuf,
+    ]);
+    const resourceLogsBuf = Buffer.concat([
+      Buffer.from([0x12, scopeLogsBuf.length]),
+      scopeLogsBuf,
+    ]);
+    const reqBuf = Buffer.concat([
+      Buffer.from([0x0a, resourceLogsBuf.length]),
+      resourceLogsBuf,
+    ]);
+
+    const res = await fetch(`${url}/api/otlp/v1/logs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-protobuf' },
+      body: reqBuf,
+    });
+    assert.strictEqual(res.status, 200);
+
+    const getResp = await fetch(`${url}/api/traces/${traceIdHex}/logs`);
+    assert.strictEqual(getResp.status, 200);
+    const { logs } = await getResp.json();
+    assert.strictEqual(logs.length, 1);
+    assert.strictEqual(logs[0].traceId, traceIdHex);
+    assert.strictEqual(logs[0].spanId, spanIdHex);
+    assert.strictEqual(logs[0].body, 'hello log');
+    assert.strictEqual(logs[0].severityText, 'INFO');
+    assert.strictEqual(logs[0].severityNumber, 9);
+  });
+
+  it('acknowledges /api/otlp/v1/metrics for json and protobuf', async () => {
+    const protoRes = await fetch(`${url}/api/otlp/v1/metrics`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-protobuf' },
+      body: Buffer.from([0x0a, 0x02, 0x12, 0x00]),
+    });
+    assert.strictEqual(protoRes.status, 200);
+    assert.deepStrictEqual(await protoRes.json(), {});
+
+    const jsonRes = await fetch(`${url}/api/otlp/v1/metrics`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ resourceMetrics: [{ scopeMetrics: [] }] }),
+    });
+    assert.strictEqual(jsonRes.status, 200);
+    assert.deepStrictEqual(await jsonRes.json(), {});
+  });
+
+  it('returns 415 and logs a one-time warning for unsupported content types', async () => {
+    const warnMock = mock.method(logger, 'warn', () => {});
+    try {
+      const res1 = await fetch(`${url}/api/otlp/v1/traces`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: 'hello',
+      });
+      assert.strictEqual(res1.status, 415);
+      assert.strictEqual(warnMock.mock.callCount(), 1);
+
+      const res2 = await fetch(`${url}/api/otlp/v1/logs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/grpc' },
+        body: Buffer.from([0]),
+      });
+      assert.strictEqual(res2.status, 415);
+      // Warning is logged only once per server instance
+      assert.strictEqual(warnMock.mock.callCount(), 1);
+    } finally {
+      warnMock.mock.restore();
+    }
   });
 });
 

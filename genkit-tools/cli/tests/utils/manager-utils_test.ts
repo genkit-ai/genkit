@@ -172,11 +172,11 @@ describe('getDevEnvVars', () => {
     expect(envVars.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT).toBe(
       `${TELEMETRY_URL}/api/otlp/v1/traces`
     );
-    expect(envVars.OTEL_EXPORTER_OTLP_TRACES_PROTOCOL).toBe('http/json');
+    expect(envVars.OTEL_EXPORTER_OTLP_TRACES_PROTOCOL).toBeUndefined();
     expect(envVars.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT).toBe(
       `${TELEMETRY_URL}/api/otlp/v1/logs`
     );
-    expect(envVars.OTEL_EXPORTER_OTLP_LOGS_PROTOCOL).toBe('http/json');
+    expect(envVars.OTEL_EXPORTER_OTLP_LOGS_PROTOCOL).toBeUndefined();
   });
 
   it('normalizes a trailing slash on the telemetry server URL for OTLP endpoints', async () => {

@@ -26,7 +26,11 @@ import express from 'express';
 import type * as http from 'http';
 import { BroadcastManager } from './broadcast-manager.js';
 import type { TraceStore } from './types.js';
-import { logDataFromOtlp, traceDataFromOtlp } from './utils/otlp.js';
+import {
+  decodeOtlpProtobuf,
+  logDataFromOtlp,
+  traceDataFromOtlp,
+} from './utils/otlp.js';
 
 export { LocalFileLogStore } from './file-log-store.js';
 export { LocalFileTraceStore } from './file-trace-store.js';
@@ -159,7 +163,15 @@ export async function startTelemetryServer(params: {
     })
   );
 
-  api.use(express.json({ limit: params.maxRequestBodySize ?? '100mb' }));
+  const bodyLimit = params.maxRequestBodySize ?? '100mb';
+  api.use(express.json({ limit: bodyLimit }));
+  api.use(
+    '/api/otlp',
+    express.raw({
+      type: 'application/x-protobuf',
+      limit: bodyLimit,
+    })
+  );
 
   api.get('/api/__health', async (_, response) => {
     response.status(200).send('OK');
@@ -287,6 +299,7 @@ export async function startTelemetryServer(params: {
     }
   );
 
+  let warnedUnsupportedContentType = false;
   api.post<{ parentTraceId?: string; parentSpanId?: string }>(
     [
       '/api/otlp',
@@ -297,17 +310,44 @@ export async function startTelemetryServer(params: {
     ],
     async (request, response) => {
       try {
-        const { parentTraceId, parentSpanId } = request.params;
+        if (request.body === undefined) {
+          if (!warnedUnsupportedContentType) {
+            warnedUnsupportedContentType = true;
+            logger.warn(
+              `Unsupported OTLP Content-Type "${request.headers['content-type'] ?? 'none'}" on ${request.path}; expected application/json or application/x-protobuf.`
+            );
+          }
+          response.status(415).json({
+            code: 3, // INVALID_ARGUMENT
+            message:
+              'Unsupported Content-Type. Expected application/json or application/x-protobuf.',
+          });
+          return;
+        }
 
-        if (
-          !request.body?.resourceSpans?.length &&
-          !request.body?.resourceLogs?.length
-        ) {
+        if (request.path === '/api/otlp/v1/metrics') {
+          response.status(200).json({});
+          return;
+        }
+
+        const { parentTraceId, parentSpanId } = request.params;
+        const payload = Buffer.isBuffer(request.body)
+          ? decodeOtlpProtobuf(
+              request.body,
+              request.path === '/api/otlp/v1/logs'
+                ? 'logs'
+                : request.path === '/api/otlp/v1/traces' || parentTraceId
+                  ? 'traces'
+                  : undefined
+            )
+          : request.body;
+
+        if (!payload?.resourceSpans?.length && !payload?.resourceLogs?.length) {
           // Acknowledge and ignore empty payloads.
           response.status(200).json({});
           return;
         }
-        const traces = traceDataFromOtlp(request.body);
+        const traces = traceDataFromOtlp(payload);
         for (const trace of traces) {
           if (parentTraceId) {
             trace.traceId = parentTraceId;
@@ -338,8 +378,8 @@ export async function startTelemetryServer(params: {
         }
 
         // TODO: Add real time support and broadcast log events
-        if (request.body.resourceLogs?.length) {
-          const logs = logDataFromOtlp(request.body);
+        if (payload.resourceLogs?.length) {
+          const logs = logDataFromOtlp(payload);
           if (logs.length > 0) {
             await params.logStore.save(logs);
           }
