@@ -1,3 +1,4 @@
 node_modules
 tsconfig.json
+tsconfig.public-types.json
 tsup.config.ts
