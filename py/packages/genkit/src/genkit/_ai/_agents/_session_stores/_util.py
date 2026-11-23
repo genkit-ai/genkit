@@ -28,25 +28,28 @@ import inspect
 import os
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from datetime import datetime, timezone
+from typing import Final
 
 from genkit._ai._agents._session import SnapshotStatusStream, select_leaf_snapshot
 from genkit._ai._agents._snapshot import parse_snapshot_lookup_kw
-from genkit._core._error import GenkitError, RuntimeErrorReason
+from genkit._core._error import ErrorReason, GenkitError
 from genkit._core._model import SessionSnapshot
 from genkit._core._typing import SnapshotStatus
 
 SaveFn = Callable[[SessionSnapshot | None], SessionSnapshot | None]
+"""Synchronous save mutator: gets a copy of the stored snapshot (or None), returns the new one or None to skip."""
 Subs = dict[str, list['asyncio.Queue[SnapshotStatus | None]']]
 OnClose = Callable[[], Awaitable[None]]
 
 # Persisted statuses that end a snapshot's store lifecycle. apply_save treats
 # these as absorbing; status streams end after one. ``expired`` is a read-time
 # overlay and is never written, so it is not included here.
-TERMINAL_STATUSES = frozenset({
+TERMINAL_STATUSES: Final[frozenset[SnapshotStatus]] = frozenset({
     SnapshotStatus.COMPLETED,
     SnapshotStatus.FAILED,
     SnapshotStatus.ABORTED,
 })
+"""Final snapshot statuses: a store rejects any later status change, and status streams end after one."""
 
 
 def assert_safe_snapshot_id(*, snapshot_id: str) -> None:
@@ -70,7 +73,7 @@ def assert_safe_snapshot_id(*, snapshot_id: str) -> None:
                 f'Invalid snapshotId: "{snapshot_id}". '
                 'A snapshotId must be a plain file name (no path separators or "..").'
             ),
-            reason=RuntimeErrorReason.INVALID_SNAPSHOT_ID,
+            reason=ErrorReason.INVALID_SNAPSHOT_ID,
         )
 
 

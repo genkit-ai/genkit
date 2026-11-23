@@ -15,8 +15,8 @@
  */
 
 import { stringify } from 'yaml';
-import type { MessageData, Part } from '../types/model';
-import type { PromptFrontmatter } from '../types/prompt';
+import type { MessageData, Part } from '../types/model.js';
+import type { PromptFrontmatter } from '../types/prompt.js';
 
 function toFrontmatterSchema(config?: {
   schema?: unknown;

@@ -79,8 +79,10 @@ export type ResourceFn = (
 /**
  * A resource action.
  */
-export interface ResourceAction
-  extends Action<typeof ResourceInputSchema, typeof ResourceOutputSchema> {
+export interface ResourceAction extends Action<
+  typeof ResourceInputSchema,
+  typeof ResourceOutputSchema
+> {
   matches(input: ResourceInput): boolean;
 }
 

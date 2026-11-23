@@ -19,7 +19,7 @@ from genkit_otel import GenAiInstrumentation
 from genkit_otel._gen_ai_attributes import GenAiAttr, GenAiMetric
 
 from genkit import FinishReason, Message, ModelResponse, Part, Role
-from genkit.model import ModelUsage
+from genkit.model import GenerationUsage
 from genkit.telemetry import SpanMetadata
 
 
@@ -40,7 +40,7 @@ def _points_for_model(harness, metric_name: str, model: str) -> list:
     return points
 
 
-def _response(*, usage: ModelUsage | None = None) -> ModelResponse:
+def _response(*, usage: GenerationUsage | None = None) -> ModelResponse:
     return ModelResponse(
         finish_reason=FinishReason.STOP,
         message=Message(role=Role.MODEL, content=[Part.from_text('ok')]),
@@ -58,7 +58,7 @@ async def test_records_token_usage_split_by_input_output(harness) -> None:
     await _run_model(
         instr,
         'googleai/metrics-usage',
-        lambda span=None: _awaitable(_response(usage=ModelUsage(input_tokens=12, output_tokens=34))),
+        lambda span=None: _awaitable(_response(usage=GenerationUsage(input_tokens=12, output_tokens=34))),
     )
     points = _points_for_model(harness, GenAiMetric.TOKEN_USAGE, 'metrics-usage')
     by_type = {dict(p.attributes).get(GenAiAttr.TOKEN_TYPE): p for p in points}
@@ -76,7 +76,7 @@ async def test_records_operation_duration_on_success(harness) -> None:
     await _run_model(
         instr,
         'openai/metrics-duration',
-        lambda span=None: _awaitable(_response(usage=ModelUsage(input_tokens=1))),
+        lambda span=None: _awaitable(_response(usage=GenerationUsage(input_tokens=1))),
     )
     points = _points_for_model(harness, GenAiMetric.OPERATION_DURATION, 'metrics-duration')
     assert len(points) == 1
@@ -107,7 +107,7 @@ async def test_emit_metrics_false_records_none(harness) -> None:
     await _run_model(
         instr,
         'googleai/metrics-disabled',
-        lambda span=None: _awaitable(_response(usage=ModelUsage(input_tokens=5))),
+        lambda span=None: _awaitable(_response(usage=GenerationUsage(input_tokens=5))),
     )
     assert _points_for_model(harness, GenAiMetric.TOKEN_USAGE, 'metrics-disabled') == []
     assert _points_for_model(harness, GenAiMetric.OPERATION_DURATION, 'metrics-disabled') == []

@@ -28,8 +28,8 @@ from genkit_google_genai._constants import is_multi_regional_location, multi_reg
 from genkit_google_genai._models._sdk_config import (
     VEO_MANAGED_BODY_FIELDS,
     attach_config_extra,
+    copy_http_options,
     dump_family_config,
-    keep_client_extra_body,
     sdk_config_error,
 )
 from genkit_google_genai._models._secrets import context_api_key, misplaced_key_error
@@ -37,13 +37,14 @@ from genkit_google_genai._provider_errors import TRANSPORT_ERRORS, api_error, tr
 from google import genai
 from google.genai import types as genai_types
 from google.genai.errors import APIError
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import Field, ValidationError, model_validator
 
-from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, Operation, Part, Role
-from genkit.model import ModelInfo, ModelRequest, OperationError, Supports
+from genkit import Failure, FinishReason, GenkitError, Message, ModelResponse, Operation, Part, Role
+from genkit.model import ModelContext, ModelInfo, ModelRequest, ModelSupports
+from genkit.plugin_api import GenkitConfig
 
 # Quote autocomplete needs a Literal, so these aliases list the Veo ids each
-# backend autocompletes. ``veo_model`` takes ``Known*Veo | str`` so unlisted
+# backend autocompletes. ``veo`` takes ``Known*Veo | str`` so unlisted
 # ids still work.
 KnownGoogleAIVeo: TypeAlias = Literal[
     'veo-3.1-generate-preview',
@@ -55,6 +56,12 @@ KnownVertexAIVeo: TypeAlias = Literal[
     'veo-3.1-fast-generate-001',
     'veo-3.1-lite-generate-001',
 ]
+
+VideoCompressionQuality: TypeAlias = Literal['OPTIMIZED', 'LOSSLESS']
+"""Values of ``genai_types.VideoCompressionQuality``."""
+
+ImageResizeMode: TypeAlias = Literal['CROP', 'PAD']
+"""Values of ``genai_types.ImageResizeMode``."""
 
 
 def is_veo_model(name: str) -> bool:
@@ -69,22 +76,21 @@ def is_veo_model(name: str) -> bool:
     return name.split('/')[-1].lower().startswith('veo-')
 
 
-class VeoConfig(BaseModel):
+class VeoConfig(GenkitConfig):
     """Veo Config Schema."""
 
-    model_config = ConfigDict(extra='forbid', populate_by_name=True)
-    number_of_videos: int | None = Field(default=None, alias='numberOfVideos')
-    generate_audio: bool | None = Field(default=None, alias='generateAudio')
+    number_of_videos: int | None = Field(default=None)
+    generate_audio: bool | None = Field(default=None)
     fps: int | None = Field(default=None)
-    output_gcs_uri: str | None = Field(default=None, alias='outputGcsUri')
-    pubsub_topic: str | None = Field(default=None, alias='pubsubTopic')
-    compression_quality: genai_types.VideoCompressionQuality | None = Field(default=None, alias='compressionQuality')
-    resize_mode: genai_types.ImageResizeMode | None = Field(default=None, alias='resizeMode')
+    output_gcs_uri: str | None = Field(default=None)
+    pubsub_topic: str | None = Field(default=None)
+    compression_quality: VideoCompressionQuality | None = Field(default=None)
+    resize_mode: ImageResizeMode | None = Field(default=None)
     labels: dict[str, str] | None = Field(default=None)
-    last_frame: dict[str, Any] | None = Field(default=None, alias='lastFrame')
-    reference_images: list[dict[str, Any]] | None = Field(default=None, alias='referenceImages')
+    last_frame: dict[str, Any] | None = Field(default=None)
+    reference_images: list[dict[str, Any]] | None = Field(default=None)
     mask: dict[str, Any] | None = Field(default=None)
-    webhook_config: dict[str, Any] | None = Field(default=None, alias='webhookConfig')
+    webhook_config: dict[str, Any] | None = Field(default=None)
     extra: dict[str, Any] | None = Field(
         default=None,
         description=(
@@ -93,23 +99,17 @@ class VeoConfig(BaseModel):
             'by key. Not checked; do not put API keys here.'
         ),
     )
-    negative_prompt: str | None = Field(
-        default=None, alias='negativePrompt', description='Negative prompt for video generation.'
-    )
+    negative_prompt: str | None = Field(default=None, description='Negative prompt for video generation.')
     aspect_ratio: str | None = Field(
-        default=None, alias='aspectRatio', description='Desired aspect ratio of the output video (e.g. "16:9").'
+        default=None, description='Desired aspect ratio of the output video (e.g. "16:9").'
     )
-    person_generation: str | None = Field(default=None, alias='personGeneration', description='Person generation mode.')
-    duration_seconds: int | None = Field(
-        default=None, alias='durationSeconds', description='Length of video in seconds.'
-    )
+    person_generation: str | None = Field(default=None, description='Person generation mode.')
+    duration_seconds: int | None = Field(default=None, description='Length of video in seconds.')
     resolution: str | None = Field(default=None, description='Desired output resolution (e.g. "720p").')
     seed: int | None = Field(default=None, description='Random seed for deterministic generation.')
-    enhance_prompt: bool | None = Field(default=None, alias='enhancePrompt', description='Enable prompt enhancement.')
-    base_url: str | None = Field(default=None, alias='baseUrl', description='Override the API endpoint for this call.')
-    api_version: str | None = Field(
-        default=None, alias='apiVersion', description='Override the API version for this call.'
-    )
+    enhance_prompt: bool | None = Field(default=None, description='Enable prompt enhancement.')
+    base_url: str | None = Field(default=None, description='Override the API endpoint for this call.')
+    api_version: str | None = Field(default=None, description='Override the API version for this call.')
     location: str | None = Field(default=None, description='Override the Vertex AI location for this call.')
 
     @model_validator(mode='before')
@@ -124,7 +124,7 @@ class VeoConfig(BaseModel):
         return data
 
 
-DEFAULT_VEO_SUPPORT = Supports(
+DEFAULT_VEO_SUPPORT = ModelSupports(
     media=True,
     multiturn=False,
     tools=False,
@@ -216,7 +216,7 @@ def _from_veo_operation(*, api_op: genai_types.GenerateVideosOperation) -> Opera
     """
     op = Operation(id=api_op.name or '', done=bool(api_op.done))
     if api_op.error:
-        op.error = OperationError(message=_operation_error_message(error=api_op.error))
+        op.error = Failure(message=_operation_error_message(error=api_op.error))
         return op
 
     response = api_op.response
@@ -247,13 +247,11 @@ def _from_veo_operation(*, api_op: genai_types.GenerateVideosOperation) -> Opera
     # dropped every sample. Name that, don't hand back an empty success.
     if api_op.done and response.rai_media_filtered_count:
         reasons = [str(reason) for reason in (response.rai_media_filtered_reasons or []) if reason]
-        op.error = OperationError(
-            message='; '.join(reasons) or 'All generated videos were filtered out by safety filters.'
-        )
+        op.error = Failure(message='; '.join(reasons) or 'All generated videos were filtered out by safety filters.')
         return op
 
     if api_op.done and not content and not op.error:
-        op.error = OperationError(message='Operation completed but returned no playable media.')
+        op.error = Failure(message='Operation completed but returned no playable media.')
     return op
 
 
@@ -281,7 +279,7 @@ class VeoModel:
 
     def _client_for_context(
         self,
-        ctx: ActionRunContext,
+        ctx: ModelContext,
         *,
         config: Mapping[str, Any] | None = None,
     ) -> genai.Client:
@@ -317,7 +315,7 @@ class VeoModel:
 
         kwargs = dict(self._client_kwargs or {})
         plugin_opts = kwargs.get('http_options')
-        opts = plugin_opts.model_copy(deep=True) if plugin_opts is not None else genai_types.HttpOptions()
+        opts = copy_http_options(plugin_opts) if plugin_opts is not None else genai_types.HttpOptions()
         if api_key is not None:
             kwargs['api_key'] = api_key
             # The SDK rejects api_key with credentials, project, or location.
@@ -350,7 +348,7 @@ class VeoModel:
                 cause=e,
             ) from e
 
-    async def start(self, request: ModelRequest[VeoConfig], ctx: ActionRunContext) -> Operation:
+    async def start(self, request: ModelRequest[VeoConfig], ctx: ModelContext) -> Operation:
         """Start a video generation operation.
 
         Args:
@@ -386,7 +384,7 @@ class VeoModel:
 
         return _from_veo_operation(api_op=response)
 
-    async def check(self, operation: Operation, ctx: ActionRunContext) -> Operation:
+    async def check(self, operation: Operation, ctx: ModelContext) -> Operation:
         """Check the status of a video generation operation.
 
         Args:
@@ -435,8 +433,7 @@ class VeoModel:
         except ValidationError as e:
             raise sdk_config_error(action_name=self._name, error=e) from e
 
-        cfg = attach_config_extra(cfg, extra, action_name=self._name, managed_body_fields=VEO_MANAGED_BODY_FIELDS)
-        return keep_client_extra_body(cfg, (self._client_kwargs or {}).get('http_options'))
+        return attach_config_extra(cfg, extra, action_name=self._name, managed_body_fields=VEO_MANAGED_BODY_FIELDS)
 
     @property
     def metadata(self) -> dict:

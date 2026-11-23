@@ -251,3 +251,23 @@ async def test_closeable_queue_close_is_idempotent() -> None:
     # a second close() is a no-op and must not raise.
     queue.close()
     assert queue.is_closed()
+
+
+@pytest.mark.asyncio
+async def test_channel_anext_timeout_does_not_lose_next_chunk() -> None:
+    """Timing out on anext(channel) cancels the pending getter without eating the next sent chunk."""
+    channel: Channel[str] = Channel()
+    close_future: asyncio.Future[str] = asyncio.Future()
+    channel.set_close_future(close_future)
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(anext(channel), timeout=0.01)
+
+    channel.send('first')
+    channel.send('second')
+    close_future.set_result('done')
+
+    assert await anext(channel) == 'first'
+    assert await anext(channel) == 'second'
+    with pytest.raises(StopAsyncIteration):
+        await anext(channel)

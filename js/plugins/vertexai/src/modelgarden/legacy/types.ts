@@ -35,5 +35,4 @@ export interface ModelGardenOptions {
 
 /** @deprecated */
 export interface PluginOptions
-  extends CommonPluginOptions,
-    ModelGardenOptions {}
+  extends CommonPluginOptions, ModelGardenOptions {}

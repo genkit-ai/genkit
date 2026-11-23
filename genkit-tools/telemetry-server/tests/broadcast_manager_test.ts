@@ -19,7 +19,7 @@ import * as assert from 'assert';
 import { EventEmitter } from 'events';
 import type { Response } from 'express';
 import { beforeEach, describe, it } from 'node:test';
-import { BroadcastManager, type SpanEvent } from '../src/broadcast-manager';
+import { BroadcastManager, type SpanEvent } from '../src/broadcast-manager.js';
 
 /**
  * Creates a mock Response object for testing.

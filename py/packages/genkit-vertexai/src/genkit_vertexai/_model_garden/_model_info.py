@@ -16,7 +16,7 @@
 
 """Catalog of OpenAI-compatible models served by Vertex AI Model Garden."""
 
-from genkit.model import ModelInfo, Supports
+from genkit.model import ModelInfo, ModelSupports
 
 LLAMA_3_1 = 'meta/llama-3.1-405b-instruct-maas'
 LLAMA_3_2 = 'meta/llama-3.2-90b-vision-instruct-maas'
@@ -25,7 +25,7 @@ LLAMA_3_2 = 'meta/llama-3.2-90b-vision-instruct-maas'
 SUPPORTED_OPENAI_COMPAT_MODELS: dict[str, ModelInfo] = {
     LLAMA_3_1: ModelInfo(
         label='ModelGarden - Meta - llama-3.1',
-        supports=Supports(
+        supports=ModelSupports(
             multiturn=True,
             media=False,
             tools=True,
@@ -36,7 +36,7 @@ SUPPORTED_OPENAI_COMPAT_MODELS: dict[str, ModelInfo] = {
     ),
     LLAMA_3_2: ModelInfo(
         label='ModelGarden - Meta - llama-3.2',
-        supports=Supports(
+        supports=ModelSupports(
             multiturn=True,
             media=True,
             tools=True,
@@ -47,7 +47,7 @@ SUPPORTED_OPENAI_COMPAT_MODELS: dict[str, ModelInfo] = {
 }
 
 # 'json' in output means the endpoint accepts schema-less JSON mode.
-DEFAULT_SUPPORTS = Supports(
+DEFAULT_SUPPORTS = ModelSupports(
     multiturn=True,
     media=True,
     tools=True,
