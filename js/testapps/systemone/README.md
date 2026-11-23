@@ -29,8 +29,11 @@ export OPENROUTER_API_KEY=...
 pnpm genkit:dev
 ```
 
-The Dev UI also starts without the key; the flows then fail with an error that
-names it.
+The testapp reads the key from `OPENROUTER_API_KEY`. Without it, the plugin is
+created with `apiKey: false`, so the Dev UI still starts and lists the models,
+and each flow fails with FAILED_PRECONDITION: "the plugin was created with
+apiKey: false, so pass the API key as config.apiKey". Set the variable and
+restart, or pass `config: { apiKey }` in a flow.
 
 The Dev UI shows the question set on each model request and the full
 distributions on each response.
