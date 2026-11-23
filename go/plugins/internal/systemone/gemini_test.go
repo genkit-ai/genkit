@@ -181,4 +181,14 @@ func TestGeminiBlocked(t *testing.T) {
 	if !errors.Is(err, status.ErrInvalidArgument) {
 		t.Errorf("error = %v, want INVALID_ARGUMENT", err)
 	}
+	// A success the SDK cannot read, such as a proxy's HTML page, is not
+	// worth a retry and not the request's fault.
+	rec = &recorder{respond: func(w http.ResponseWriter, _ int) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = io.WriteString(w, "<html>Sign in to the proxy</html>")
+	}}
+	_, err = newGemini(t, rec).Decide(t.Context(), "gemini-decision-1", &Request{State: "hi", Questions: testQuestions})
+	if !errors.Is(err, status.ErrInternal) {
+		t.Errorf("error = %v, want INTERNAL for an unreadable success", err)
+	}
 }

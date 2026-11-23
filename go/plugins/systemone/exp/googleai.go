@@ -44,8 +44,10 @@ import (
 //
 // The SDK builds the whole request and retries it, so Config.Extra is
 // refused, and Path, ModelsPath, Route, and Unwrap do not apply. BaseURL
-// can point at a proxy that forwards the Gemini API, and HTTPClient and
-// Headers reach the SDK's transport.
+// can point at a proxy that forwards the Gemini API; when it is empty, the
+// SDK's default applies, which GOOGLE_GEMINI_BASE_URL overrides as it does
+// for the googlegenai plugin. HTTPClient and Headers reach the SDK's
+// transport.
 func GoogleAI() *SystemOne {
 	return &SystemOne{
 		Provider: "googleai-decisions",
@@ -56,7 +58,6 @@ func GoogleAI() *SystemOne {
 		preset: preset{
 			label:           "Google AI",
 			apiKeyEnvs:      []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"},
-			baseURL:         "https://generativelanguage.googleapis.com",
 			transport:       newGemini,
 			headers:         http.Header{"X-Goog-Api-Client": {"genkit-go/" + genkitinternal.Version}},
 			documents:       true,

@@ -400,8 +400,9 @@ questions together, and a choice or a score up to 255 options or levels. The
 API is in `v1beta`, and Vertex AI does not serve it yet. The SDK builds the
 whole request and retries it on its own policy, so `Config.Extra` is refused,
 and `Path`, `ModelsPath`, `Route`, and `Unwrap` do not apply. `BaseURL` can
-point at a proxy that forwards the Gemini API, and `HTTPClient` and `Headers`
-reach the SDK's transport.
+point at a proxy that forwards the Gemini API; when it is empty,
+`GOOGLE_GEMINI_BASE_URL` does, as it does for the `googlegenai` plugin.
+`HTTPClient` and `Headers` reach the SDK's transport.
 
 ### Cloudflare Workers AI
 

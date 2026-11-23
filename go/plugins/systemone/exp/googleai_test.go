@@ -17,6 +17,7 @@
 package exp
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -27,9 +28,9 @@ import (
 )
 
 // newGoogleAI starts a fake endpoint that answers as the Decisions API
-// does, and a Genkit with the plugin pointed at it. The key comes from
-// the environment, as it does in an app.
-func newGoogleAI(t *testing.T, fake *systemonetest.Server) *genkit.Genkit {
+// does, and a Genkit with the plugin pointed at it. The key and the base
+// URL come from the environment, as they do for the googlegenai plugin.
+func newGoogleAI(t *testing.T, fake *systemonetest.Server, headers http.Header) *genkit.Genkit {
 	t.Helper()
 	fake.Usage = map[string]any{
 		"total_input_tokens":       300,
@@ -51,14 +52,15 @@ func newGoogleAI(t *testing.T, fake *systemonetest.Server) *genkit.Genkit {
 	t.Cleanup(srv.Close)
 	t.Setenv("GEMINI_API_KEY", "gemini-key")
 	t.Setenv("GOOGLE_API_KEY", "google-key")
+	t.Setenv("GOOGLE_GEMINI_BASE_URL", srv.URL)
 	p := GoogleAI()
-	p.BaseURL = srv.URL
+	p.Headers = headers
 	return genkit.Init(t.Context(), genkit.WithPlugins(p))
 }
 
 func TestGoogleAI(t *testing.T) {
 	fake := &systemonetest.Server{}
-	g := newGoogleAI(t, fake)
+	g := newGoogleAI(t, fake, nil)
 	out, resp, err := genkit.GenerateData[triage](t.Context(), g,
 		ai.WithModelName("googleai-decisions/gemini-decision-1"),
 		ai.WithConfig(&Config{MediaResolution: "low"}),
@@ -97,7 +99,7 @@ func TestGoogleAIBlocked(t *testing.T) {
 	fake := &systemonetest.Server{Wrap: func(map[string]any) any {
 		return map[string]any{"prompt_feedback": map[string]any{"block_reason": "safety", "block_reason_message": "Input blocked."}}
 	}}
-	g := newGoogleAI(t, fake)
+	g := newGoogleAI(t, fake, nil)
 	resp, err := genkit.Generate(t.Context(), g,
 		ai.WithModelName("googleai-decisions/gemini-decision-1"),
 		ai.WithOutputType(triage{}),
@@ -107,6 +109,22 @@ func TestGoogleAIBlocked(t *testing.T) {
 	}
 	if resp.FinishReason != ai.FinishReasonBlocked || resp.FinishMessage != "Input blocked." {
 		t.Errorf("finish = %q %q, want blocked with the API's message", resp.FinishReason, resp.FinishMessage)
+	}
+}
+
+func TestGoogleAICallerHeaderWins(t *testing.T) {
+	// A caller's header replaces the preset's whatever the case of its
+	// key, rather than going out beside it in random order.
+	fake := &systemonetest.Server{}
+	g := newGoogleAI(t, fake, http.Header{"x-goog-api-client": {"myapp/1.0"}})
+	if _, _, err := genkit.GenerateData[triage](t.Context(), g,
+		ai.WithModelName("googleai-decisions/gemini-decision-1"),
+		ai.WithPrompt("hi")); err != nil {
+		t.Fatal(err)
+	}
+	req, _ := fake.Last(t)
+	if got := req.Header.Get("x-goog-api-client"); !strings.Contains(got, "myapp/1.0") || strings.Contains(got, "genkit-go") {
+		t.Errorf("x-goog-api-client = %q, want the caller's in place of genkit-go's", got)
 	}
 }
 

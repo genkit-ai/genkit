@@ -242,7 +242,9 @@ func (s *SystemOne) Init(ctx context.Context) []api.Action {
 	if env := s.preset.baseURLEnv; env != "" && s.BaseURL == "" {
 		baseURL = cmp.Or(os.Getenv(env), baseURL)
 	}
-	if baseURL == "" {
+	// A transport's client has its own default, which an empty BaseURL
+	// keeps along with the SDK's own variables.
+	if baseURL == "" && s.preset.transport == nil {
 		panic(s.Provider + ": set BaseURL, the root of the server's System One API")
 	}
 	if env := s.preset.accountEnv; env != "" && strings.Contains(baseURL, "{account}") {
@@ -265,20 +267,28 @@ func (s *SystemOne) Init(ctx context.Context) []api.Action {
 		}
 		s.models[id] = spec
 	}
+	// The caller's Headers win over the preset's, key by key whatever the
+	// case of the key.
 	headers := s.preset.headers.Clone()
 	if headers == nil {
 		headers = make(http.Header, len(s.Headers))
 	}
-	maps.Copy(headers, s.Headers.Clone())
+	for key, values := range s.Headers {
+		headers[http.CanonicalHeaderKey(key)] = slices.Clone(values)
+	}
 	httpClient := cmp.Or(s.HTTPClient, &http.Client{Timeout: systemone.RequestTimeout})
 	baseURL = strings.TrimSuffix(baseURL, "/")
 	var transport systemone.Transport
+	modelsPath := rooted(s.ModelsPath)
 	if newTransport := s.preset.transport; newTransport != nil {
 		var err error
 		transport, err = newTransport(ctx, transportConfig{name: s.Provider, apiKey: apiKey, baseURL: baseURL, headers: headers, http: httpClient})
 		if err != nil {
 			panic(s.Provider + ": " + err.Error())
 		}
+		// The native listing does not apply to a server reached on its
+		// own client, and would send the key over the native wire.
+		modelsPath = ""
 	}
 	s.client = &systemone.Client{
 		HTTP:    httpClient,
@@ -288,7 +298,7 @@ func (s *SystemOne) Init(ctx context.Context) []api.Action {
 		Endpoint: &systemone.Endpoint{
 			Name:            s.Provider,
 			Path:            path,
-			ModelsPath:      rooted(s.ModelsPath),
+			ModelsPath:      modelsPath,
 			Route:           s.Route,
 			Unwrap:          s.Unwrap,
 			Transport:       transport,

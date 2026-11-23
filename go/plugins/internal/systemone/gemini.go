@@ -22,6 +22,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/firebase/genkit/go/core/status"
@@ -85,18 +86,29 @@ func (g *Gemini) Decide(ctx context.Context, model string, r *Request) (*Respons
 	return resp, nil
 }
 
-// failure maps an SDK error onto a Genkit status. An API error is mapped
-// as an error response is on the native wire, after the SDK has retried
-// what was worth retrying; a context that ended is reported as such.
+// failure maps an SDK error onto a Genkit status, after the SDK has
+// retried what was worth retrying. An error response is mapped as it is on
+// the native wire; a response the SDK could not read, such as a success
+// that is not JSON, is INTERNAL, as a failure to reach the API is
+// UNAVAILABLE; and anything else the SDK refuses, such as a request it
+// cannot encode, is INTERNAL, since it fails the same way every time. A
+// context that ended is reported as such.
 func (g *Gemini) failure(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
 		return stopped(ctx, err)
 	}
 	var apiErr *apierrors.APIError
 	if errors.As(err, &apiErr) {
-		return httpError(g.Name, apiErr.StatusCode, []byte(apiErr.Body))
+		if apiErr.StatusCode >= 400 {
+			return httpError(g.Name, apiErr.StatusCode, []byte(apiErr.Body))
+		}
+		return status.Errorf(status.ErrInternal, "%s: HTTP %d: %s", g.Name, apiErr.StatusCode, apiErr.Message)
 	}
-	return status.Errorf(status.ErrUnavailable, "%s: %w", g.Name, err)
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		return status.Errorf(status.ErrUnavailable, "%s: %w", g.Name, err)
+	}
+	return status.Errorf(status.ErrInternal, "%s: %w", g.Name, err)
 }
 
 // geminiRequest builds a Decisions request.
