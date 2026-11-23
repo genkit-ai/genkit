@@ -62,6 +62,19 @@ describe('Message', () => {
       });
     }
 
+    it('returns null from .data when there is no data part', () => {
+      const m = new Message({ role: 'model', content: [{ text: 'hello' }] });
+      assert.strictEqual(m.data, null);
+    });
+
+    it('returns a null data part without falling back to text JSON', () => {
+      const m = new Message({
+        role: 'model',
+        content: [{ data: null }, { text: '{"a": 1}' }],
+      });
+      assert.strictEqual(m.output, null);
+    });
+
     it('falls back to a data part when the parser finds nothing', () => {
       const m = new Message(
         { role: 'model', content: [{ data: 0 }] },

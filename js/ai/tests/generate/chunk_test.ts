@@ -50,5 +50,26 @@ describe('GenerateResponseChunk', () => {
       assert.strictEqual(chunk.data, 0);
       assert.strictEqual(chunk.output, 0);
     });
+
+    it('returns null from a null data part without falling back to text JSON', () => {
+      const chunk = new GenerateResponseChunk(
+        {
+          index: 0,
+          role: 'model',
+          content: [{ data: null }, { text: '{"a": 1}' }],
+        },
+        { index: 0, role: 'model', previousChunks: [] }
+      );
+      assert.strictEqual(chunk.data, null);
+      assert.strictEqual(chunk.output, null);
+    });
+
+    it('returns null from #data when there is no data part', () => {
+      const chunk = new GenerateResponseChunk(
+        { index: 0, role: 'model', content: [{ text: 'hi' }] },
+        { index: 0, role: 'model', previousChunks: [] }
+      );
+      assert.strictEqual(chunk.data, null);
+    });
   });
 });

@@ -84,7 +84,7 @@ export class Message<T = unknown> implements MessageData {
   get output(): T {
     const parsed = this.parser?.(this);
     if (parsed) return parsed;
-    // A data part wins even when its value is falsy (0, false, '').
+    // A data part wins even when its value is falsy (0, false, '', null).
     const dataPart = this.content.find((part) => part.data !== undefined);
     if (dataPart) return dataPart.data as T;
     return extractJson<T>(this.text);
@@ -125,8 +125,8 @@ export class Message<T = unknown> implements MessageData {
    * @returns The first `data` part detected in the message (if any).
    */
   get data(): T | null {
-    return this.content.find((part) => part.data !== undefined)
-      ?.data as T | null;
+    return (this.content.find((part) => part.data !== undefined)?.data ??
+      null) as T | null;
   }
 
   /**
