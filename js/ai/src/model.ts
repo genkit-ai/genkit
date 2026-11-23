@@ -136,8 +136,7 @@ export type ModelMiddlewareWithOptions = MiddlewareWithOptions<
 
 /** Union of middleware types accepted by model definitions: either a {@link ModelMiddleware} or {@link ModelMiddlewareWithOptions}. */
 export type ModelMiddlewareArgument =
-  | ModelMiddleware
-  | ModelMiddlewareWithOptions;
+  ModelMiddleware | ModelMiddlewareWithOptions;
 
 /** Options for defining a new model via {@link defineModel} or {@link model}. */
 export type DefineModelOptions<
@@ -371,7 +370,7 @@ function getModelMiddleware(options: {
   const middleware: ModelMiddlewareArgument[] = options.use || [];
   if (!options?.supports?.context) middleware.push(augmentWithContext());
   const constratedSimulator = simulateConstrainedGeneration();
-  middleware.push((req, next) => {
+  const constrained: ModelMiddleware = (req, next) => {
     if (
       !options?.supports?.constrained ||
       options?.supports?.constrained === 'none' ||
@@ -381,7 +380,8 @@ function getModelMiddleware(options: {
       return constratedSimulator(req, next);
     }
     return next(req);
-  });
+  };
+  middleware.push(constrained);
 
   return middleware;
 }
@@ -396,8 +396,9 @@ export const ModelReferenceSchema = z.object({
  * A reference to a model that includes optional configuration and version info.
  * Can be passed anywhere a {@link ModelArgument} is accepted.
  */
-export interface ModelReference<CustomOptions extends z.ZodTypeAny>
-  extends z.infer<typeof ModelReferenceSchema> {
+export interface ModelReference<
+  CustomOptions extends z.ZodTypeAny,
+> extends z.infer<typeof ModelReferenceSchema> {
   name: string;
   configSchema?: CustomOptions;
   info?: ModelInfo;
@@ -539,9 +540,7 @@ function getPartCounts(parts: Part[]): PartCounts {
  * {@link ModelAction}, or {@link ModelReference}.
  */
 export type ModelArgument<CustomOptions extends z.ZodTypeAny = z.ZodTypeAny> =
-  | ModelAction<CustomOptions>
-  | ModelReference<CustomOptions>
-  | string;
+  ModelAction<CustomOptions> | ModelReference<CustomOptions> | string;
 
 /** The result of resolving a {@link ModelArgument} to a concrete action, config, and version. */
 export interface ResolvedModel<

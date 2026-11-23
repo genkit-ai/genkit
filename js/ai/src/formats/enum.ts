@@ -33,7 +33,7 @@ export const enumFormatter: Formatter<string, string> = {
 
     let instructions: string | undefined;
     if (schema?.enum) {
-      instructions = `Output should be ONLY one of the following enum values. Do not output any additional information or add quotes.\n\n${schema.enum.map((v) => v.toString()).join('\n')}`;
+      instructions = `Output should be ONLY one of the following enum values. Do not output any additional information or add quotes.\n\n${schema.enum.map((v: unknown) => String(v)).join('\n')}`;
     }
 
     return {

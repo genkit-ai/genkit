@@ -32,7 +32,7 @@ import {
   type GenkitToolsError,
 } from '@genkit-ai/tools-common/manager';
 import { logger } from '@genkit-ai/tools-common/utils';
-import getPort, { makeRange } from 'get-port';
+import getPort, { portNumbers } from 'get-port';
 
 /** Shared help text for `--experimental-auth` on every command that spawns or hosts runtimes. */
 export const EXPERIMENTAL_AUTH_OPTION_HELP =
@@ -56,10 +56,15 @@ export async function resolveTelemetryServer(options: {
 }): Promise<string> {
   let telemetryServerUrl = process.env.GENKIT_TELEMETRY_SERVER;
   if (!telemetryServerUrl) {
-    const telemetryPort = await getPort({ port: makeRange(4033, 4999) });
-    telemetryServerUrl = `http://localhost:${telemetryPort}`;
+    const host = '127.0.0.1';
+    const telemetryPort = await getPort({
+      port: portNumbers(4033, 4999),
+      host,
+    });
+    telemetryServerUrl = `http://${host}:${telemetryPort}`;
     await startTelemetryServer({
       port: telemetryPort,
+      host,
       traceStore: new LocalFileTraceStore({
         storeRoot: options.projectRoot,
         indexRoot: options.projectRoot,
@@ -174,10 +179,12 @@ export async function getDevEnvVars(
   projectRoot: string,
   options?: DevProcessManagerOptions
 ): Promise<DevEnv> {
-  const telemetryServerUrl = await resolveTelemetryServer({
-    projectRoot,
-    corsOrigin: options?.corsOrigin,
-  });
+  const telemetryServerUrl =
+    options?.telemetryServerUrl ??
+    (await resolveTelemetryServer({
+      projectRoot,
+      corsOrigin: options?.corsOrigin,
+    }));
   const disableRealtimeTelemetry = options?.disableRealtimeTelemetry ?? false;
   const experimentalReflectionV2 = options?.experimentalReflectionV2 ?? false;
   const reflectionSecret = resolveReflectionSecret({
@@ -228,7 +235,7 @@ export async function getDevEnvVars(
     // Probe and URL must both match the interface the v2 server binds;
     // `localhost` may resolve to ::1 first and miss an IPv4-only listener.
     const host = options?.reflectionV2Host ?? DEFAULT_REFLECTION_V2_HOST;
-    reflectionV2Port = await getPort({ port: makeRange(3200, 3400), host });
+    reflectionV2Port = await getPort({ port: portNumbers(3200, 3400), host });
     envVars.GENKIT_REFLECTION_V2_SERVER = reflectionV2Url(
       host,
       reflectionV2Port
@@ -290,24 +297,38 @@ export async function startDevProcessManager(
 export async function waitForRuntime(
   manager: BaseRuntimeManager,
   processPromise: Promise<void>,
-  timeoutMs: number = 30000
+  timeoutMs: number = 30000,
+  existingRuntimeIds?: ReadonlySet<string>
 ): Promise<void> {
   let unsubscribe: (() => void) | undefined;
   let timeoutId: NodeJS.Timeout | undefined;
 
-  if (manager.listRuntimes().length > 0) {
+  const hasNewRuntime = () =>
+    manager
+      .listRuntimes()
+      .some(
+        (rt) =>
+          !existingRuntimeIds ||
+          (rt?.id !== undefined && !existingRuntimeIds.has(rt.id))
+      );
+
+  if (hasNewRuntime()) {
     return;
   }
 
   try {
     const runtimeAddedPromise = new Promise<void>((resolve) => {
-      unsubscribe = manager.onRuntimeEvent((event) => {
-        // Just listen for a new runtime, not for a specific ID.
-        if (event === RuntimeEvent.ADD) {
+      unsubscribe = manager.onRuntimeEvent((event, rt) => {
+        // Listen for a new runtime (ignoring pre-restart IDs if provided).
+        if (
+          event === RuntimeEvent.ADD &&
+          (!existingRuntimeIds ||
+            (rt?.id !== undefined && !existingRuntimeIds.has(rt.id)))
+        ) {
           resolve();
         }
       });
-      if (manager.listRuntimes().length > 0) {
+      if (hasNewRuntime()) {
         resolve();
       }
     });

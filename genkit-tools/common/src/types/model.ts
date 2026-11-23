@@ -14,15 +14,14 @@
  * limitations under the License.
  */
 import { z } from 'zod';
-import { DocumentDataSchema } from './document';
-import { RuntimeErrorSchema } from './error';
-import { MiddlewareRefSchema } from './middleware';
+import { DocumentDataSchema } from './document.js';
+import { RuntimeErrorSchema } from './error.js';
+import { MiddlewareRefSchema } from './middleware.js';
 import {
   CustomPartSchema,
   DataPartSchema,
   MediaPartSchema,
   MultipartToolResponseSchema,
-  Part,
   PartSchema,
   ReasoningPartSchema,
   ResourcePartSchema,
@@ -33,18 +32,18 @@ import {
   type DataPart,
   type MediaPart,
   type MultipartToolResponse,
+  type Part,
   type ReasoningPart,
   type ResourcePart,
   type TextPart,
   type ToolRequestPart,
   type ToolResponsePart,
-} from './parts';
+} from './parts.js';
 export {
   CustomPartSchema,
   DataPartSchema,
   MediaPartSchema,
   MultipartToolResponseSchema,
-  Part,
   PartSchema,
   ReasoningPartSchema,
   ResourcePartSchema,
@@ -55,6 +54,7 @@ export {
   type DataPart,
   type MediaPart,
   type MultipartToolResponse,
+  type Part,
   type ReasoningPart,
   type ResourcePart,
   type TextPart,
