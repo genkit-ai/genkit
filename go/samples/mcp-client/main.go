@@ -48,7 +48,10 @@ func clientExample() {
 	}
 	defer func() {
 		logger.FromContext(ctx).Info("Disconnecting from MCP server", "client", "mcp-time")
-		client.Disconnect()
+		if err := client.Disconnect(); err != nil {
+			logger.FromContext(ctx).Error("Failed to disconnect from MCP server", "client", "mcp-time", "error", err)
+			return
+		}
 		logger.FromContext(ctx).Info("Disconnected from MCP server", "client", "mcp-time")
 	}()
 
@@ -56,6 +59,10 @@ func clientExample() {
 	tools, err := client.ActiveTools(ctx)
 	if err != nil {
 		logger.FromContext(ctx).Error("Failed to get MCP time tools", "error", err)
+		return
+	}
+	if len(tools) == 0 {
+		logger.FromContext(ctx).Error("No MCP tools available; check MCP server connection", "client", "mcp-time")
 		return
 	}
 	logger.FromContext(ctx).Info("Found MCP time tools", "count", len(tools), "client", "mcp-time")

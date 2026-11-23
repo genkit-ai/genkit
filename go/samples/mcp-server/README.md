@@ -62,8 +62,13 @@ host, err := mcp.NewHost(mcp.MCPHostOptions{
     },
 })
 if err != nil {
-    return err
+    log.Fatal(err)
 }
+tools, err := host.ActiveTools(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+log.Printf("Found %d tools", len(tools))
 ```
 
 This example demonstrates the following workflow:
