@@ -37,20 +37,6 @@ go run client.go
 
 The `GenkitMCPClient` instance automatically spawns the server and makes tools available to use with `client.GetActiveTools()`. You can use these tools with any `Generate` method or `ExecutablePrompt`.
 
-### Option C: Use MCP tools from a DotPrompt file
-
-From `go/samples/mcp-server`, run the [DotPrompt client](dotprompt-client/main.go).
-It starts the existing `server.go` over stdio and executes
-[`encode.prompt`](dotprompt-client/prompts/encode.prompt).
-
-```bash
-export GEMINI_API_KEY=your_key
-go run ./dotprompt-client
-```
-
-The client registers the server's `text_encode` tool as `demo_text_encode`,
-matching the prompt's `tools:` entry.
-
 Alternatively, you can use the `MCPManager` for managing multiple servers:
 
 ```go
@@ -82,4 +68,18 @@ This example demonstrates the following workflow:
 3. AI automatically calls `fetch_url` then `summarize`
 4. Returns the summary 
 
-This option is useful when you have an genkit agent that needs access to utilities developed in the same project. 
+This option is useful when you have an genkit agent that needs access to utilities developed in the same project.
+
+### Option C: Use MCP tools from a DotPrompt file
+
+From `go/samples/mcp-server`, run the [DotPrompt client](dotprompt-client/main.go).
+It starts the existing `server.go` over stdio and executes
+[`encode.prompt`](dotprompt-client/prompts/encode.prompt).
+
+```bash
+export GEMINI_API_KEY=your_key
+go run ./dotprompt-client
+```
+
+The client registers the server's `text_encode` tool as `demo_text_encode`,
+matching the prompt's `tools:` entry.
