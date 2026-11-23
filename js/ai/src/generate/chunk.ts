@@ -119,7 +119,8 @@ export class GenerateResponseChunk<
    * @returns The first `data` part detected in the chunk (if any).
    */
   get data(): T | null {
-    return this.content.find((part) => part.data)?.data as T | null;
+    return this.content.find((part) => part.data !== undefined)
+      ?.data as T | null;
   }
 
   /**
@@ -138,7 +139,7 @@ export class GenerateResponseChunk<
    */
   get output(): T | null {
     if (this.parser) return this.parser(this);
-    return this.data || extractJson(this.accumulatedText);
+    return this.data ?? extractJson(this.accumulatedText);
   }
 
   toJSON(): GenerateResponseChunkData {

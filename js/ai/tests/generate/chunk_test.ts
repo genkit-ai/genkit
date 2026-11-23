@@ -40,4 +40,15 @@ describe('GenerateResponseChunk', () => {
       assert.strictEqual(testChunk.accumulatedText, 'old1old2new');
     });
   });
+
+  describe('falsy data parts', () => {
+    it('returns 0 from #data and #output', () => {
+      const chunk = new GenerateResponseChunk(
+        { index: 0, role: 'model', content: [{ data: 0 }] },
+        { index: 0, role: 'model', previousChunks: [] }
+      );
+      assert.strictEqual(chunk.data, 0);
+      assert.strictEqual(chunk.output, 0);
+    });
+  });
 });

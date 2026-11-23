@@ -162,7 +162,7 @@ export class GenerateResponse<O = unknown> implements ModelResponseData {
    * @returns The structured output contained in the selected candidate.
    */
   get output(): O | null {
-    return this.message?.output || null;
+    return this.message?.output ?? null;
   }
 
   /**
@@ -195,7 +195,7 @@ export class GenerateResponse<O = unknown> implements ModelResponseData {
    * @returns The first `data` part detected in the candidate (if any).
    */
   get data(): O | null {
-    return this.message?.data || null;
+    return this.message?.data ?? null;
   }
 
   /**

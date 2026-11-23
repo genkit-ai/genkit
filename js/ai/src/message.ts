@@ -82,7 +82,12 @@ export class Message<T = unknown> implements MessageData {
    * @returns The structured output contained in the message.
    */
   get output(): T {
-    return this.parser?.(this) || this.data || extractJson<T>(this.text);
+    const parsed = this.parser?.(this);
+    if (parsed) return parsed;
+    // A data part wins even when its value is falsy (0, false, '').
+    const dataPart = this.content.find((part) => part.data !== undefined);
+    if (dataPart) return dataPart.data as T;
+    return extractJson<T>(this.text);
   }
 
   toolResponseParts(): ToolResponsePart[] {
@@ -120,7 +125,8 @@ export class Message<T = unknown> implements MessageData {
    * @returns The first `data` part detected in the message (if any).
    */
   get data(): T | null {
-    return this.content.find((part) => part.data)?.data as T | null;
+    return this.content.find((part) => part.data !== undefined)
+      ?.data as T | null;
   }
 
   /**
