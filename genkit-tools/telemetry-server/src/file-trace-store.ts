@@ -32,6 +32,9 @@ const MAX_TRACES = 1000;
 const MAX_INDEX_FILES = 10;
 const MAX_LIST_ATTR_LENGTH = 1000;
 const INDEX_FORMAT_VERSION = 1;
+const REINDEX_LOCK_WAIT_MS = 10_000;
+const REINDEX_LOCK_POLL_MS = 50;
+const REINDEX_LOCK_STALE_MS = 30_000;
 
 /**
  * Implementation of trace store that persists traces on local disk.
@@ -95,18 +98,43 @@ export class LocalFileTraceStore implements TraceStore {
     return filePath;
   }
 
-  async init() {
-    const metadata = this.index.getMetadata();
-    // if the metadata file doesn't exist or it was for the older version or if
-    // there are too many index files we recreate the index.
-    if (
-      !metadata ||
-      metadata.version !== currentVersion ||
-      metadata.formatVersion !== INDEX_FORMAT_VERSION ||
-      this.index.listIndexFiles().length > MAX_INDEX_FILES
-    ) {
-      await this.reIndex();
+  private async withIndexLock<T>(fn: () => Promise<T>): Promise<T> {
+    const lockPath = path.resolve(this.indexRoot, '..', 'traces_idx.lock');
+    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+    await new Promise<void>((resolve, reject) => {
+      lockfile.lock(
+        lockPath,
+        {
+          wait: REINDEX_LOCK_WAIT_MS,
+          pollPeriod: REINDEX_LOCK_POLL_MS,
+          stale: REINDEX_LOCK_STALE_MS,
+        },
+        (err) => (err ? reject(err) : resolve())
+      );
+    });
+    try {
+      return await fn();
+    } finally {
+      await new Promise<void>((resolve) => {
+        lockfile.unlock(lockPath, () => resolve());
+      });
     }
+  }
+
+  async init() {
+    await this.withIndexLock(async () => {
+      const metadata = this.index.getMetadata();
+      // if the metadata file doesn't exist or it was for the older version or if
+      // there are too many index files we recreate the index.
+      if (
+        !metadata ||
+        metadata.version !== currentVersion ||
+        metadata.formatVersion !== INDEX_FORMAT_VERSION ||
+        this.index.listIndexFiles().length > MAX_INDEX_FILES
+      ) {
+        await this.reIndex();
+      }
+    });
   }
 
   private async reIndex() {
@@ -352,14 +380,19 @@ export class Index {
   writeMetadata() {
     const metadataPath = this.metadataFileName();
     const tmpPath = `${metadataPath}.${process.pid}.${Date.now()}.tmp`;
-    fs.writeFileSync(
-      tmpPath,
-      JSON.stringify({
-        version: currentVersion,
-        formatVersion: INDEX_FORMAT_VERSION,
-      })
-    );
-    fs.renameSync(tmpPath, metadataPath);
+    try {
+      fs.writeFileSync(
+        tmpPath,
+        JSON.stringify({
+          version: currentVersion,
+          formatVersion: INDEX_FORMAT_VERSION,
+        })
+      );
+      fs.renameSync(tmpPath, metadataPath);
+    } catch (err) {
+      fs.rmSync(tmpPath, { force: true });
+      throw err;
+    }
   }
 
   metadataFileName() {
