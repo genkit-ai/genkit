@@ -39,6 +39,11 @@
     "zod": "3.25.76"
   },
   "devDependencies": {
+    "@opentelemetry/api": "1.9.1",
+    "@opentelemetry/api-logs": "0.222.0",
+    "@opentelemetry/otlp-transformer": "0.222.0",
+    "@opentelemetry/sdk-logs": "0.222.0",
+    "@opentelemetry/sdk-trace": "2.11.0",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/lockfile": "^1.0.4",

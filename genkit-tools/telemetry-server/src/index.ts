@@ -350,16 +350,25 @@ export async function startTelemetryServer(params: {
         }
 
         const { parentTraceId, parentSpanId } = request.params;
-        const payload = Buffer.isBuffer(request.body)
-          ? decodeOtlpProtobuf(
-              request.body,
-              normalizedPath === '/api/otlp/v1/logs'
-                ? 'logs'
-                : normalizedPath === '/api/otlp/v1/traces' || parentTraceId
-                  ? 'traces'
-                  : undefined
-            )
-          : request.body;
+        const signal: 'traces' | 'logs' | undefined =
+          normalizedPath === '/api/otlp/v1/logs'
+            ? 'logs'
+            : normalizedPath === '/api/otlp/v1/traces' || parentTraceId
+              ? 'traces'
+              : undefined;
+        if (isProtobuf && !signal) {
+          response.status(400).json({
+            code: 3, // INVALID_ARGUMENT
+            message:
+              'Protobuf payloads require a signal-specific endpoint (/api/otlp/v1/traces or /api/otlp/v1/logs).',
+          });
+          return;
+        }
+
+        const payload =
+          Buffer.isBuffer(request.body) && signal
+            ? decodeOtlpProtobuf(request.body, signal)
+            : request.body;
 
         if (!payload?.resourceSpans?.length && !payload?.resourceLogs?.length) {
           // Acknowledge and ignore empty payloads.

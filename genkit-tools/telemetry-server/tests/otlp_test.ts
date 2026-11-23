@@ -537,7 +537,7 @@ describe('otlp-protobuf', () => {
     ]);
   });
 
-  it('auto-detects traces and logs without an explicit signal and decodes kvlistValue and bytesValue', () => {
+  it('decodes kvlistValue and bytesValue attributes', () => {
     const traceIdHex = 'c5892692eb25cce482eb13587b73c425';
     const spanIdHex = '86dc3d35cc11e336';
     const rawBytes = Buffer.from([0xde, 0xad, 0xbe, 0xef]);
@@ -566,8 +566,8 @@ describe('otlp-protobuf', () => {
     ]);
     const traceReqBuf = pbBytes(1, pbBytes(2, pbBytes(2, spanBuf)));
 
-    const autoDecodedTrace = decodeOtlpProtobuf(traceReqBuf);
-    const traceResult = traceDataFromOtlp(autoDecodedTrace);
+    const decodedTrace = decodeOtlpProtobuf(traceReqBuf, 'traces');
+    const traceResult = traceDataFromOtlp(decodedTrace);
     assert.strictEqual(traceResult.length, 1);
     assert.deepStrictEqual(
       traceResult[0].spans[spanIdHex].attributes['nested'],
@@ -577,38 +577,27 @@ describe('otlp-protobuf', () => {
       traceResult[0].spans[spanIdHex].attributes['raw'],
       rawBytes.toString('base64')
     );
-
-    const logRecordBuf = Buffer.concat([
-      pbFixed64(1, 1760827335359000000n),
-      pbVarintField(2, 9),
-      pbBytes(3, 'INFO'),
-      pbBytes(5, pbBytes(1, 'auto-detected log')),
-      pbBytes(9, Buffer.from(traceIdHex, 'hex')),
-      pbBytes(10, Buffer.from(spanIdHex, 'hex')),
-    ]);
-    const logReqBuf = pbBytes(1, pbBytes(2, pbBytes(2, logRecordBuf)));
-
-    const autoDecodedLogs = decodeOtlpProtobuf(logReqBuf);
-    const logResult = logDataFromOtlp(autoDecodedLogs);
-    assert.strictEqual(logResult.length, 1);
-    assert.strictEqual(logResult[0].body, 'auto-detected log');
-    assert.strictEqual(logResult[0].traceId, traceIdHex);
-    assert.strictEqual(logResult[0].spanId, spanIdHex);
   });
 
   it('throws on truncated or malformed protobuf payloads', () => {
-    assert.throws(() => decodeOtlpProtobuf(Buffer.from([0x0a, 0x10, 0x01])));
+    assert.throws(() =>
+      decodeOtlpProtobuf(Buffer.from([0x0a, 0x10, 0x01]), 'traces')
+    );
     // Unclosed group (wire type 3 without matching wire type 4)
     assert.throws(
       () =>
-        decodeOtlpProtobuf(Buffer.concat([pbTag(2, 3), pbVarintField(1, 1)])),
+        decodeOtlpProtobuf(
+          Buffer.concat([pbTag(2, 3), pbVarintField(1, 1)]),
+          'traces'
+        ),
       /unexpected EOF in group/
     );
     // Mismatched end-group field number
     assert.throws(
       () =>
         decodeOtlpProtobuf(
-          Buffer.concat([pbTag(2, 3), pbVarintField(1, 1), pbTag(3, 4)])
+          Buffer.concat([pbTag(2, 3), pbVarintField(1, 1), pbTag(3, 4)]),
+          'traces'
         ),
       /mismatched end-group field number/
     );

@@ -16,6 +16,22 @@
 
 import type { TraceData, TraceQueryFilter } from '@genkit-ai/tools-common';
 import { logger } from '@genkit-ai/tools-common/utils';
+import { SpanKind, SpanStatusCode, context, trace } from '@opentelemetry/api';
+import { SeverityNumber } from '@opentelemetry/api-logs';
+import {
+  ProtobufLogsSerializer,
+  ProtobufTraceSerializer,
+} from '@opentelemetry/otlp-transformer';
+import {
+  InMemoryLogRecordExporter,
+  LoggerProvider,
+  SimpleLogRecordProcessor,
+} from '@opentelemetry/sdk-logs';
+import {
+  InMemorySpanExporter,
+  SimpleSpanProcessor,
+  TracerProvider,
+} from '@opentelemetry/sdk-trace';
 import * as assert from 'assert';
 import fs from 'fs';
 import getPort from 'get-port';
@@ -1583,6 +1599,172 @@ describe('otlp-endpoint', () => {
     } finally {
       warnMock.mock.restore();
     }
+  });
+
+  it('rejects protobuf on /api/otlp without a signal path', async () => {
+    const res = await fetch(`${url}/api/otlp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-protobuf' },
+      body: Buffer.from([0x0a, 0x00]),
+    });
+    assert.strictEqual(res.status, 400);
+  });
+
+  it('ingests spans and logs encoded by @opentelemetry/otlp-transformer Protobuf serializers', async () => {
+    const spanExporter = new InMemorySpanExporter();
+    const tracerProvider = new TracerProvider({
+      spanProcessors: [new SimpleSpanProcessor({ exporter: spanExporter })],
+    });
+    const tracer = tracerProvider.getTracer('otel-sdk-tracer', '1.2.3');
+
+    const logExporter = new InMemoryLogRecordExporter();
+    const loggerProvider = new LoggerProvider({
+      processors: [new SimpleLogRecordProcessor({ exporter: logExporter })],
+    });
+    const otelLogger = loggerProvider.getLogger('otel-sdk-logger', '1.2.3');
+
+    const rootSpan = tracer.startSpan('root-flow', {
+      kind: SpanKind.SERVER,
+      attributes: {
+        'genkit:name': 'root-flow',
+        'genkit:isRoot': true,
+      },
+    });
+    const rootCtx = trace.setSpan(context.active(), rootSpan);
+
+    const childSpan = tracer.startSpan(
+      'model-call',
+      {
+        kind: SpanKind.CLIENT,
+        attributes: {
+          'gen_ai.request.model': 'gemini-2.5-flash',
+          'gen_ai.usage.input_tokens': 42,
+          'gen_ai.response.finish_reasons': ['stop'],
+        },
+      },
+      rootCtx
+    );
+    childSpan.setStatus({
+      code: SpanStatusCode.ERROR,
+      message: 'rate limited',
+    });
+
+    otelLogger.emit({
+      severityNumber: SeverityNumber.INFO,
+      severityText: 'INFO',
+      body: 'inference operation details',
+      attributes: {
+        'gen_ai.system': 'google_genai',
+        'gen_ai.request.temperature': 0.5,
+      },
+      context: trace.setSpan(context.active(), childSpan),
+    });
+
+    const childSpanContext = childSpan.spanContext();
+    const rootSpanContext = rootSpan.spanContext();
+    childSpan.end();
+    rootSpan.end();
+
+    await tracerProvider.forceFlush();
+    await loggerProvider.forceFlush();
+
+    const finishedSpans = spanExporter.getFinishedSpans();
+    assert.strictEqual(finishedSpans.length, 2);
+    const traceBytes = ProtobufTraceSerializer.serializeRequest(finishedSpans);
+    assert.ok(traceBytes);
+
+    const traceRes = await fetch(`${url}/api/otlp/v1/traces`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-protobuf' },
+      body: Buffer.from(traceBytes),
+    });
+    assert.strictEqual(traceRes.status, 200);
+    assert.match(
+      traceRes.headers.get('content-type') ?? '',
+      /^application\/x-protobuf\b/
+    );
+    const traceResBytes = new Uint8Array(await traceRes.arrayBuffer());
+    assert.deepStrictEqual(
+      ProtobufTraceSerializer.deserializeResponse(traceResBytes),
+      {}
+    );
+
+    const finishedLogs = logExporter.getFinishedLogRecords();
+    assert.strictEqual(finishedLogs.length, 1);
+    const logBytes = ProtobufLogsSerializer.serializeRequest(finishedLogs);
+    assert.ok(logBytes);
+
+    const logRes = await fetch(`${url}/api/otlp/v1/logs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-protobuf' },
+      body: Buffer.from(logBytes),
+    });
+    assert.strictEqual(logRes.status, 200);
+    assert.match(
+      logRes.headers.get('content-type') ?? '',
+      /^application\/x-protobuf\b/
+    );
+    const logResBytes = new Uint8Array(await logRes.arrayBuffer());
+    assert.deepStrictEqual(
+      ProtobufLogsSerializer.deserializeResponse(logResBytes),
+      {}
+    );
+
+    const getTraceRes = await fetch(
+      `${url}/api/traces/${rootSpanContext.traceId}`
+    );
+    assert.strictEqual(getTraceRes.status, 200);
+    const savedTrace = await getTraceRes.json();
+    assert.strictEqual(savedTrace.traceId, rootSpanContext.traceId);
+
+    const savedRoot = savedTrace.spans[rootSpanContext.spanId];
+    assert.ok(savedRoot);
+    assert.strictEqual(savedRoot.displayName, 'root-flow');
+    assert.strictEqual(savedRoot.spanKind, 'SERVER');
+    assert.strictEqual(savedRoot.parentSpanId, undefined);
+    assert.strictEqual(savedRoot.attributes['genkit:name'], 'root-flow');
+    assert.strictEqual(savedRoot.attributes['genkit:isRoot'], true);
+    assert.deepStrictEqual(savedRoot.instrumentationLibrary, {
+      name: 'otel-sdk-tracer',
+      version: '1.2.3',
+    });
+
+    const savedChild = savedTrace.spans[childSpanContext.spanId];
+    assert.ok(savedChild);
+    assert.strictEqual(savedChild.displayName, 'model-call');
+    assert.strictEqual(savedChild.spanKind, 'CLIENT');
+    assert.strictEqual(savedChild.parentSpanId, rootSpanContext.spanId);
+    assert.strictEqual(
+      savedChild.attributes['gen_ai.request.model'],
+      'gemini-2.5-flash'
+    );
+    assert.strictEqual(savedChild.attributes['gen_ai.usage.input_tokens'], 42);
+    assert.deepStrictEqual(
+      savedChild.attributes['gen_ai.response.finish_reasons'],
+      ['stop']
+    );
+    assert.deepStrictEqual(savedChild.status, {
+      code: 2,
+      message: 'rate limited',
+    });
+
+    const getLogsRes = await fetch(
+      `${url}/api/traces/${rootSpanContext.traceId}/logs`
+    );
+    assert.strictEqual(getLogsRes.status, 200);
+    const { logs } = await getLogsRes.json();
+    assert.strictEqual(logs.length, 1);
+    assert.strictEqual(logs[0].traceId, childSpanContext.traceId);
+    assert.strictEqual(logs[0].spanId, childSpanContext.spanId);
+    assert.strictEqual(logs[0].severityNumber, SeverityNumber.INFO);
+    assert.strictEqual(logs[0].severityText, 'INFO');
+    assert.strictEqual(logs[0].body, 'inference operation details');
+    assert.strictEqual(logs[0].attributes['gen_ai.system'], 'google_genai');
+    assert.strictEqual(logs[0].attributes['gen_ai.request.temperature'], 0.5);
+    assert.deepStrictEqual(logs[0].instrumentationLibrary, {
+      name: 'otel-sdk-logger',
+      version: '1.2.3',
+    });
   });
 });
 

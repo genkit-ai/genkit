@@ -226,8 +226,10 @@ describe('start command', () => {
       GENKIT_TELEMETRY_SERVER: '',
       OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:
         'http://localhost:4033/api/otlp/v1/traces',
+      OTEL_EXPORTER_OTLP_TRACES_PROTOCOL: 'http/protobuf',
       OTEL_EXPORTER_OTLP_LOGS_ENDPOINT:
         'http://localhost:4033/api/otlp/v1/logs',
+      OTEL_EXPORTER_OTLP_LOGS_PROTOCOL: 'http/protobuf',
     };
 
     beforeEach(() => {
@@ -274,7 +276,9 @@ describe('start command', () => {
       expect(logger.warn).toHaveBeenCalledWith(
         expect.stringContaining(
           '  export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:4033/api/otlp/v1/traces\n' +
-            '  export OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=http://localhost:4033/api/otlp/v1/logs'
+            '  export OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf\n' +
+            '  export OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=http://localhost:4033/api/otlp/v1/logs\n' +
+            '  export OTEL_EXPORTER_OTLP_LOGS_PROTOCOL=http/protobuf'
         )
       );
       expect(logger.warn).toHaveBeenCalledWith(

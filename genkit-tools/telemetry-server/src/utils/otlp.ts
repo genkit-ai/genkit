@@ -611,10 +611,7 @@ function decodeLogRecord(bytes: Uint8Array): OtlpLogRecord {
   }
 
   return {
-    timeUnixNano:
-      timeUnixNano && timeUnixNano !== '0'
-        ? timeUnixNano
-        : (observedTimeUnixNano ?? '0'),
+    timeUnixNano: timeUnixNano ?? '0',
     observedTimeUnixNano,
     severityNumber,
     severityText,
@@ -670,64 +667,13 @@ function decodeResourceLog(bytes: Uint8Array): OtlpResourceLog {
   return { resource, scopeLogs };
 }
 
-function isResourceLogsMessage(resourceBytes: Uint8Array): boolean {
-  const resReader = new ProtoReader(resourceBytes);
-  while (!resReader.eof()) {
-    const { fieldNumber, wireType } = resReader.readTag();
-    if (fieldNumber === 2 && wireType === 2) {
-      const scopeReader = new ProtoReader(resReader.readBytes(wireType));
-      while (!scopeReader.eof()) {
-        const { fieldNumber: sf, wireType: sw } = scopeReader.readTag();
-        if (sf === 2 && sw === 2) {
-          const itemReader = new ProtoReader(scopeReader.readBytes(sw));
-          while (!itemReader.eof()) {
-            const { fieldNumber: f, wireType: w } = itemReader.readTag();
-            if (
-              (f === 1 && w === 1) ||
-              (f === 2 && w === 0) ||
-              (f === 6 && w === 2) ||
-              (f === 7 && w === 0) ||
-              (f === 8 && w === 5) ||
-              (f === 10 && w === 2) ||
-              (f === 11 && w === 1) ||
-              (f === 12 && w === 2)
-            ) {
-              return true;
-            }
-            if (
-              (f === 1 && w === 2) ||
-              (f === 2 && w === 2) ||
-              (f === 4 && w === 2) ||
-              (f === 6 && w === 0) ||
-              (f === 7 && w === 1) ||
-              (f === 8 && w === 1) ||
-              (f === 10 && w === 0) ||
-              (f === 11 && w === 2) ||
-              (f === 12 && w === 0) ||
-              f >= 13
-            ) {
-              return false;
-            }
-            itemReader.skipField(w, f);
-          }
-        } else {
-          scopeReader.skipField(sw, sf);
-        }
-      }
-    } else {
-      resReader.skipField(wireType, fieldNumber);
-    }
-  }
-  return false;
-}
-
 /**
  * Decodes an OTLP protobuf wire payload (`ExportTraceServiceRequest` or
  * `ExportLogsServiceRequest`) into an {@link OtlpPayload}.
  */
 export function decodeOtlpProtobuf(
   buf: Uint8Array,
-  signal?: 'traces' | 'logs'
+  signal: 'traces' | 'logs'
 ): OtlpPayload {
   const reader = new ProtoReader(buf);
   const resourceSpans: OtlpResourceSpan[] = [];
@@ -737,10 +683,7 @@ export function decodeOtlpProtobuf(
     const { fieldNumber, wireType } = reader.readTag();
     if (fieldNumber === 1 && wireType === 2) {
       const entryBytes = reader.readBytes(wireType);
-      const isLogs =
-        signal === 'logs' ||
-        (signal === undefined && isResourceLogsMessage(entryBytes));
-      if (isLogs) {
+      if (signal === 'logs') {
         resourceLogs.push(decodeResourceLog(entryBytes));
       } else {
         resourceSpans.push(decodeResourceSpan(entryBytes));
@@ -845,17 +788,11 @@ function toSpanData(span: OtlpSpan, scope?: OtlpScopeSpan['scope']): SpanData {
   return spanData;
 }
 
-export function traceDataFromOtlp(
-  otlpData: OtlpPayload | Uint8Array
-): TraceData[] {
-  const payload =
-    otlpData instanceof Uint8Array
-      ? decodeOtlpProtobuf(otlpData, 'traces')
-      : otlpData;
+export function traceDataFromOtlp(otlpData: OtlpPayload): TraceData[] {
   const traces: Record<string, TraceData> = {};
 
-  if (payload.resourceSpans) {
-    payload.resourceSpans.forEach((resourceSpan) => {
+  if (otlpData.resourceSpans) {
+    otlpData.resourceSpans.forEach((resourceSpan) => {
       (resourceSpan.scopeSpans ?? []).forEach((scopeSpan) => {
         (scopeSpan.spans ?? []).forEach((span) => {
           if (!traces[span.traceId]) {
@@ -915,17 +852,11 @@ function toLogRecordData(
   };
 }
 
-export function logDataFromOtlp(
-  otlpData: OtlpPayload | Uint8Array
-): LogRecordData[] {
-  const payload =
-    otlpData instanceof Uint8Array
-      ? decodeOtlpProtobuf(otlpData, 'logs')
-      : otlpData;
+export function logDataFromOtlp(otlpData: OtlpPayload): LogRecordData[] {
   const logs: LogRecordData[] = [];
-  if (!payload.resourceLogs) return logs;
+  if (!otlpData.resourceLogs) return logs;
 
-  payload.resourceLogs.forEach((resourceLog) => {
+  otlpData.resourceLogs.forEach((resourceLog) => {
     (resourceLog.scopeLogs ?? []).forEach((scopeLog) => {
       (scopeLog.logRecords ?? []).forEach((log) => {
         logs.push(toLogRecordData(log, scopeLog.scope));
