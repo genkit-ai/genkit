@@ -52,6 +52,7 @@ import type {
   ChatCompletionTool,
 } from 'openai/resources/index.mjs';
 import { PluginOptions } from './index.js';
+import { closeObjectSchemas } from './strict-schema.js';
 import { maybeCreateRequestScopedOpenAIClient, toModelName } from './utils.js';
 
 /**
@@ -639,7 +640,11 @@ export function toOpenAIRequestBody(
         type: 'json_schema',
         json_schema: {
           name: 'output',
-          schema: request.output!.schema,
+          // Strict mode requires every object to be closed.
+          schema:
+            strict === true
+              ? closeObjectSchemas(request.output!.schema!)
+              : request.output!.schema,
           ...(strict !== undefined ? { strict } : {}),
         },
       };
