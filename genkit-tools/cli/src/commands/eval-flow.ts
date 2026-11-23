@@ -42,8 +42,8 @@ import { Command, Option } from 'commander';
 import {
   EXPERIMENTAL_AUTH_OPTION_HELP,
   runWithManager,
-} from '../utils/manager-utils';
-import { parseJson, parsePositiveInt } from '../utils/option-parsers';
+} from '../utils/manager-utils.js';
+import { parseJson, parsePositiveInt } from '../utils/option-parsers.js';
 
 interface EvalFlowRunCliOptions {
   /** --experimental-auth. */
@@ -66,6 +66,7 @@ enum SourceType {
 
 /** Command to run a flow and evaluate the output */
 export const evalFlow = new Command('eval:flow')
+  .allowExcessArguments(true)
   .usage('[options] <flowName> [data] [-- <command...>]')
   .description(
     'evaluate a flow against configured evaluators using provided data as input'

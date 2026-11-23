@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-import type { GenerateRequest } from '@genkit-ai/ai/model';
 import { googleAI } from '@genkit-ai/google-genai';
+import type { GenerateRequest } from 'genkit/model';
 import { ai } from '../genkit.js';
 import { MenuQuestionInputSchema, type MenuQuestionInput } from '../types';
 

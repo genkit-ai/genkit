@@ -27,7 +27,7 @@ import {
   ensureToolIds,
   fromInteraction,
   toInteractionConfigTool,
-  toInteractionResponseModalities,
+  toInteractionResponseFormat,
   toInteractionSteps,
   toInteractionTool,
 } from '../common/interaction-converters.js';
@@ -189,18 +189,22 @@ export function listKnownModels(
 const THINKING_SUMMARIES = { AUTO: 'auto', NONE: 'none' } as const;
 const VISUALIZATION = { AUTO: 'auto', OFF: 'off' } as const;
 
-/** The `response_format` for JSON output; undefined for text output. */
+/**
+ * The `response_format`: JSON output and the requested output types as
+ * entries; undefined when neither is set (the agent's defaults apply).
+ */
 function toDeepResearchResponseFormat(
-  output?: GenerateRequest['output']
-): Record<string, unknown> | undefined {
-  if (output?.format !== 'json' && output?.contentType !== 'application/json') {
-    return undefined;
-  }
-  return {
-    type: 'text',
-    mime_type: 'application/json',
-    ...(output.schema ? { schema: cleanSchema(output.schema) } : {}),
-  };
+  output: GenerateRequest['output'],
+  responseModalities?: string[]
+): Record<string, unknown> | Record<string, unknown>[] | undefined {
+  const json =
+    output?.format === 'json' || output?.contentType === 'application/json';
+  return toInteractionResponseFormat({
+    modalities: responseModalities,
+    json: json
+      ? { schema: output?.schema ? cleanSchema(output.schema) : undefined }
+      : undefined,
+  });
 }
 
 export function defineModel(
@@ -275,10 +279,10 @@ export function defineModel(
         // anyway. When nothing is set, the server's default is used.
         store: store ?? pluginOptions?.store,
         tools: tools.length ? tools : undefined,
-        response_format: toDeepResearchResponseFormat(request.output),
-        response_modalities: responseModalities
-          ? toInteractionResponseModalities(responseModalities)
-          : undefined,
+        response_format: toDeepResearchResponseFormat(
+          request.output,
+          responseModalities
+        ),
         ...rest,
       };
 

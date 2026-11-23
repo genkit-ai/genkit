@@ -26,9 +26,10 @@ from typing import Any
 import yaml
 from pydantic import BaseModel as PydanticBaseModel, Field
 
-from genkit import Message, ModelResponse, Part, Role, Tool, tool
-from genkit.middleware import BaseMiddleware, GenerateHookParams, GenerateMiddlewareContext
+from genkit import Message, ModelResponse, Part, Role, Tool
+from genkit.middleware import GenerateHookParams, Middleware, MiddlewareContext
 from genkit.model import GenerateActionOptions
+from genkit.plugin_api import GenkitConfig
 
 _SKILLS_MARKER = 'skills-instructions'
 _MISSING_DESCRIPTION = 'No description provided.'
@@ -40,14 +41,17 @@ class _UseSkillInput(PydanticBaseModel):
     skill_name: str = Field(description='The name of the skill to load (as listed in the system prompt).')
 
 
-class SkillsConfig(PydanticBaseModel):
+class SkillsConfig(GenkitConfig):
     """Directories to scan for skill folders containing ``SKILL.md``."""
 
     skill_paths: list[str] = Field(default_factory=lambda: ['skills'])
 
 
-class Skills(BaseMiddleware[SkillsConfig]):
+class Skills(Middleware[SkillsConfig]):
     """Skills middleware that exposes ``SKILL.md`` files as loadable instructions."""
+
+    name = 'skills'
+    description = 'Provides access to skill library for specialized instructions'
 
     def _scan_skills(self) -> dict[str, dict[str, str]]:
         skills: dict[str, dict[str, str]] = {}
@@ -145,7 +149,7 @@ class Skills(BaseMiddleware[SkillsConfig]):
         new_options.messages = messages
         return new_options
 
-    def tools(self, ctx: GenerateMiddlewareContext) -> list[Tool]:
+    def tools(self, ctx: MiddlewareContext) -> list[Tool]:
         if not self._scan_skills():
             return []
 
@@ -162,13 +166,13 @@ class Skills(BaseMiddleware[SkillsConfig]):
             except Exception as exc:
                 return f'Failed to read skill "{skill_name}": {exc}'
 
-        return [tool(use_skill, description='Load a skill by name.')]
+        return [Tool(use_skill, description='Load a skill by name.')]
 
     async def wrap_generate(
         self,
         params: GenerateHookParams,
-        ctx: GenerateMiddlewareContext,
-        next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ctx: MiddlewareContext,
+        next_fn: Callable[[GenerateHookParams, MiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         skills = await asyncio.to_thread(self._scan_skills)
         if skills:

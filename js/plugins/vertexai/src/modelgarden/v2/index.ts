@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { GenkitError, ModelReference, z } from 'genkit';
+import { GenkitError, ModelReference, z, type ActionMetadata } from 'genkit';
 import { genkitPluginV2, type GenkitPluginV2 } from 'genkit/plugin';
 import { ActionType } from 'genkit/registry';
 import { getDerivedParams } from '../../common/index.js';
@@ -73,7 +73,7 @@ async function listActions(options?: PluginOptions) {
 export function vertexModelGardenPlugin(
   options: PluginOptions
 ): GenkitPluginV2 {
-  let listActionsCache;
+  let listActionsCache: ActionMetadata[] | undefined;
   return genkitPluginV2({
     name: 'vertex-model-garden',
     init: async () => await initializer(options),

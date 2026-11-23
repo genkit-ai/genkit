@@ -15,24 +15,27 @@
  */
 
 import * as trpcExpress from '@trpc/server/adapters/express';
-import * as bodyParser from 'body-parser';
 import * as clc from 'colorette';
 import cors from 'cors';
 import express, { type ErrorRequestHandler } from 'express';
 import type { Server } from 'http';
 import os from 'os';
 import path from 'path';
-import type { GenkitToolsError } from '../manager';
-import type { BaseRuntimeManager } from '../manager/manager';
-import { detectRuntimeSync, logger, writeToolsInfoFile } from '../utils';
+import type { GenkitToolsError } from '../manager/index.js';
+import type { BaseRuntimeManager } from '../manager/manager.js';
 import {
   createToolsRequestEvent,
   extractActionType,
   recordRequestEvent,
-} from '../utils/analytics';
-import { toolsPackage } from '../utils/package';
-import { downloadAndExtractUiAssets } from '../utils/ui-assets';
-import { TOOLS_SERVER_ROUTER } from './router';
+} from '../utils/analytics.js';
+import {
+  detectRuntimeSync,
+  logger,
+  writeToolsInfoFile,
+} from '../utils/index.js';
+import { toolsPackage } from '../utils/package.js';
+import { downloadAndExtractUiAssets } from '../utils/ui-assets.js';
+import { TOOLS_SERVER_ROUTER } from './router.js';
 
 const MAX_PAYLOAD_SIZE = 30000000;
 /**
@@ -168,7 +171,7 @@ export function startServer(
   // TODO: migrate to streamingMutation when it becomes available in tRPC.
   app.post(
     '/api/runAction',
-    bodyParser.json({ limit: MAX_PAYLOAD_SIZE }),
+    express.json({ limit: MAX_PAYLOAD_SIZE }),
     loggedExpressRoute('runAction', projectRuntime),
     async (req, res) => {
       // Set headers but don't flush yet - wait for trace ID (if realtime telemetry enabled)
@@ -216,7 +219,7 @@ export function startServer(
 
   app.post(
     '/api/streamAction',
-    bodyParser.json({ limit: MAX_PAYLOAD_SIZE }),
+    express.json({ limit: MAX_PAYLOAD_SIZE }),
     loggedExpressRoute('streamAction', projectRuntime),
     async (req, res) => {
       // Set streaming headers but don't flush yet - wait for trace ID (if realtime telemetry enabled)
@@ -274,10 +277,10 @@ export function startServer(
 
   app.post(
     '/api/sendBidiInput',
-    bodyParser.json({ limit: MAX_PAYLOAD_SIZE }),
+    express.json({ limit: MAX_PAYLOAD_SIZE }),
     loggedExpressRoute('sendBidiInput', projectRuntime),
     (req, res) => {
-      const { traceId, chunk } = req.body;
+      const { traceId, chunk } = req.body ?? {};
       const stream = activeInputStreams.get(traceId);
       if (stream) {
         stream.push(chunk);
@@ -290,10 +293,10 @@ export function startServer(
 
   app.post(
     '/api/endBidiInput',
-    bodyParser.json(),
+    express.json(),
     loggedExpressRoute('endBidiInput', projectRuntime),
     (req, res) => {
-      const { traceId } = req.body;
+      const { traceId } = req.body ?? {};
       const stream = activeInputStreams.get(traceId);
       if (stream) {
         stream.close();
@@ -310,10 +313,10 @@ export function startServer(
 
   app.post(
     '/api/streamTrace',
-    bodyParser.json({ limit: MAX_PAYLOAD_SIZE }),
+    express.json({ limit: MAX_PAYLOAD_SIZE }),
     loggedExpressRoute('streamTrace', projectRuntime),
     async (req, res) => {
-      const { traceId } = req.body;
+      const { traceId } = req.body ?? {};
 
       if (!traceId) {
         res.status(400).json({ error: 'traceId is required' });
@@ -370,7 +373,7 @@ export function startServer(
     })
   );
 
-  app.all('*', (_, res) => {
+  app.all('/{*splat}', (_, res) => {
     res.status(200).sendFile('/', { root: UI_ASSETS_SERVE_PATH });
   });
 

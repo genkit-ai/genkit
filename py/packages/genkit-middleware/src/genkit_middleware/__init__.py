@@ -35,44 +35,16 @@ them in the Dev UI and to name them in a ``.prompt`` file's ``use:``.
 ``genkit_middleware.exp`` alongside the other experimental agent APIs.
 """
 
-from genkit.middleware import GenerateMiddleware
-from genkit.plugin_api import MiddlewarePlugin
+from genkit.middleware import Middleware as GenkitMiddleware
+from genkit.plugin_api import Action, ActionKind, Plugin
 from genkit_middleware._fallback import Fallback
 from genkit_middleware._filesystem import Filesystem
 from genkit_middleware._retry import Retry
 from genkit_middleware._skills import Skills
 from genkit_middleware._tool_approval import ToolApproval
 
-_MIDDLEWARE_DESCS = [
-    GenerateMiddleware(
-        cls=Retry,
-        name='retry',
-        description='Retries model calls on transient failures with exponential backoff',
-    ),
-    GenerateMiddleware(
-        cls=Fallback,
-        name='fallback',
-        description='Falls back to alternative models on failure',
-    ),
-    GenerateMiddleware(
-        cls=ToolApproval,
-        name='tool_approval',
-        description='Requires approval before executing tools',
-    ),
-    GenerateMiddleware(
-        cls=Skills,
-        name='skills',
-        description='Provides access to skill library for specialized instructions',
-    ),
-    GenerateMiddleware(
-        cls=Filesystem,
-        name='filesystem',
-        description='Sandboxed filesystem operations',
-    ),
-]
 
-
-class Middleware(MiddlewarePlugin):
+class Middleware(Plugin):
     """Plugin that registers Retry, Fallback, ToolApproval, Skills, and Filesystem.
 
     Registering lists them in the Dev UI and lets a ``.prompt`` file name them
@@ -93,7 +65,7 @@ class Middleware(MiddlewarePlugin):
 
         # 2. Generate with automatic retry resilience
         res = await ai.generate(
-            model=GoogleAI.gemini_model('gemini-flash-latest'),
+            model=GoogleAI.gemini('gemini-flash-latest'),
             prompt='Summarize quantum computing.',
             use=[Retry(max_retries=3)],
         )
@@ -105,7 +77,22 @@ class Middleware(MiddlewarePlugin):
     """
 
     name = 'genkit-middleware'
-    middleware = list(_MIDDLEWARE_DESCS)
+
+    async def init(self) -> list[Action]:
+        """No actions; this plugin only contributes middleware."""
+        return []
+
+    async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
+        """Resolves nothing."""
+        return None
+
+    async def list_actions(self) -> list[Action]:
+        """Lists nothing."""
+        return []
+
+    def list_middleware(self) -> list[type[GenkitMiddleware]]:
+        """Retry, Fallback, ToolApproval, Skills and Filesystem."""
+        return [Retry, Fallback, ToolApproval, Skills, Filesystem]
 
 
 __all__ = [

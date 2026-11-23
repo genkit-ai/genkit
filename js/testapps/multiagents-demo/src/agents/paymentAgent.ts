@@ -14,13 +14,14 @@
  * limitations under the License.
  */
 
+import { googleAI } from '@genkit-ai/google-genai';
 import { ai } from '../config/genkit';
 import { processPaymentTool } from '../tools';
 
 // Simple agent for processing payments
 export const agent = ai.definePrompt({
   name: 'paymentAgent',
-  model: 'googleai/gemini-2.5-flash-lite',
+  model: googleAI.model('gemini-flash-lite-latest'),
   description: 'Payment Agent can help process payments',
   tools: [processPaymentTool],
   system: `You are a payment agent for TechStore Computer Shop.

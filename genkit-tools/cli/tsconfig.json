@@ -1,7 +1,6 @@
 {
   "extends": "../tsconfig.base.json",
   "compilerOptions": {
-    "module": "commonjs",
     "outDir": "dist",
     "types": ["bun-types"],
     "resolveJsonModule": true

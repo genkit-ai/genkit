@@ -32,8 +32,8 @@ import { writeFile } from 'fs/promises';
 import {
   EXPERIMENTAL_AUTH_OPTION_HELP,
   runWithManager,
-} from '../utils/manager-utils';
-import { parsePositiveInt } from '../utils/option-parsers';
+} from '../utils/manager-utils.js';
+import { parsePositiveInt } from '../utils/option-parsers.js';
 
 interface EvalDatasetOptions {
   /** --experimental-auth. */
@@ -45,6 +45,7 @@ interface EvalDatasetOptions {
 
 /** Command to extract evaluation data. */
 export const evalExtractData = new Command('eval:extract-data')
+  .allowExcessArguments(true)
   .alias('eval:extractData')
   .description('extract evaluation data for a given flow from the trace store')
   .argument('<flowName>', 'name of the flow to extract data for')

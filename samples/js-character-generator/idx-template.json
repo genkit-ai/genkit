@@ -1,8 +1,0 @@
-{
-  "name": "Genkit",
-  "description": "Build a new web app using Genkit",
-  "categories": ["Web app", "AI ML"],
-  "icon": "https://www.gstatic.com/monospace/240513/logo_firebase.svg",
-  "params": [],
-  "publisher": "Google LLC"
-}

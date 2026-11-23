@@ -907,8 +907,7 @@ async function createServerWithFlows(
   echoModel: ModelAction
 ): Promise<http.Server> {
   const actions: (
-    | ActionWithOptions<any, any, any>
-    | import('genkit/beta').Flow<any, any, any>
+    ActionWithOptions<any, any, any> | import('genkit/beta').Flow<any, any, any>
   )[] = [
     voidInput,
     stringInput,

@@ -17,9 +17,9 @@
 import * as fsSync from 'fs';
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import type { Runtime } from '../manager/types';
-import { isConnectionRefusedError } from './errors';
-import { logger } from './logger';
+import type { Runtime } from '../manager/types.js';
+import { isConnectionRefusedError } from './errors.js';
+import { logger } from './logger.js';
 
 export interface DevToolsInfo {
   /** URL of the dev tools server. */

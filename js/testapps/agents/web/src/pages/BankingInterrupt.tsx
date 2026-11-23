@@ -175,8 +175,7 @@ export default function BankingInterrupt() {
     const pending = res.interrupts.find((i) => i.name === 'userApproval');
     if (pending) {
       const input = pending.input as
-        | { action?: string; details?: string }
-        | undefined;
+        { action?: string; details?: string } | undefined;
       setInterrupt({
         interrupt: pending,
         action: input?.action || 'Unknown',

@@ -39,7 +39,7 @@ classifiers = [
   "License :: OSI Approved :: Apache Software License",
 ]
 dependencies = [
-  "pydantic>=2.10.5",
+  "pydantic>=2.11",
   "jsonschema>=4.23.0",
   "partial-json-parser>=0.2.1.1.post5",
   "json5>=0.10.0",
@@ -71,23 +71,25 @@ license = "Apache-2.0"
 name = "genkit"
 readme = "README.md"
 requires-python = ">=3.10"
-version = "0.12.0"
+version = "0.13.0"
 
 [project.optional-dependencies]
-a2ui                  = ["genkit-a2ui"]
-amazon-bedrock        = ["genkit-amazon-bedrock"]
-anthropic             = ["genkit-anthropic"]
-django                = ["genkit-django"]
-evaluators            = ["genkit-evaluators"]
-fastapi               = ["genkit-fastapi"]
-flask                 = ["genkit-flask"]
-google-cloud          = ["genkit-google-cloud"]
-google-genai          = ["genkit-google-genai"]
-middleware            = ["genkit-middleware"]
-otel                  = ["genkit-otel"]
-ollama                = ["genkit-ollama"]
-openai                = ["genkit-openai"]
-vertex-ai             = ["genkit-vertexai[anthropic,openai]"]
+a2ui                  = ["genkit-a2ui>=0.13.0,<2"]
+amazon-bedrock        = ["genkit-amazon-bedrock>=0.13.0,<2"]
+anthropic             = ["genkit-anthropic>=0.13.0,<2"]
+django                = ["genkit-django>=0.13.0,<2"]
+evaluators            = ["genkit-evaluators>=0.13.0,<1"]
+fastapi               = ["genkit-fastapi>=0.13.0,<2"]
+flask                 = ["genkit-flask>=0.13.0,<2"]
+google-cloud          = ["genkit-google-cloud>=0.13.0,<2"]
+google-genai          = ["genkit-google-genai>=0.13.0,<2"]
+mcp                   = ["genkit-mcp>=0.13.0,<2"]
+middleware            = ["genkit-middleware>=0.13.0,<2"]
+otel                  = ["genkit-otel>=0.13.0,<2"]
+ollama                = ["genkit-ollama>=0.13.0,<2"]
+openai                = ["genkit-openai>=0.13.0,<2"]
+vertex-ai             = ["genkit-vertexai[anthropic,openai]>=0.13.0,<2"]
+vertexai              = ["genkit-vertexai[anthropic,openai]>=0.13.0,<2"]
 
 [project.urls]
 "Bug Tracker"   = "https://github.com/genkit-ai/genkit/issues"
@@ -112,6 +114,7 @@ DEP002 = [
   "genkit-flask",
   "genkit-google-cloud",
   "genkit-google-genai",
+  "genkit-mcp",
   "genkit-middleware",
   "genkit-ollama",
   "genkit-openai",
@@ -125,10 +128,6 @@ DEP003 = ["pydantic_core"]
 [tool.hatch.build.targets.wheel]
 packages = ["src/genkit"]
 
-[tool.pytest.ini_options]
-pythonpath = [".", "src", "tests", "packages/genkit/src"]
-testpaths  = ["tests"]
-
 [tool.uv.sources]
 genkit-a2ui                         = { workspace = true }
 genkit-amazon-bedrock               = { workspace = true }
@@ -139,6 +138,7 @@ genkit-fastapi                      = { workspace = true }
 genkit-flask                        = { workspace = true }
 genkit-google-cloud                 = { workspace = true }
 genkit-google-genai                 = { workspace = true }
+genkit-mcp                          = { workspace = true }
 genkit-middleware                   = { workspace = true }
 genkit-otel                         = { workspace = true }
 genkit-ollama                       = { workspace = true }

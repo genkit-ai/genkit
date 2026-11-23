@@ -39,7 +39,7 @@ ai = Genkit(plugins=[GoogleAI()])
 
 writer = ai.define_agent(
     name='writer',
-    model=GoogleAI.gemini_model('gemini-flash-latest'),
+    model=GoogleAI.gemini('gemini-flash-latest'),
     system=(
         'You build a landing page in a single artifact named "landing.md". On every '
         'request rewrite the whole file, keep it under 14 lines, and reply with one '

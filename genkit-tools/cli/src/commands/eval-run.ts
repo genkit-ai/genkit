@@ -34,8 +34,8 @@ import { Command, Option } from 'commander';
 import {
   EXPERIMENTAL_AUTH_OPTION_HELP,
   runWithManager,
-} from '../utils/manager-utils';
-import { parsePositiveInt } from '../utils/option-parsers';
+} from '../utils/manager-utils.js';
+import { parsePositiveInt } from '../utils/option-parsers.js';
 
 interface EvalRunCliOptions {
   /** --experimental-auth. */
@@ -49,6 +49,7 @@ interface EvalRunCliOptions {
 
 /** Command to run evaluation on a dataset. */
 export const evalRun = new Command('eval:run')
+  .allowExcessArguments(true)
   .usage('[options] <dataset> [-- <command...>]')
   .description('evaluate provided dataset against configured evaluators')
   .argument(

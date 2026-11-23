@@ -31,7 +31,7 @@ from typing import Any
 from _ai import ai, reply_text
 from pydantic import BaseModel
 
-from genkit import ActionRunContext, Part
+from genkit import FlowContext, Part
 from genkit.exp import current_session
 from genkit.exp.agent import Artifact
 
@@ -62,7 +62,7 @@ workspace_agent = ai.define_agent(
 
 
 @ai.flow()
-async def test_workspace_agent(text: str, ctx: ActionRunContext) -> dict[str, Any]:
+async def test_workspace_agent(text: str, ctx: FlowContext) -> dict[str, Any]:
     """Ask for a file; watch it arrive as an artifact chunk, then in chat.artifacts."""
     chat = workspace_agent.chat()
     turn = chat.send_stream(text or 'Write poem.txt with a short poem about genkit')

@@ -36,12 +36,18 @@ Example:
     ```
 """
 
-from genkit_amazon_bedrock._config import BedrockConfig
+from genkit_amazon_bedrock._config import (
+    BedrockConfig,
+    StabilityAspectRatio,
+    StabilityImageConfig,
+)
 from genkit_amazon_bedrock._converters import cache_point_part
 from genkit_amazon_bedrock._plugin import Bedrock
 
 __all__ = [
     'Bedrock',
     'BedrockConfig',
+    'StabilityAspectRatio',
+    'StabilityImageConfig',
     'cache_point_part',
 ]

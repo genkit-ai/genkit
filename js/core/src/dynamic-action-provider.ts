@@ -26,7 +26,10 @@ import { ActionMetadataRecord, ActionType, Registry } from './registry.js';
 
 type DapValue = {
   [K in ActionType]?: Action<z.ZodTypeAny, z.ZodTypeAny, z.ZodTypeAny>[];
-};
+} & Record<
+  string,
+  Action<z.ZodTypeAny, z.ZodTypeAny, z.ZodTypeAny>[] | undefined
+>;
 
 class SimpleCache {
   private value: DapValue | undefined;
@@ -202,7 +205,10 @@ function implementDap(dap: DynamicActionProviderAction, cache: SimpleCache) {
   dap.getAction = async (actionType: string, actionName: string) => {
     const result = await dap.__cache.getOrFetch();
     if (result[actionType]) {
-      return result[actionType].find((t) => t.__action.name == actionName);
+      return result[actionType]!.find(
+        (t: Action<z.ZodTypeAny, z.ZodTypeAny, z.ZodTypeAny>) =>
+          t.__action.name == actionName
+      );
     }
     return undefined;
   };
@@ -214,7 +220,9 @@ function implementDap(dap: DynamicActionProviderAction, cache: SimpleCache) {
     }
 
     // Match everything in the actionType
-    const metadata = result[actionType].map((a) => a.__action);
+    const metadata = result[actionType]!.map(
+      (a: Action<z.ZodTypeAny, z.ZodTypeAny, z.ZodTypeAny>) => a.__action
+    );
     if (actionName == '*') {
       return metadata;
     }
@@ -222,11 +230,11 @@ function implementDap(dap: DynamicActionProviderAction, cache: SimpleCache) {
     // Prefix matching
     if (actionName.endsWith('*')) {
       const prefix = actionName.slice(0, -1);
-      return metadata.filter((m) => m.name.startsWith(prefix));
+      return metadata.filter((m: ActionMetadata) => m.name?.startsWith(prefix));
     }
 
     // Single match or empty array
-    return metadata.filter((m) => m.name == actionName);
+    return metadata.filter((m: ActionMetadata) => m.name == actionName);
   };
 
   // This is called by listResolvableActions which is used by the
@@ -239,6 +247,7 @@ function implementDap(dap: DynamicActionProviderAction, cache: SimpleCache) {
     // not having them in the trace is fine.
     const result = await dap.__cache.getOrFetch({ skipTrace: true });
     for (const actions of Object.values(result)) {
+      if (!actions) continue;
       const metadataList = actions.map((a) => a.__action);
       for (const metadata of metadataList) {
         if (!metadata.name || !metadata.key) {

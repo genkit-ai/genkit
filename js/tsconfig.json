@@ -8,8 +8,8 @@
     "moduleResolution": "NodeNext",
     "allowSyntheticDefaultImports": true,
     "noImplicitReturns": true,
+    "noImplicitAny": true,
     "noUnusedLocals": true,
-    "noImplicitAny": false,
     "resolveJsonModule": true,
     "sourceMap": true,
     "esModuleInterop": false,
@@ -18,5 +18,6 @@
     "lib": ["es2022", "DOM"],
     "noEmit": true
   },
+  "files": ["./handlebars-cjs.d.ts"],
   "compileOnSave": true
 }

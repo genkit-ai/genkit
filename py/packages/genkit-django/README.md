@@ -45,7 +45,7 @@ urlpatterns = [
 ]
 ```
 
-The view requires Django's ASGI server (Django 4.1+):
+The view requires Django's ASGI server (Django 5.0+):
 
 ```bash
 uvicorn myproject.asgi:application
@@ -60,7 +60,7 @@ uvicorn myproject.asgi:application
 ## Context provider
 
 ```python
-from genkit import RequestData
+from genkit.web import RequestData
 
 
 async def auth(request_data: RequestData) -> dict[str, object]:

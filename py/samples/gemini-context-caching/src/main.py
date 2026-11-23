@@ -22,7 +22,7 @@ from genkit_google_genai import GoogleAI
 
 from genkit import Genkit, Message, Part, Role
 
-ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-3-flash-preview'))
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-3-flash-preview'))
 
 handbook = (Path(__file__).resolve().parent.parent / 'handbook.md').read_text()
 # Gemini only caches prefixes past ~180k characters. A real handbook is

@@ -110,9 +110,7 @@ export interface MockModelOptions {
  * {@link MockModelOptions.respond}.
  */
 export type MockRespond =
-  | MockRespondFn
-  | MockResponse
-  | Array<MockResponse | Error>;
+  MockRespondFn | MockResponse | Array<MockResponse | Error>;
 
 /**
  * A mock model with typed inspection of the calls it received. The extra

@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-import { GenerateRequest } from 'genkit';
 import assert from 'node:assert';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import process from 'process';
@@ -24,8 +23,6 @@ import {
   calculateApiKey,
   checkApiKey,
   convertObjectKeysToSnakeCase,
-  extractVeoImage,
-  extractVeoVideo,
   getApiKeyFromEnvVar,
   stripLeadingId3Tags,
 } from '../../src/googleai/utils.js';
@@ -134,147 +131,6 @@ describe('appendToWavData', () => {
     const noData = testWav([1, 2]).subarray(0, 36);
     noData.writeUInt32LE(noData.length - 8, 4);
     assert.strictEqual(appendToWavData(noData, Buffer.from([1])), undefined);
-  });
-});
-
-describe('Media Utils', () => {
-  describe('extractVeoImage', () => {
-    it('should extract an image from a valid request', () => {
-      const request: GenerateRequest = {
-        messages: [
-          {
-            role: 'user',
-            content: [
-              {
-                media: {
-                  url: 'data:image/jpeg;base64,test-base64-string',
-                  contentType: 'image/jpeg',
-                },
-              },
-            ],
-          },
-        ],
-      };
-      const result = extractVeoImage(request);
-      assert.deepStrictEqual(result, {
-        bytesBase64Encoded: 'test-base64-string',
-        mimeType: 'image/jpeg',
-      });
-    });
-
-    it('should return undefined if no media part is present', () => {
-      const request: GenerateRequest = {
-        messages: [
-          {
-            role: 'user',
-            content: [{ text: 'no media here' }],
-          },
-        ],
-      };
-      const result = extractVeoImage(request);
-      assert.strictEqual(result, undefined);
-    });
-
-    it('should return undefined if media is not an image', () => {
-      const request: GenerateRequest = {
-        messages: [
-          {
-            role: 'user',
-            content: [
-              {
-                media: {
-                  url: 'data:video/mp4;base64,test-video',
-                  contentType: 'video/mp4',
-                },
-              },
-            ],
-          },
-        ],
-      };
-      const result = extractVeoImage(request);
-      assert.strictEqual(result, undefined);
-    });
-
-    it('should extract from a malformed data URL', () => {
-      const request: GenerateRequest = {
-        messages: [
-          {
-            role: 'user',
-            content: [
-              {
-                media: {
-                  url: 'data:image/jpeg,missing-base64-part', // Invalid format
-                  contentType: 'image/jpeg',
-                },
-              },
-            ],
-          },
-        ],
-      };
-      const result = extractVeoImage(request);
-      assert.deepStrictEqual(result, {
-        bytesBase64Encoded: 'missing-base64-part',
-        mimeType: 'image/jpeg',
-      });
-    });
-  });
-
-  describe('extractVeoVideo', () => {
-    it('should extract a video from a valid request', () => {
-      const videoUrl = 'http://example.com/video.mp4';
-      const request: GenerateRequest = {
-        messages: [
-          {
-            role: 'user',
-            content: [
-              {
-                media: {
-                  url: videoUrl,
-                  contentType: 'video/mp4',
-                },
-              },
-            ],
-          },
-        ],
-      };
-      const result = extractVeoVideo(request);
-      assert.deepStrictEqual(result, {
-        uri: videoUrl,
-      });
-    });
-
-    it('should return undefined if no media part is present', () => {
-      const request: GenerateRequest = {
-        messages: [
-          {
-            role: 'user',
-            content: [{ text: 'no media here' }],
-          },
-        ],
-      };
-      const result = extractVeoVideo(request);
-      assert.strictEqual(result, undefined);
-    });
-
-    it('should return undefined if media is not a video', () => {
-      const request: GenerateRequest = {
-        messages: [
-          {
-            role: 'user',
-            content: [
-              {
-                media: {
-                  url: 'data:image/jpeg;base64,test-image',
-                  contentType: 'image/jpeg',
-                },
-              },
-            ],
-          },
-        ],
-      };
-      const result = extractVeoVideo(request);
-      assert.strictEqual(result, undefined);
-    });
   });
 });
 

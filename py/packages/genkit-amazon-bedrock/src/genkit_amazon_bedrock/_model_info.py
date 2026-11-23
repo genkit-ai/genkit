@@ -25,9 +25,9 @@ so newer or inference-profile-only models remain callable without a plugin
 release.
 """
 
-from typing import Literal, NamedTuple
+from typing import Literal, NamedTuple, TypeAlias
 
-from genkit.model import Constrained, ModelInfo, Stage, Supports
+from genkit.model import ConstrainedSupport, ModelInfo, ModelStage, ModelSupports
 
 INFERENCE_PROFILE_PREFIXES = (
     'global.',
@@ -116,6 +116,73 @@ MODEL_CAPABILITIES: dict[str, ModelCapability] = {
 }
 
 
+# Autocomplete for Bedrock.text(). Same set as MODEL_CAPABILITIES (a test pins
+# that); any other ID is still accepted. Many of these are invoked through a
+# cross-region inference profile (``us.``, ``eu.``, ...), which text() takes too.
+KnownBedrockText: TypeAlias = Literal[
+    'anthropic.claude-3-haiku-20240307-v1:0',
+    'anthropic.claude-3-sonnet-20240229-v1:0',
+    'anthropic.claude-3-opus-20240229-v1:0',
+    'anthropic.claude-3-5-haiku-20241022-v1:0',
+    'anthropic.claude-3-5-sonnet-20240620-v1:0',
+    'anthropic.claude-3-5-sonnet-20241022-v2:0',
+    'anthropic.claude-3-7-sonnet-20250219-v1:0',
+    'anthropic.claude-haiku-4-5-20251001-v1:0',
+    'anthropic.claude-opus-4-1-20250805-v1:0',
+    'anthropic.claude-opus-4-20250514-v1:0',
+    'anthropic.claude-sonnet-4-20250514-v1:0',
+    'anthropic.claude-sonnet-4-5-20250929-v1:0',
+    'anthropic.claude-opus-4-5-20251101-v1:0',
+    'anthropic.claude-sonnet-4-6',
+    'anthropic.claude-opus-4-6-v1',
+    'anthropic.claude-opus-4-7',
+    'anthropic.claude-opus-4-8',
+    'anthropic.claude-sonnet-5',
+    'anthropic.claude-opus-5',
+    'anthropic.claude-fable-5',
+    'anthropic.claude-3-haiku-20240307-v1:0:48k',
+    'anthropic.claude-3-haiku-20240307-v1:0:200k',
+    'anthropic.claude-3-sonnet-20240229-v1:0:28k',
+    'anthropic.claude-3-sonnet-20240229-v1:0:200k',
+    'amazon.nova-micro-v1:0',
+    'amazon.nova-lite-v1:0',
+    'amazon.nova-pro-v1:0',
+    'amazon.nova-premier-v1:0',
+    'cohere.command-r-v1:0',
+    'cohere.command-r-plus-v1:0',
+    'mistral.mistral-large-2402-v1:0',
+    'mistral.mistral-large-2407-v1:0',
+    'mistral.mistral-small-2402-v1:0',
+    'mistral.pixtral-large-2502-v1:0',
+    'ai21.jamba-1-5-large-v1:0',
+    'ai21.jamba-1-5-mini-v1:0',
+    'meta.llama3-8b-instruct-v1:0',
+    'meta.llama3-70b-instruct-v1:0',
+    'meta.llama3-1-8b-instruct-v1:0',
+    'meta.llama3-1-70b-instruct-v1:0',
+    'meta.llama3-1-405b-instruct-v1:0',
+    'meta.llama3-2-1b-instruct-v1:0',
+    'meta.llama3-2-3b-instruct-v1:0',
+    'meta.llama3-2-11b-instruct-v1:0',
+    'meta.llama3-2-90b-instruct-v1:0',
+    'meta.llama3-3-70b-instruct-v1:0',
+    'meta.llama4-maverick-17b-instruct-v1:0',
+    'meta.llama4-scout-17b-instruct-v1:0',
+    'deepseek.r1-v1:0',
+    'writer.palmyra-x4-v1:0',
+    'writer.palmyra-x5-v1:0',
+    'twelvelabs.pegasus-1-2-v1:0',
+]
+
+# Autocomplete for Bedrock.stability(). Inference-profile and ARN forms of these
+# route the same way.
+KnownStabilityImage: TypeAlias = Literal[
+    'stability.sd3-5-large-v1:0',
+    'stability.stable-image-core-v1:1',
+    'stability.stable-image-ultra-v1:1',
+]
+
+
 def strip_inference_profile_prefix(model_id: str) -> str:
     """Reduces a model ID to the lowercase base ID used for lookup.
 
@@ -171,8 +238,8 @@ def get_model_info(
     if model_type == 'image':
         return ModelInfo(
             label=model_label(model_name),
-            stage=Stage.STABLE,
-            supports=Supports(
+            stage=ModelStage.STABLE,
+            supports=ModelSupports(
                 multiturn=False,
                 tools=False,
                 tool_choice=False,
@@ -180,25 +247,25 @@ def get_model_info(
                 # Genkit reads media as an input capability; these take text only.
                 media=False,
                 output=['media'],
-                constrained=Constrained.NONE,
+                constrained=ConstrainedSupport.NONE,
             ),
         )
 
     capability = MODEL_CAPABILITIES.get(strip_inference_profile_prefix(model_name))
-    stage = Stage.STABLE if capability is not None else Stage.UNSTABLE
+    stage = ModelStage.STABLE if capability is not None else ModelStage.UNSTABLE
     if capability is None:
         capability = ModelCapability(multimodal=True, tools=True)
 
     return ModelInfo(
         label=model_label(model_name),
         stage=stage,
-        supports=Supports(
+        supports=ModelSupports(
             multiturn=True,
             tools=capability.tools,
             tool_choice=capability.tools,
             system_role=True,
             media=capability.multimodal,
-            constrained=Constrained.NONE,
+            constrained=ConstrainedSupport.NONE,
         ),
     )
 

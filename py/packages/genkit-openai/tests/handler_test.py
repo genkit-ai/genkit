@@ -35,11 +35,12 @@ def test_get_model_handler_invalid() -> None:
         OpenAIModelHandler.get_model_handler(model='unsupported-model', client=MagicMock())
 
 
-def test_validate_version() -> None:
+def test_validate_version(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test validate_version method validates supported versions."""
     model = MagicMock()
     model.name = 'gpt-4'
-    SUPPORTED_OPENAI_MODELS['gpt-4'] = MagicMock(versions=['gpt-4', 'gpt-3.5-turbo'])
+    # setitem restores the real catalog entry; a plain assignment leaked into later tests.
+    monkeypatch.setitem(SUPPORTED_OPENAI_MODELS, 'gpt-4', MagicMock(versions=['gpt-4', 'gpt-3.5-turbo']))
     handler = OpenAIModelHandler(model)
 
     handler._validate_version('gpt-4')  # Should not raise an error

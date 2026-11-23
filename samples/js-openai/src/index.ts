@@ -188,7 +188,7 @@ ai.defineFlow(
     const { media } = await ai.generate({
       model: openAI.model('gpt-4o-mini-tts'),
       config: {
-        voice: 'sage',
+        voice: 'alloy',
       },
       prompt: query,
     });
