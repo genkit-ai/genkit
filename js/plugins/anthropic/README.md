@@ -94,7 +94,7 @@ console.log(response.text);
 
 Claude models can expose a summary of their reasoning. On current models
 (Claude Opus 4.6 and later, Claude Sonnet 4.6 and later, the Fable models and
-Claude Haiku 5.5) use adaptive thinking, and steer how much the model thinks
+Claude Haiku 5.5), use adaptive thinking and steer how much the model thinks
 with `output_config.effort`: `low`, `medium`, `high` or `max`, plus `xhigh`
 on Claude Opus 4.7 and later, Claude Sonnet 5 and later, the Fable models and
 Claude Haiku 5.5. See
