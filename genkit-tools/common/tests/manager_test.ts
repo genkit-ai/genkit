@@ -79,6 +79,56 @@ describe('RuntimeManager', () => {
       await manager.stop();
     });
   });
+
+  describe('listTraces', () => {
+    let server: http.Server;
+    let serverUrl: string;
+    let receivedUrls: string[];
+
+    beforeEach(async () => {
+      receivedUrls = [];
+      server = http.createServer((req, res) => {
+        receivedUrls.push(req.url ?? '');
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ traces: [] }));
+      });
+      await new Promise<void>((resolve) =>
+        server.listen(0, '127.0.0.1', resolve)
+      );
+      const address = server.address();
+      if (typeof address === 'string' || address === null) {
+        throw new Error('expected a TCP address');
+      }
+      serverUrl = `http://127.0.0.1:${address.port}`;
+    });
+
+    afterEach(async () => {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    });
+
+    it('properly encodes reserved characters in trace key filters', async () => {
+      const manager = await RuntimeManager.create({
+        projectRoot: '.',
+        telemetryServerUrl: serverUrl,
+      });
+      try {
+        const key = '/dynamic-action-provider/host+a&b#c:tool/search';
+        await manager.listTraces({
+          limit: 5,
+          filter: { eq: { key } },
+        });
+        expect(receivedUrls).toHaveLength(1);
+        const parsed = new URL(receivedUrls[0], serverUrl);
+        expect(parsed.pathname).toBe('/api/traces');
+        expect(parsed.searchParams.get('limit')).toBe('5');
+        expect(JSON.parse(parsed.searchParams.get('filter') ?? '')).toEqual({
+          eq: { key },
+        });
+      } finally {
+        await manager.stop();
+      }
+    });
+  });
 });
 
 describe('RuntimeManager notify handshake', () => {

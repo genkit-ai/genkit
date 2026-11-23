@@ -31,6 +31,7 @@ import { version as currentVersion } from './utils/version.js';
 const MAX_TRACES = 1000;
 const MAX_INDEX_FILES = 10;
 const MAX_LIST_ATTR_LENGTH = 1000;
+const INDEX_FORMAT_VERSION = 1;
 
 /**
  * Implementation of trace store that persists traces on local disk.
@@ -101,6 +102,7 @@ export class LocalFileTraceStore implements TraceStore {
     if (
       !metadata ||
       metadata.version !== currentVersion ||
+      metadata.formatVersion !== INDEX_FORMAT_VERSION ||
       this.index.listIndexFiles().length > MAX_INDEX_FILES
     ) {
       await this.reIndex();
@@ -346,7 +348,10 @@ export class Index {
     fs.mkdirSync(this.indexRoot, { recursive: true });
     fs.appendFileSync(
       this.metadataFileName(),
-      JSON.stringify({ version: currentVersion })
+      JSON.stringify({
+        version: currentVersion,
+        formatVersion: INDEX_FORMAT_VERSION,
+      })
     );
   }
 
@@ -354,7 +359,7 @@ export class Index {
     return path.resolve(this.indexRoot, 'genkit.metadata');
   }
 
-  getMetadata(): { version: string } | undefined {
+  getMetadata(): { version: string; formatVersion?: number } | undefined {
     try {
       return JSON.parse(
         fs.readFileSync(this.metadataFileName(), { encoding: 'utf8' })
@@ -389,7 +394,7 @@ export class Index {
       indexData['name'] = rootSpan.displayName;
     }
     const actionKey = rootSpan?.attributes?.['genkit:key'];
-    if (typeof actionKey === 'string') {
+    if (typeof actionKey === 'string' && actionKey.length > 0) {
       indexData['key'] = actionKey;
     }
     if (rootSpan?.endTime) {

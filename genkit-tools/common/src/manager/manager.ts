@@ -141,22 +141,17 @@ export abstract class BaseRuntimeManager {
     input: apis.ListTracesRequest
   ): Promise<apis.ListTracesResponse> {
     const { limit, continuationToken, filter } = input;
-    let query = '';
+    const params = new URLSearchParams();
     if (limit) {
-      query += `limit=${limit}`;
+      params.set('limit', `${limit}`);
     }
     if (continuationToken) {
-      if (query !== '') {
-        query += '&';
-      }
-      query += `continuationToken=${continuationToken}`;
+      params.set('continuationToken', continuationToken);
     }
     if (filter) {
-      if (query !== '') {
-        query += '&';
-      }
-      query += `filter=${encodeURI(JSON.stringify(filter))}`;
+      params.set('filter', JSON.stringify(filter));
     }
+    const query = params.toString();
 
     const response = await axios
       .get(`${this.telemetryServerUrl}/api/traces?${query}`)

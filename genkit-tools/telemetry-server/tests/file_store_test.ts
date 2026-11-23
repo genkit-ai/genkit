@@ -263,6 +263,41 @@ describe('local-file-store', () => {
     assert.deepStrictEqual(tracesResponse.traces, wantTraces.reverse());
   });
 
+  it('lists traces filtered by dynamic action key with reserved URL characters', async () => {
+    const hostAKey = '/dynamic-action-provider/host+a&b#c:tool/search';
+    const hostBKey = '/dynamic-action-provider/host-b:tool/search';
+    const traces: TraceData[] = [];
+    for (const [traceId, spanId, key] of [
+      [TRACE_ID_1, SPAN_A, hostAKey],
+      [TRACE_ID_2, SPAN_B, hostBKey],
+    ]) {
+      const spanData = span(traceId, spanId, 100, 100);
+      spanData.displayName = 'search';
+      spanData.attributes['genkit:metadata:subtype'] = 'tool';
+      spanData.attributes['genkit:key'] = key;
+      const trace: TraceData = {
+        traceId,
+        displayName: 'search',
+        spans: { [spanId]: spanData },
+      };
+      traces.push(trace);
+      const res = await fetch(`${url}/api/traces`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(trace),
+      });
+      assert.strictEqual(res.status, 200);
+    }
+
+    const params = new URLSearchParams({
+      filter: JSON.stringify({ eq: { key: hostAKey } } as TraceQueryFilter),
+    });
+    const getResp = await fetch(`${url}/api/traces?${params.toString()}`);
+    assert.strictEqual(getResp.status, 200);
+    const tracesResponse = await getResp.json();
+    assert.deepStrictEqual(tracesResponse.traces, [traces[0]]);
+  });
+
   it('lists trace data with pagination', async () => {
     const wantTraces = [] as TraceData[];
     for (let i = 0; i < 20; i++) {
@@ -495,6 +530,120 @@ describe('index', () => {
         },
       ]
     );
+  });
+
+  it('ignores empty or non-string genkit:key attributes', () => {
+    const emptyKeySpan = span(TRACE_ID_1, SPAN_A, 100, 100);
+    emptyKeySpan.displayName = 'emptyKey';
+    emptyKeySpan.startTime = 100;
+    emptyKeySpan.attributes['genkit:key'] = '';
+
+    const nonStringKeySpan = span(TRACE_ID_2, SPAN_B, 200, 200);
+    nonStringKeySpan.displayName = 'nonStringKey';
+    nonStringKeySpan.startTime = 200;
+    nonStringKeySpan.attributes['genkit:key'] = 123;
+
+    index.add({
+      traceId: TRACE_ID_1,
+      spans: { [SPAN_A]: emptyKeySpan },
+    } as TraceData);
+    index.add({
+      traceId: TRACE_ID_2,
+      spans: { [SPAN_B]: nonStringKeySpan },
+    } as TraceData);
+
+    assert.deepStrictEqual(index.search({ limit: 5 }).data, [
+      {
+        id: TRACE_ID_2,
+        type: 'flow',
+        name: 'nonStringKey',
+        start: 200,
+        end: 2,
+        status: 0,
+      },
+      {
+        id: TRACE_ID_1,
+        type: 'flow',
+        name: 'emptyKey',
+        start: 100,
+        end: 2,
+        status: 0,
+      },
+    ]);
+    assert.deepStrictEqual(
+      index.search({ limit: 5, filter: { eq: { key: '' } } }).data,
+      []
+    );
+  });
+
+  it('reindexes same-version legacy indexes missing formatVersion to backfill action keys', async () => {
+    const base = path.resolve(
+      os.tmpdir(),
+      `./telemetry-server-reindex-test-${Date.now()}-${Math.floor(
+        Math.random() * 1000
+      )}`
+    );
+    const storeRoot = path.resolve(base, 'traces');
+    const reindexRoot = path.resolve(base, 'traces_idx');
+    try {
+      const hostAKey = '/dynamic-action-provider/host-a:tool/search';
+      const rootSpan = span(TRACE_ID_1, SPAN_A, 100, 100);
+      rootSpan.displayName = 'search';
+      rootSpan.attributes['genkit:metadata:subtype'] = 'tool';
+      rootSpan.attributes['genkit:key'] = hostAKey;
+
+      const store1 = new LocalFileTraceStore({
+        storeRoot,
+        indexRoot: reindexRoot,
+      });
+      await store1.init();
+      await store1.save(TRACE_ID_1, {
+        traceId: TRACE_ID_1,
+        displayName: 'search',
+        spans: { [SPAN_A]: rootSpan },
+      });
+
+      // Simulate an index created by the same package version before key indexing.
+      const idxDir = path.resolve(reindexRoot, '.genkit/traces_idx');
+      const metadataPath = path.resolve(idxDir, 'genkit.metadata');
+      const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+      delete metadata.formatVersion;
+      fs.writeFileSync(metadataPath, JSON.stringify(metadata));
+
+      for (const file of fs
+        .readdirSync(idxDir)
+        .filter((f) => f.startsWith('idx_'))) {
+        const idxPath = path.resolve(idxDir, file);
+        const rows = fs
+          .readFileSync(idxPath, 'utf8')
+          .trim()
+          .split('\n')
+          .filter(Boolean)
+          .map((line) => {
+            const parsed = JSON.parse(line);
+            delete parsed.key;
+            return JSON.stringify(parsed);
+          });
+        fs.writeFileSync(idxPath, rows.join('\n') + '\n');
+      }
+
+      const store2 = new LocalFileTraceStore({
+        storeRoot,
+        indexRoot: reindexRoot,
+      });
+      await store2.init();
+
+      const listed = await store2.list({
+        limit: 5,
+        filter: { eq: { key: hostAKey } },
+      });
+      assert.deepStrictEqual(
+        listed.traces.map((t) => t.traceId),
+        [TRACE_ID_1]
+      );
+    } finally {
+      fs.rmSync(base, { recursive: true, force: true });
+    }
   });
 
   it('should apply search filters', () => {
