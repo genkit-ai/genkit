@@ -19,12 +19,12 @@ import {
   OpenApiGeneratorV3,
 } from '@asteasolutions/zod-to-openapi';
 import * as fs from 'fs';
-import * as yaml from 'js-yaml';
 import * as path from 'path';
+import * as yaml from 'yaml';
 import * as z from 'zod';
-import * as action from '../types/action';
-import * as apis from '../types/apis';
-import { SpanDataSchema, TraceDataSchema } from '../types/trace';
+import * as action from '../types/action.js';
+import * as apis from '../types/apis.js';
+import { SpanDataSchema, TraceDataSchema } from '../types/trace.js';
 
 const registry = new OpenAPIRegistry();
 registry.register('CustomAny', action.CustomAnySchema.openapi('CustomAny'));
@@ -96,7 +96,7 @@ if (!process.argv[2]) {
 
 fs.writeFileSync(
   path.join(process.argv[2], 'reflectionApi.yaml'),
-  yaml.dump(document),
+  yaml.stringify(document),
   {
     encoding: 'utf-8',
   }
