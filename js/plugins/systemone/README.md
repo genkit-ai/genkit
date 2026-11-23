@@ -24,7 +24,9 @@ npm i --save @genkit-ai/systemone
 ```
 
 It needs a `genkit` release whose schema validation accepts `x-` keywords,
-which the question schemas carry.
+which the question schemas carry. It runs on Node.js 20 or later, through
+Node's `fetch`; in a browser, a `fetch` of your own reports redirects and
+errors by the browser's rules (an opaque redirect is refused like a 3xx).
 
 ## Design principle: the output schema is the question set
 
@@ -105,11 +107,14 @@ answer's legend.
 
 A choice's options go out sorted by name, as Go, Java, and Dart send a typed
 choice's options. A server may leave `confidence` out of an answer, as the Go
-schema allows, so read it with a default. A confidence or a probability the
-server sends must be a number from 0 to 1, or the call fails as a malformed
-answer (INTERNAL), and a probability for an option or level the question does
-not declare is dropped from the answer, where Go keeps it; `responseInfo()`
-keeps the answers as sent. Criteria and levels are
+schema allows, so read it with a default (Go reads a missing one as 0). A
+confidence or a probability of a declared option must be a number from 0 to 1,
+or the call fails as a malformed answer (INTERNAL). A probability for an option
+or level the question does not declare is dropped from the answer without
+being checked, where Go keeps it; `responseInfo()` keeps the answers as sent.
+An answer outside the question set, such as an option that is not one of the
+choices or a noul above 1, fails the generate call's schema validation
+(INVALID_ARGUMENT). Criteria and levels are
 strings, and the schema and the answers show those strings. The wire format
 also takes a structured description, most often an object with labeled parts,
 which `guidance` adds: keyed by option for a choice, by level index for a
@@ -282,9 +287,9 @@ on the day it ships.
 
 | Constructor                       | Models                                                                                                                                                                 | Key                    | Notes                                                                                                                       |
 | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `systemOne.typeSafe()`            | `typesafe/jev-1.13.0`                                                                                                                                                  | `TYPESAFE_API_KEY`     | `TYPESAFE_BASE_URL` is read too; lists models; text only                                                                    |
+| `systemOne.typeSafe()`            | `typesafe/jev-1.13.0`, `typesafe/jev-latest`                                                                                                                           | `TYPESAFE_API_KEY`     | `TYPESAFE_BASE_URL` is read too; lists models; text only                                                                    |
 | `systemOne.openRouter()`          | `openrouter-decisions/liquid/d1`, `openrouter-decisions/typesafe/jev-1.13`, `openrouter-decisions/~typesafe/jev-latest`                                                | `OPENROUTER_API_KEY`   | alpha Decisions API; lists OpenRouter's decision models; cost in `usage.custom.cost`; text only                            |
-| `systemOne.ollama()`              | `ollama-decisions/clef`                                                                                                                                                | none                   | `http://localhost:11434` unless `baseUrl` is set; images as raw base64; a request needs text                               |
+| `systemOne.ollama()`              | `ollama-decisions/clef`                                                                                                                                                | none needed; an `apiKey`, if given, is sent as a bearer token (for a proxy) | `http://localhost:11434` unless `baseUrl` is set; images as raw base64; a request needs text                               |
 | `systemOne.workersAI(accountId)`  | `cloudflare-decisions/@cf/cloudflare/clef`, `cloudflare-decisions/@cf/cloudflare/clef-flash`, `cloudflare-decisions/@cf/cloudflare/clef-omni`, `cloudflare-decisions/typesafe/jev` | `CLOUDFLARE_API_TOKEN` | `CLOUDFLARE_ACCOUNT_ID` when `accountId` is unset; Clef models read images, Clef-omni audio and video too; a long state is truncated; no versions to pin |
 
 A gateway serves several vendors' models under one key, so one plugin reaches
@@ -294,23 +299,41 @@ the Ollama plugin for chat models has `ollama`.
 
 A constructor takes the same options as `systemOne()`, over the ones it sets
 for its server, such as a key from a secret manager rather than the
-environment: `systemOne.typeSafe({ apiKey })`. As in Go, its `models` are
-added to the constructor's, and an entry with one of their IDs replaces that
-model's whole spec, so `{'@cf/cloudflare/clef-omni': {label: 'Omni'}}` also
-drops the audio and video the preset gave it. Naming a constructor's model by
-its full name is refused. The base URL must be an http or https URL with a
-host, which is checked when the plugin is created; Go finds out at the first
-request.
+environment: `systemOne.typeSafe({ apiKey })`. Its `models` are added to the
+constructor's, and an entry with one of their IDs replaces that model's whole
+spec, as in Go, so `{'@cf/cloudflare/clef-omni': {label: 'Omni'}}` also drops
+the audio and video the preset gave it: copy the fields you need. Unlike Go,
+where the caller owns the map and can drop a preset model, the constructor's
+models are always kept. Naming a constructor's model by its full name is
+refused.
+
+The plugin checks its setup when it is created and throws FAILED_PRECONDITION
+for one every request would fail on: a provider with a slash; a base URL that
+is not http or https with a host, or that carries credentials, a query, or a
+fragment (it is never quoted, since it can carry a password); a `timeoutMs`
+that is not a whole number from 1 to 2^31 - 1; a header or key HTTP cannot
+carry, such as one with a newline, a control byte, or a character outside
+Latin-1 (named, never quoted); a connection or framing header (Host,
+Connection, Content-Length, Transfer-Encoding, Keep-Alive, Upgrade, Expect); a
+missing key or account ID. Go checks only the missing key, account, and base
+URL there; a bad base URL or header fails its first request. Keys, base URLs,
+and account IDs read from the environment are trimmed, so a key file that ends
+in a newline works; Go reads them as they are.
 
 A server that needs a key refuses to start without one, unless `apiKey` is
-`false`: then, as with the anthropic and google-genai plugins, each request
-takes the key from `config.apiKey` only and is refused without one, and the
-model listing goes out with no key. A key passed in `config.apiKey` is
-recorded in traces and the Dev UI like any other config field, so where traces
-are kept, prefer the environment variable or the plugin's `apiKey`. With
-per-request keys, give every fallback reference a config with its own key, or
-set `isolateConfig`: a reference without one inherits the request's config, so
-the first server's key would go to the next server's host.
+`false`: then each request takes the key from `config.apiKey` only, the
+pattern the anthropic and google-genai plugins share, and a request without
+one fails with FAILED_PRECONDITION (google-genai says INVALID_ARGUMENT); the
+model listing goes out with no key. A `config.apiKey` replaces the plugin's key
+on any plugin, not only with `false`, and one HTTP cannot carry fails the
+request with INVALID_ARGUMENT, without a retry. A key passed in `config.apiKey`
+is recorded in traces and the Dev UI like any other config field, as is one in
+the config of a fallback reference, which the generate span records under
+`use`, so where traces are kept, prefer the environment variable or the
+plugin's `apiKey`. With per-request keys, give every fallback reference a
+config with its own key, or set `isolateConfig` and give the backup plugin its
+own key: a reference without a config inherits the request's, so the first
+server's key would go to the next server's host.
 
 ### OpenRouter
 
@@ -396,26 +419,40 @@ const wrapped = systemOne({
 });
 ```
 
+Both hooks run synchronously. A `route` path is a string, joined to `path` with
+a slash when it has none. A GenkitError either hook throws keeps its status
+(from `unwrap`, under the provider's name); any other error is reported as
+UNKNOWN under the provider's name. Go does that for `unwrap` only, and returns
+a route's error unchanged. A route that returns no body, a path that is not a
+string, or a promise, and an `unwrap` that returns a promise, fail with
+INVALID_ARGUMENT.
+
 ### Every server
 
 `models` describes the models known ahead, keyed by the server's ID or by the
 full model name; they are listed in the Dev UI with whatever the server's
-listing adds, which is kept for five minutes. `fetch`, `timeoutMs`, and
-`headers` are the escape hatches to the transport; the Authorization header the
-API key makes replaces one in `headers`. The `extra` config merges fields into
+listing adds, which is kept for five minutes. A listing contributes at most
+1,000 model IDs, each at most 256 characters; others are left out. `fetch`, `timeoutMs`, and
+`headers` are the escape hatches to the transport; `headers` go first, and the
+Authorization header the API key makes replaces one given there, in any case. The `extra` config merges fields into
 the request body that the plugin does not model, such as a gateway's
-`session_id` or `trace`; it cannot replace a field the request builds itself.
+`session_id` or `trace`; it cannot replace a field the request builds itself,
+and a NaN or infinite number in it is refused rather than sent as null.
 
-Each attempt is bounded at 30 seconds with the global `fetch`, and by your own
-`fetch` when you pass one, unless `timeoutMs`, a positive number of
-milliseconds, says otherwise. Requests that fail to connect, time out, are rate
+Each attempt is bounded at 30 seconds with the global `fetch`, which is looked
+up per request, and by your own `fetch` when you pass one, unless
+`timeoutMs`, a whole number of milliseconds from 1 to 2^31 - 1, says otherwise.
+A request the caller aborts fails with CANCELLED, or DEADLINE_EXCEEDED when its
+signal's reason is a timeout; Go returns the context's own cause. Requests that fail to connect, time out, are rate
 limited, or hit a server error other than 501 and 505 are retried twice, with
 `Retry-After` honored up to 30 seconds. These retries stack with a `retry()`
 middleware on top, so a call can make up to three attempts for each of its
 retries. A redirect is not followed, so the key's handling never depends on
 the transport's redirect rules: the request fails (FAILED_PRECONDITION), and
 the base URL should name the final address. A response larger than 8 MiB is
-refused (INTERNAL) and not retried. A server's error message is quoted in the
+refused (INTERNAL) and not retried; Go reads the first 8 MiB and then fails to
+parse them, so both fail, with different messages. A network error names its
+cause, such as ECONNREFUSED. A server's error message is quoted in the
 error up to 500 characters.
 
 Pin a version in production where the server offers one. Confidence thresholds

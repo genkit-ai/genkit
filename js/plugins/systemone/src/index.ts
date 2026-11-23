@@ -133,8 +133,11 @@ export interface ModelSpec {
   /** Names the model in the Dev UI. Unset means one built from the ID. */
   label?: string;
   /**
-   * Override the plugin's media settings for this model. Unset keeps the
-   * plugin's, so an entry that only sets a label changes nothing else.
+   * Override the plugin's media settings for this model; unset keeps the
+   * plugin's. An entry for one of a constructor's models replaces that
+   * model's whole spec, so relabelling `@cf/cloudflare/clef-omni` drops its
+   * audio and video, and relabelling `typesafe/jev` on Workers AI drops its
+   * refusal of images: copy the fields you need.
    */
   images?: MediaSupport;
   audio?: MediaSupport;
@@ -184,16 +187,21 @@ export interface SystemOneOptions {
   modelsPath?: string;
   /**
    * Sent as a bearer token. A constructor reads it from the environment
-   * variable it names when this is unset; a server that takes no key, such as
-   * a local one, is reached with none. `false` takes the key from each
-   * request's `config.apiKey` only, as the anthropic and google-genai plugins
-   * do, and refuses a request without one; the model listing then goes out
-   * with no key. A key in `config.apiKey` is recorded in traces and the Dev UI
-   * like any other config field, so where traces are kept, prefer the
+   * variable it names when this is unset, trimmed; a server that takes no
+   * key, such as a local one, is reached with none. `false` takes the key
+   * from each request's `config.apiKey` only, the pattern the anthropic and
+   * google-genai plugins share, and refuses a request without one with
+   * FAILED_PRECONDITION (google-genai says INVALID_ARGUMENT, anthropic throws
+   * a plain Error); the model listing then goes out with no key. A
+   * `config.apiKey` replaces the plugin's key on any plugin, not only with
+   * `false`. It is recorded in traces and the Dev UI like any other config
+   * field, as is a key in the config of a fallback reference, which the
+   * generate span records under `use`, so where traces are kept, prefer the
    * environment variable or this option. With per-request keys, give every
-   * fallback reference a config with its own key, or set `isolateConfig`:
-   * a reference without a config inherits the request's, so the first
-   * server's key would go to the next server's host.
+   * fallback reference a config with its own key, or set `isolateConfig` and
+   * give the backup plugin a key of its own: a reference without a config
+   * inherits the request's, so the first server's key would go to the next
+   * server's host.
    */
   apiKey?: string | false;
   /**
@@ -238,9 +246,12 @@ export interface SystemOneOptions {
   /**
    * For a server whose wire is not the native one, builds the request it
    * takes from the model ID and the native body, which it may change: the
-   * path to append to `path`, joined with a slash when it does not start
-   * with one, and the body to send. When unset, the native body goes to
-   * `path`.
+   * path to append to `path`, a string joined with a slash when it does not
+   * start with one, and the body to send. When unset, the native body goes
+   * to `path`. A GenkitError it throws goes out as it is; any other error is
+   * reported as UNKNOWN under `provider`, where Go returns it unchanged. A
+   * body that is null or undefined, a path that is not a string, or a
+   * promise is refused (INVALID_ARGUMENT): the hook runs synchronously.
    */
   route?: Route;
   /**
@@ -459,9 +470,11 @@ function newPlugin(
 
   const trim = (id: string) =>
     id.startsWith(`${provider}/`) ? id.slice(provider.length + 1) : id;
-  // As in Go: the options' models are added to the preset's, an entry with a
-  // preset model's ID replaces its whole spec, and naming a preset model by
-  // its full name is a mistake, since the two keys would describe one model.
+  // The options' models are added to the preset's, and an entry with a
+  // preset model's ID replaces its whole spec, as in Go; unlike Go, where the
+  // caller owns Models and can drop a preset model, the preset's models are
+  // always kept. Naming a preset model by its full name is a mistake, since
+  // the two keys would describe one model.
   const models = new Map<string, ModelSpec>(Object.entries(presetModels));
   const named = new Set<string>();
   for (const [key, spec] of Object.entries(options.models ?? {})) {
@@ -603,9 +616,15 @@ function newPlugin(
  * `provider/liquid/d1`. Any ID resolves, so a model the server adds later
  * works without a change here.
  *
- * It throws without a provider or a base URL, or without a key or an account
- * ID for a server that requires one, since every request would fail, and when
- * `models` names one model twice.
+ * It throws FAILED_PRECONDITION when it is created with a setup every request
+ * would fail on: no provider, or one with a slash; no base URL, or one that is
+ * not http or https with a host, or that carries credentials, a query, or a
+ * fragment; no key or account ID for a server that requires one; a
+ * `timeoutMs` that is not a whole number from 1 to 2^31 - 1; a header or key
+ * HTTP cannot carry, or a connection or framing header; a model named twice,
+ * or a preset model named by its full name. Go panics in Init for a missing
+ * key, account, or base URL and a model named twice; the other checks are
+ * this port's.
  */
 function systemOnePlugin(options: SystemOneOptions): SystemOnePlugin {
   return newPlugin(options, {});
@@ -677,7 +696,8 @@ function openRouter(options?: Partial<SystemOneOptions>): SystemOnePlugin {
 
 /**
  * A local Ollama server, which serves the decision models it has pulled, such
- * as Clef, and takes no key. Its models are `ollama-decisions/<name>` by
+ * as Clef. It needs no key; an `apiKey`, if given, is sent as a bearer token,
+ * as for a proxy in front of it. Its models are `ollama-decisions/<name>` by
  * Ollama's name, such as `ollama-decisions/clef`. The name is not ollama,
  * which the plugin for Ollama's chat models has, so both serve one app. The
  * server is `http://localhost:11434` unless `baseUrl` says otherwise. The Dev

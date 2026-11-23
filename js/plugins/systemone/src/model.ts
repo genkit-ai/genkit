@@ -62,10 +62,11 @@ export const SystemOneConfigSchema = z.object({
       "Extra top-level request fields, such as a gateway's session_id. Cannot replace model, state, questions, images, audio, or videos."
     ),
   /**
-   * The API key for this request, in place of the plugin's. A plugin created
-   * with `apiKey: false` takes its key here only. It is recorded in traces and the
-   * Dev UI like any other config field, so where traces are kept, prefer the
-   * environment variable or the plugin's `apiKey`.
+   * The API key for this request, in place of the plugin's, whether or not
+   * the plugin was created with `apiKey: false`, which takes its key here
+   * only. It is recorded in traces and the Dev UI like any other config
+   * field, so where traces are kept, prefer the environment variable or the
+   * plugin's `apiKey`.
    */
   apiKey: z
     .string()

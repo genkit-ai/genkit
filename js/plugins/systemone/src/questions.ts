@@ -30,8 +30,9 @@ import {
  * The answer to a choice question: one option, the probability of every
  * option, and how concentrated that distribution is.
  *
- * `probabilities` is the model's distribution over the options and sums to 1;
- * `choice` is the option with the most of it; `confidence`, from 0 to 1, is
+ * `probabilities` is the probability of each option, as the server sent it,
+ * kept to the options the question declares; `choice` is the option with the
+ * most of it; `confidence`, from 0 to 1, is
  * how concentrated the distribution is. A server may leave `confidence` out,
  * as Genkit Go's schema allows, so read it with a default:
  * `(answer.confidence ?? 0) < 0.6`.
