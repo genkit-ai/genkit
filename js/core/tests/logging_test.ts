@@ -177,3 +177,130 @@ describe('logging consolidated api', () => {
     assert.deepStrictEqual(loggedArgs[1][2], { key: 'val' });
   });
 });
+
+describe('default logger output', () => {
+  let originalDebug: typeof console.debug;
+  let originalInfo: typeof console.info;
+  let originalWarn: typeof console.warn;
+  let originalError: typeof console.error;
+  let originalLogger: any;
+  let originalLevel: string;
+  let originalOutput: 'stdout' | 'stderr';
+  let calls: Array<[string, ...unknown[]]>;
+
+  beforeEach(() => {
+    originalDebug = console.debug;
+    originalInfo = console.info;
+    originalWarn = console.warn;
+    originalError = console.error;
+    originalLogger = global.__genkit_logger;
+    originalLevel = logger.defaultLogger.level;
+    originalOutput = logger.defaultLogger.output;
+    calls = [];
+
+    logger.init(logger.defaultLogger);
+    logger.setDefaultLogOutput('stdout');
+    logger.setLogLevel('debug');
+
+    console.debug = (...args: unknown[]) => calls.push(['debug', ...args]);
+    console.info = (...args: unknown[]) => calls.push(['info', ...args]);
+    console.warn = (...args: unknown[]) => calls.push(['warn', ...args]);
+    console.error = (...args: unknown[]) => calls.push(['error', ...args]);
+  });
+
+  afterEach(() => {
+    console.debug = originalDebug;
+    console.info = originalInfo;
+    console.warn = originalWarn;
+    console.error = originalError;
+    logger.defaultLogger.output = originalOutput;
+    logger.defaultLogger.level = originalLevel;
+    global.__genkit_logger = originalLogger;
+  });
+
+  it('redirects debug and info to stderr when configured and restores stdout', () => {
+    logger.debug('debug stdout');
+    logger.info('info stdout');
+    logger.warn('warn msg');
+    logger.error('error msg');
+
+    logger.setDefaultLogOutput('stderr');
+    logger.debug('debug stderr');
+    logger.info('info stderr');
+    logger.warn('warn stderr');
+    logger.error('error stderr');
+
+    logger.setDefaultLogOutput('stdout');
+    logger.debug('debug restored');
+    logger.info('info restored');
+
+    assert.deepStrictEqual(calls, [
+      ['debug', 'debug stdout'],
+      ['info', 'info stdout'],
+      ['warn', 'warn msg'],
+      ['error', 'error msg'],
+      ['error', 'debug stderr'],
+      ['error', 'info stderr'],
+      ['warn', 'warn stderr'],
+      ['error', 'error stderr'],
+      ['debug', 'debug restored'],
+      ['info', 'info restored'],
+    ]);
+  });
+
+  it('updates an active default logger from another module instance', () => {
+    const otherCopyDefaultLogger = {
+      output: 'stdout' as 'stdout' | 'stderr',
+      level: 'debug',
+      shouldLog() {
+        return true;
+      },
+      debug(...args: unknown[]) {
+        (this.output === 'stderr' ? console.error : console.debug)(...args);
+      },
+      info(...args: unknown[]) {
+        (this.output === 'stderr' ? console.error : console.info)(...args);
+      },
+      warn(...args: unknown[]) {
+        console.warn(...args);
+      },
+      error(...args: unknown[]) {
+        console.error(...args);
+      },
+    };
+    logger.init(otherCopyDefaultLogger);
+
+    logger.setDefaultLogOutput('stderr');
+    logger.debug('cross-copy debug');
+    logger.info('cross-copy info');
+
+    assert.strictEqual(otherCopyDefaultLogger.output, 'stderr');
+    assert.deepStrictEqual(calls, [
+      ['error', 'cross-copy debug'],
+      ['error', 'cross-copy info'],
+    ]);
+  });
+
+  it('does not mutate custom loggers while keeping defaultLogger updated', () => {
+    const customLogger: Record<string, any> = {
+      level: 'debug',
+      debug(...args: unknown[]) {
+        calls.push(['custom-debug', ...args]);
+      },
+      info(...args: unknown[]) {
+        calls.push(['custom-info', ...args]);
+      },
+      warn() {},
+      error() {},
+    };
+    logger.init(customLogger);
+
+    logger.setDefaultLogOutput('stderr');
+    assert.strictEqual('output' in customLogger, false);
+    assert.strictEqual(logger.defaultLogger.output, 'stderr');
+
+    logger.init(logger.defaultLogger);
+    logger.info('after restore');
+    assert.deepStrictEqual(calls, [['error', 'after restore']]);
+  });
+});

@@ -210,6 +210,15 @@ class Logger {
   /** Select the output stream for the default logger's debug and info messages. */
   setDefaultLogOutput(output: 'stdout' | 'stderr') {
     _defaultLogger.output = output;
+    const activeLogger = getLogger();
+    if (
+      activeLogger &&
+      typeof activeLogger === 'object' &&
+      'output' in activeLogger &&
+      typeof activeLogger.shouldLog === 'function'
+    ) {
+      activeLogger.output = output;
+    }
   }
 
   private _mergeErrorMetadata(metadata: any, err?: any): any {
