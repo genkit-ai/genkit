@@ -105,11 +105,18 @@ function ignoresRefSiblings(schema: unknown): boolean {
   return dialect !== undefined && DRAFT_4_TO_7_SCHEMA_URI.test(dialect);
 }
 
-function hasSchemaResourceMarker(value: unknown, isDraft4 = false): boolean {
+function hasSchemaResourceMarker(
+  value: unknown,
+  isDraft4 = false,
+  refSiblingsIgnored = false
+): boolean {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return false;
   }
   const record = value as Record<string, unknown>;
+  if (refSiblingsIgnored && typeof record.$ref === 'string') {
+    return false;
+  }
   return (
     (typeof record.$id === 'string' && record.$id.length > 0) ||
     (typeof record.$schema === 'string' && record.$schema.length > 0) ||
@@ -133,11 +140,11 @@ function toGeminiSchemaProperty(
   root: ToolDefinition['inputSchema'] = property,
   resolvingRefs = new Set<string>(),
   budget = { remaining: MAX_GEMINI_TOOL_SCHEMA_NODES },
-  depth = 0,
+  refDepth = 0,
   isReferenceTarget = false,
   nestedResourceReason?: 'nested' | 'crossed'
 ): Schema | undefined {
-  if (depth > MAX_GEMINI_TOOL_SCHEMA_DEPTH) {
+  if (refDepth > MAX_GEMINI_TOOL_SCHEMA_DEPTH) {
     throw new GenkitError({
       status: 'INVALID_ARGUMENT',
       message:
@@ -151,7 +158,8 @@ function toGeminiSchemaProperty(
   const refSiblingsIgnored = ignoresRefSiblings(root);
   const currentNestedResource =
     nestedResourceReason ??
-    (property !== root && hasSchemaResourceMarker(property, isDraft4)
+    (property !== root &&
+    hasSchemaResourceMarker(property, isDraft4, refSiblingsIgnored)
       ? 'nested'
       : undefined);
   if (property && typeof property === 'object' && '$ref' in property) {
@@ -236,7 +244,7 @@ function toGeminiSchemaProperty(
       if (
         !inSchemaMap &&
         referenced !== root &&
-        hasSchemaResourceMarker(referenced, isDraft4)
+        hasSchemaResourceMarker(referenced, isDraft4, refSiblingsIgnored)
       ) {
         crossedNestedResource = true;
       }
@@ -273,7 +281,7 @@ function toGeminiSchemaProperty(
       root,
       new Set([...resolvingRefs, canonicalRef]),
       budget,
-      depth + 1,
+      refDepth + 1,
       true,
       crossedNestedResource ? 'crossed' : currentNestedResource
     );
@@ -339,7 +347,7 @@ function toGeminiSchemaProperty(
           root,
           resolvingRefs,
           budget,
-          depth + 1,
+          resolvingRefs.size > 0 ? refDepth + 1 : 0,
           false,
           currentNestedResource
         );
@@ -363,7 +371,7 @@ function toGeminiSchemaProperty(
         root,
         resolvingRefs,
         budget,
-        depth + 1,
+        resolvingRefs.size > 0 ? refDepth + 1 : 0,
         false,
         currentNestedResource
       ),

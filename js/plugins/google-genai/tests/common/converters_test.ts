@@ -1902,16 +1902,20 @@ describe('toGeminiTool', () => {
         properties: {
           names: {
             type: 'array',
-            items: { $ref: '#/definitions/Name', type: 'string' },
+            items: { $ref: '#/definitions/Name', type: 'string', $id: 'alias' },
           },
           alias: {
             $ref: '#/definitions/Name',
             type: 'integer',
             description: 'ignored sibling description',
           },
+          chained: {
+            $ref: '#/definitions/Alias',
+          },
         },
         definitions: {
           Name: { type: 'string', description: 'canonical name' },
+          Alias: { $ref: '#/definitions/Name', $id: 'chained-alias' },
         },
       },
     });
@@ -1921,7 +1925,36 @@ describe('toGeminiTool', () => {
         items: { type: SchemaType.STRING, description: 'canonical name' },
       },
       alias: { type: SchemaType.STRING, description: 'canonical name' },
+      chained: { type: SchemaType.STRING, description: 'canonical name' },
     });
+
+    assert.throws(
+      () =>
+        toGeminiTool({
+          name: 'draft7_enclosing_nested_resource',
+          description: 'Draft 7 tool with enclosing nested $id over a $ref',
+          inputSchema: {
+            $schema: 'http://json-schema.org/draft-07/schema#',
+            type: 'object',
+            properties: {
+              child: {
+                $id: 'https://example.test/child',
+                type: 'object',
+                properties: {
+                  name: { $ref: '#/definitions/Name', $id: 'ignored' },
+                },
+                definitions: { Name: { type: 'string' } },
+              },
+            },
+            definitions: { Name: { type: 'integer' } },
+          },
+        }),
+      {
+        name: 'GenkitError',
+        status: 'INVALID_ARGUMENT',
+        message: /Nested tool schema resources cannot be converted/,
+      }
+    );
 
     assert.throws(
       () =>
@@ -1945,6 +1978,30 @@ describe('toGeminiTool', () => {
         status: 'INVALID_ARGUMENT',
         message:
           /Unsupported sibling keyword type alongside tool schema reference/,
+      }
+    );
+
+    assert.throws(
+      () =>
+        toGeminiTool({
+          name: 'draft2020_ref_sibling_id',
+          description: 'Draft 2020-12 tool with sibling $id alongside $ref',
+          inputSchema: {
+            $schema: 'https://json-schema.org/draft/2020-12/schema',
+            type: 'object',
+            properties: {
+              names: {
+                type: 'array',
+                items: { $ref: '#/$defs/Name', $id: 'alias' },
+              },
+            },
+            $defs: { Name: { type: 'string' } },
+          },
+        }),
+      {
+        name: 'GenkitError',
+        status: 'INVALID_ARGUMENT',
+        message: /Nested tool schema resources cannot be converted/,
       }
     );
   });
@@ -2297,6 +2354,22 @@ describe('toGeminiTool', () => {
       nestedGot.parameters?.properties?.wide?.properties?.p4095,
       { type: SchemaType.STRING }
     );
+
+    let deepInline: Record<string, any> = { type: 'string' };
+    for (let i = 0; i < 130; i++) {
+      deepInline = { type: 'object', properties: { child: deepInline } };
+    }
+    const deepGot = toGeminiTool({
+      name: 'deep_inline_schema',
+      description: 'Tool with 130 nested inline objects and no references',
+      inputSchema: deepInline,
+    });
+    let cursor = deepGot.parameters as any;
+    for (let i = 0; i < 130; i++) {
+      assert.strictEqual(cursor?.type, SchemaType.OBJECT);
+      cursor = cursor.properties?.child;
+    }
+    assert.deepStrictEqual(cursor, { type: SchemaType.STRING });
   });
 
   it('should reject $ref-expanded schemas exceeding the node expansion budget', () => {
