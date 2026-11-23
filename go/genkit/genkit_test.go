@@ -402,6 +402,25 @@ func TestListTools(t *testing.T) {
 	}
 }
 
+func TestListPromptDescriptors(t *testing.T) {
+	g := Init(context.Background())
+	DefineSchema(g, "Person", map[string]any{
+		"type":       "object",
+		"properties": map[string]any{"name": map[string]any{"type": "string"}},
+	})
+	DefinePrompt(g, "greet", ai.WithInputSchemaName("Person"), ai.WithPrompt("Hello {{name}}"))
+	DefineFlow(g, "greet-flow", func(ctx context.Context, in string) (string, error) { return in, nil })
+
+	descs := ListPromptDescriptors(g)
+	if len(descs) != 1 || descs[0].Name != "greet" {
+		t.Fatalf("ListPromptDescriptors() = %+v, want only the greet prompt", descs)
+	}
+	properties, _ := descs[0].InputSchema["properties"].(map[string]any)
+	if _, ok := properties["name"]; !ok {
+		t.Errorf("greet input schema = %v, want the resolved Person schema", descs[0].InputSchema)
+	}
+}
+
 func TestPluginCanReturnTools(t *testing.T) {
 	g := Init(context.Background(), WithPlugins(&pluginWithTool{}))
 

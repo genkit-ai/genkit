@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 
 	"github.com/firebase/genkit/go/ai"
@@ -47,6 +48,7 @@ type GenkitMCPServer struct {
 	// Discovered actions from Genkit registry
 	toolActions     []ai.Tool
 	resourceActions []api.Action
+	promptNames     []string
 	actionsResolved bool
 }
 
@@ -102,11 +104,21 @@ func (s *GenkitMCPServer) setup() error {
 		}
 	}
 
+	// Register prompts for discovery and on-demand rendering by MCP clients.
+	for _, desc := range genkit.ListPromptDescriptors(s.genkit) {
+		if err := s.registerPromptWithMCP(desc); err != nil {
+			slog.Warn("failed to register prompt with the MCP server, skipping it", "prompt", desc.Name, "error", err)
+			continue
+		}
+		s.promptNames = append(s.promptNames, desc.Name)
+	}
+
 	s.actionsResolved = true
 	slog.Info("MCP Server setup complete",
 		"name", s.options.Name,
 		"tools", len(s.toolActions),
-		"resources", len(s.resourceActions))
+		"resources", len(s.resourceActions),
+		"prompts", len(s.promptNames))
 	return nil
 }
 
@@ -339,8 +351,9 @@ func (s *GenkitMCPServer) Close() error {
 	return nil
 }
 
-// GetServer returns the underlying MCP server instance, with the Genkit tools
-// and resources registered on it. It returns nil if they cannot be discovered.
+// GetServer returns the underlying MCP server instance, with the Genkit tools,
+// resources and prompts registered on it. It returns nil if they cannot be
+// discovered.
 func (s *GenkitMCPServer) GetServer() *server.MCPServer {
 	if err := s.setup(); err != nil {
 		slog.Error("MCP server setup failed", "name", s.options.Name, "error", err)
@@ -367,4 +380,9 @@ func (s *GenkitMCPServer) ListRegisteredResources() []string {
 		resourceNames = append(resourceNames, resourceName)
 	}
 	return resourceNames
+}
+
+// ListRegisteredPrompts returns the names of all prompts exposed by the server.
+func (s *GenkitMCPServer) ListRegisteredPrompts() []string {
+	return slices.Clone(s.promptNames)
 }

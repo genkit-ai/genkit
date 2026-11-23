@@ -205,6 +205,38 @@ func main() {
 
 ```
 
+### Expose Genkit prompts
+
+The server also exposes Genkit prompts, both `genkit.DefinePrompt` calls and
+`.prompt` files loaded by `genkit.Init`. It captures prompts at the first
+`GetServer` or `ServeStdio` call, not at `NewMCPServer`, so define them before
+then. For example:
+
+```go
+genkit.DefinePrompt(g, "greet",
+  ai.WithDescription("Greet a person"),
+  ai.WithInputSchema(map[string]any{
+    "type":       "object",
+    "properties": map[string]any{"name": map[string]any{"type": "string"}},
+    "required":   []string{"name"},
+  }),
+  ai.WithPrompt("Hello {{name}}"),
+)
+```
+
+MCP clients list `greet` with `prompts/list` and render it, without calling a
+model, with `prompts/get` and a `name` argument. Each input schema property
+becomes a string argument, converted when the property's `type` is `integer`,
+`number`, `boolean`, `object` or `array`. Arguments are required when the
+input schema requires them, as `prompt.Render` enforces for any non-nil input;
+omitted optional arguments take the prompt's default input. A prompt whose input schema is not an object is
+skipped with a warning.
+
+Rendered messages may hold text, data, and image or audio media given as
+base64 `data:` URIs; any other part makes `prompts/get` fail. MCP has no system
+role, so system messages become user messages prefixed with
+`System instructions:`.
+
 ## Testing Your Server
 
 ```bash
