@@ -92,7 +92,7 @@ Each sample runs with `go run .`. Start with the `basic-*` set: together they co
 | [basic](samples/basic/main.go) | Text generation, streaming, and flows |
 | [basic‑structured](samples/basic-structured/main.go) | Typed JSON output with `GenerateData` and `GenerateDataStream` |
 | [basic‑formats](samples/basic-formats/main.go) | Output formats and how each one streams |
-| [basic‑decisions](samples/basic-decisions/main.go) | Typed decisions with calibrated probabilities from TypeSafe jev |
+| [basic‑decisions](samples/basic-decisions/main.go) | Typed decisions with calibrated probabilities from Gemini Decision 1 |
 | [basic‑media](samples/basic-media) | Image input, image generation and editing, and video generation |
 | [basic‑prompts](samples/basic-prompts) | Handlebars templates, `.prompt` files, partials, and helpers |
 | [basic‑prompt‑content](samples/basic-prompt-content/main.go) | Prompt content built in Go from your data |
