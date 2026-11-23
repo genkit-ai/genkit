@@ -93,18 +93,23 @@ type ServerRef struct {
 type GenkitMCPClient struct {
 	options MCPClientOptions
 	server  *ServerRef
+	cancel  context.CancelFunc
 }
 
-// NewGenkitMCPClient creates a new GenkitMCPClient with the given options.
-// Returns an error if the initial connection fails.
-func NewGenkitMCPClient(options MCPClientOptions) (*GenkitMCPClient, error) {
-	// Set default values
+func normalizeClientOptions(options MCPClientOptions) MCPClientOptions {
 	if options.Name == "" {
 		options.Name = "unnamed"
 	}
 	if options.Version == "" {
 		options.Version = defaultMCPVersion
 	}
+	return options
+}
+
+// NewGenkitMCPClient creates a new GenkitMCPClient with the given options.
+// Returns an error if the initial connection fails.
+func NewGenkitMCPClient(options MCPClientOptions) (*GenkitMCPClient, error) {
+	options = normalizeClientOptions(options)
 
 	client := &GenkitMCPClient{
 		options: options,
@@ -128,6 +133,10 @@ func (c *GenkitMCPClient) connect(options MCPClientOptions) error {
 			logger.Warn(ctx, "error closing previous MCP transport", "client", c.options.Name, "error", err)
 		}
 	}
+	if c.cancel != nil {
+		c.cancel()
+		c.cancel = nil
+	}
 
 	// Create and configure transport
 	transport, err := c.createTransport(options)
@@ -135,9 +144,11 @@ func (c *GenkitMCPClient) connect(options MCPClientOptions) error {
 		return err
 	}
 
-	// Start the transport
-	ctx := context.Background()
+	// Start the transport with a client-owned context so a failed handshake can
+	// terminate a stdio subprocess before Close waits on it.
+	ctx, cancel := context.WithCancel(context.Background())
 	if err := transport.Start(ctx); err != nil {
+		cancel()
 		return fmt.Errorf("failed to start transport: %w", err)
 	}
 
@@ -147,8 +158,9 @@ func (c *GenkitMCPClient) connect(options MCPClientOptions) error {
 	// Initialize the client if not disabled
 	if !options.Disabled {
 		if err := c.initializeClient(ctx, mcpClient, options.Version); err != nil {
+			cancel()
 			if closeErr := mcpClient.Close(); closeErr != nil {
-				logger.Warn(ctx, "error closing MCP transport after initialization failure", "client", c.options.Name, "error", closeErr)
+				logger.Warn(context.Background(), "error closing MCP transport after initialization failure", "client", c.options.Name, "error", closeErr)
 			}
 			return fmt.Errorf("MCP handshake failed: %w", err)
 		}
@@ -158,6 +170,7 @@ func (c *GenkitMCPClient) connect(options MCPClientOptions) error {
 		Client:    mcpClient,
 		Transport: transport,
 	}
+	c.cancel = cancel
 
 	return nil
 }
@@ -267,6 +280,11 @@ func (c *GenkitMCPClient) Restart(ctx context.Context) error {
 
 // Disconnect closes the connection to the MCP server
 func (c *GenkitMCPClient) Disconnect() error {
+	cancel := c.cancel
+	c.cancel = nil
+	if cancel != nil {
+		defer cancel()
+	}
 	if c.server != nil {
 		err := c.server.Client.Close()
 		c.server = nil
