@@ -26,7 +26,6 @@ from __future__ import annotations
 import pytest
 
 from genkit import Genkit as StableGenkit
-from genkit._core._action import ActionRunContext
 from genkit._core._model import AgentInput, AgentResult, Message, ModelResponse, Part
 from genkit._core._typing import (
     AgentFinishReason,
@@ -35,6 +34,7 @@ from genkit._core._typing import (
 )
 from genkit.exp import Genkit
 from genkit.exp.agent import (
+    AgentContext,
     FileSessionStore,
     InMemorySessionStore,
     SessionRunner,
@@ -123,7 +123,7 @@ async def test_exp_genkit_define_prompt_agent_one_turn() -> None:
 async def test_exp_genkit_define_custom_agent_one_turn() -> None:
     ai = Genkit()
 
-    async def echo_fn(session_runner: SessionRunner, _: ActionRunContext) -> AgentResult:
+    async def echo_fn(session_runner: SessionRunner, _: AgentContext) -> AgentResult:
         async def handle_turn(inp: AgentInput, __: TurnContext) -> TurnResult | None:
             text = ''
             if inp.message and inp.message.content:
@@ -175,7 +175,7 @@ async def test_agent_turn_awaiting_failing_flow_reports_message_without_details(
     async def lookup(account: str) -> str:
         raise RuntimeError('db rejected')
 
-    async def fn(session_runner: SessionRunner, _: ActionRunContext) -> AgentResult:
+    async def fn(session_runner: SessionRunner, _: AgentContext) -> AgentResult:
         async def handle_turn(inp: AgentInput, __: TurnContext) -> TurnResult | None:
             await lookup('acme')
             return TurnResult(finish_reason=AgentFinishReason.STOP)

@@ -24,7 +24,6 @@ The following tools allow MCP-aware environments to interact with the Genkit ser
 
 | Tool Name | Description |
 | :--- | :--- |
-| **`get_usage_guide`** | Fetches the Genkit AI framework usage guide (specifiable by language). Intended for AI assistants. |
 | **`list_genkit_docs`** | Lists all available Genkit documentation files for discovery. |
 | **`search_genkit_docs`** | Searches Genkit documentation using keywords. |
 | **`read_genkit_docs`** | Reads the content of specific Genkit documentation files. |
@@ -35,8 +34,3 @@ The following tools allow MCP-aware environments to interact with the Genkit ser
 | **`kill_runtime`** | Kills the runtime process started by `start_runtime`. |
 | **`restart_runtime`** | Restarts the runtime process started by `start_runtime`. |
 
-### Available Prompts
-
-| Prompt Name | Description |
-| :--- | :--- |
-| **`genkit:init`** | Helps initialize a new Genkit project with best practices and language-specific setup. |

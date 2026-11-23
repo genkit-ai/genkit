@@ -23,18 +23,16 @@ Example:
     from genkit.embedder import (
         EmbedRequest,
         EmbedResponse,
-        embedder,
-        embedder_action_metadata,
+        Embedder,
         EmbedderRef,
     )
 """
 
 from genkit._ai._embedding import (
+    Embedder,
     EmbedderInfo,
     EmbedderRef,
     EmbedderSupports,
-    embedder,
-    embedder_action_metadata,
 )
 from genkit._core._model import EmbedRequest
 from genkit._core._typing import EmbedResponse
@@ -43,9 +41,8 @@ __all__ = [
     # Request/Response types
     'EmbedRequest',
     'EmbedResponse',
-    # Factory functions and metadata
-    'embedder',
-    'embedder_action_metadata',
+    # Action class
+    'Embedder',
     # Reference types
     'EmbedderRef',
     # Options and capabilities

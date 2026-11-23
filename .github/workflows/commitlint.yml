@@ -20,29 +20,36 @@ on:
   pull_request:
     types: [opened, edited, synchronize, reopened]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
   commitlint:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repo
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
       - name: Set up node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24.x
           cache: 'pnpm'
 
-      - name: Install commitlint
-        run: |
-          pnpm install --save-dev @commitlint/cli @commitlint/config-conventional
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
 
       - name: Validate PR title (used as squash commit message)
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
-          echo "$PR_TITLE" | npx commitlint
+          echo "$PR_TITLE" | pnpm exec commitlint

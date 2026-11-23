@@ -74,9 +74,9 @@ export function attachPluginActionToCommand(
 }
 
 function pluginToCommander(p: ToolPlugin): Command {
-  const cmd = new Command(p.keyword).description(
-    p.name + ' ' + clc.italic('(plugin)')
-  );
+  const cmd = new Command(p.keyword)
+    .allowExcessArguments(true)
+    .description(p.name + ' ' + clc.italic('(plugin)'));
   for (const a of p.actions) {
     const subcmd = cmd.command(a.action).description(a.helpText);
     attachPluginActionToCommand(subcmd, a);

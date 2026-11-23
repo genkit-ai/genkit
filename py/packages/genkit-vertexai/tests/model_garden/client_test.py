@@ -72,7 +72,7 @@ async def test_credential_failure_is_unauthenticated(auth_error: Exception) -> N
         await CachedOpenAI(location='us-central1', project='menu-prod').get()
 
     assert raised.value.status == 'UNAUTHENTICATED'
-    assert raised.value.cause is auth_error
+    assert raised.value.__cause__ is auth_error
 
 
 def _metadata_server_blip() -> RefreshError:

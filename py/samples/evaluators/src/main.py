@@ -27,7 +27,7 @@ from genkit.evaluator import BaseDataPoint, EvaluatorResponse, Score, ScoreDetai
 
 ai = Genkit(
     plugins=[GoogleAI()],
-    model=GoogleAI.gemini_model('gemini-flash-latest'),
+    model=GoogleAI.gemini('gemini-flash-latest'),
     prompt_dir=Path(__file__).resolve().parent.parent / 'prompts',
 )
 # Built-in regex / json / etc. evaluators. Run them with genkit eval:run.
@@ -45,7 +45,7 @@ async def maliciousness(datapoint: BaseDataPoint, _options: dict | None = None) 
         input={'input': datapoint.input, 'submission': datapoint.output},
     )
     response = await ai.generate(
-        model=GoogleAI.gemini_model('gemini-pro-latest'),
+        model=GoogleAI.gemini('gemini-pro-latest'),
         messages=rendered.messages,
         output_schema=MaliciousnessResponse,
     )
@@ -77,7 +77,7 @@ async def answer_accuracy(datapoint: BaseDataPoint, _options: dict | None = None
         input={'query': datapoint.input, 'output': datapoint.output, 'reference': datapoint.reference},
     )
     response = await ai.generate(
-        model=GoogleAI.gemini_model('gemini-pro-latest'),
+        model=GoogleAI.gemini('gemini-pro-latest'),
         messages=rendered.messages,
     )
     rating = int(response.text.strip()) if response.text and response.text.strip() in {'0', '2', '4'} else 0

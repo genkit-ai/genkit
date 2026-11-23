@@ -1,4 +1,9 @@
 node_modules
+/*.tgz
+/.genkit
+/src
+/tests
 tsconfig.cjs.json
 tsconfig.esm.json
+tsconfig.types.json
 tsconfig.json

@@ -23,7 +23,7 @@ from pydantic import BaseModel, TypeAdapter
 
 from genkit import Genkit
 
-ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
 
 
 class Sentiment(str, Enum):

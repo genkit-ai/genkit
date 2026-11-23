@@ -78,7 +78,10 @@ export interface GoogleAIPluginOptions {
   legacyResponseSchema?: boolean;
   /**
    * Whether to store conversations on the server when using the Interactions API.
-   * Defaults to false (stateless).
+   * Defaults to false (stateless). On generateContent models, it sets whether
+   * the server logs requests for the API key's project; sent only when set
+   * (otherwise the project's logging setting applies). A request's
+   * `config.store` takes precedence.
    */
   store?: boolean;
   /**
@@ -185,47 +188,4 @@ export interface EmbedContentResponse {
  */
 export interface ContentEmbedding {
   values: number[];
-}
-
-export declare interface VeoPredictRequest {
-  instances: VeoInstance[];
-  parameters: VeoParameters;
-}
-
-export declare interface VeoParameters {
-  negativePrompt?: string;
-  aspectRatio?: string;
-  personGeneration?: string;
-  durationSeconds?: number;
-  enhancePrompt?: boolean;
-  resolution?: string;
-  seed?: number;
-}
-
-export declare interface VeoInstance {
-  prompt: string;
-  image?: VeoImage;
-  video?: VeoVideo;
-}
-
-export declare interface VeoImage {
-  bytesBase64Encoded: string;
-  mimeType: string;
-}
-
-export declare interface VeoVideo {
-  uri: string;
-}
-
-export declare interface VeoOperation {
-  name: string;
-  done?: boolean;
-  error?: {
-    message: string;
-  };
-  response?: {
-    generateVideoResponse: {
-      generatedSamples: { video: { uri: string } }[];
-    };
-  };
 }

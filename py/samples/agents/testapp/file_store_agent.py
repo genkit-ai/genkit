@@ -37,7 +37,7 @@ from typing import Any
 from _ai import LITE_MODEL, ai, reply_text
 from pydantic import BaseModel
 
-from genkit import ActionRunContext
+from genkit import FlowContext
 from genkit.exp.agent import FileSessionStore
 
 STORE_DIR = './.snapshots-filestore'
@@ -71,7 +71,7 @@ class FileStoreResult(BaseModel):
 
 
 @ai.flow()
-async def test_file_store_agent(user_name: str, ctx: ActionRunContext) -> FileStoreResult:
+async def test_file_store_agent(user_name: str, ctx: FlowContext) -> FileStoreResult:
     """Two turns on one chat: the note logged in turn 1 is recalled in turn 2."""
     chat = file_store_agent.chat()
 
@@ -91,7 +91,7 @@ async def test_file_store_agent(user_name: str, ctx: ActionRunContext) -> FileSt
 
 
 @ai.flow()
-async def test_file_store_chain_pruning(user_name: str, ctx: ActionRunContext) -> dict[str, Any]:
+async def test_file_store_chain_pruning(user_name: str, ctx: FlowContext) -> dict[str, Any]:
     """Run four turns against the capped store and report what survived on disk.
 
     With the chain capped at three, the fourth turn evicts the first: its

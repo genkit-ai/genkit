@@ -25,13 +25,13 @@ from genkit._ai._agents._runtime import SessionRunner
 from genkit._ai._agents._session_stores._inmemory_store import InMemorySessionStore
 from genkit._ai._agents._snapshot import is_heartbeat_expired, resolve_snapshot
 from genkit._ai._agents._types import TurnContext, TurnResult
-from genkit._core._action import ActionKind, ActionRunContext
-from genkit._core._error import GenkitError, RuntimeErrorReason
+from genkit._core._action import ActionKind
+from genkit._core._error import ErrorReason, GenkitError
 from genkit._core._model import AgentInput, AgentResult, Message, SessionSnapshot, SessionState
 from genkit._core._typing import (
     SnapshotStatus,
 )
-from genkit.exp.agent import AgentFinishReason
+from genkit.exp.agent import AgentContext, AgentFinishReason
 
 
 def input_text(inp: AgentInput) -> str:
@@ -119,7 +119,7 @@ async def test_define_custom_agent_registers_snapshot_and_abort_actions() -> Non
     ai = Genkit()
     store = InMemorySessionStore()
 
-    async def fn(session_runner: SessionRunner, _: ActionRunContext) -> AgentResult:
+    async def fn(session_runner: SessionRunner, _: AgentContext) -> AgentResult:
         async def handle_turn(inp: AgentInput, _: TurnContext) -> TurnResult | None:
             await session_runner.add_messages([Message(role='model', content=[Part.from_text('hi')])])
             return TurnResult(finish_reason=AgentFinishReason.STOP)
@@ -156,7 +156,7 @@ async def test_snapshot_action_raises_not_found_for_missing_snapshot() -> None:
     ai = Genkit()
     store = InMemorySessionStore()
 
-    async def fn(session_runner: SessionRunner, _: ActionRunContext) -> AgentResult:
+    async def fn(session_runner: SessionRunner, _: AgentContext) -> AgentResult:
         return await session_runner.result()
 
     define_custom_agent(ai, 'missingSnapTest', fn, store=store)
@@ -174,7 +174,7 @@ async def test_get_snapshot_data_returns_none_for_missing_snapshot() -> None:
     ai = Genkit()
     store = InMemorySessionStore()
 
-    async def fn(session_runner: SessionRunner, _: ActionRunContext) -> AgentResult:
+    async def fn(session_runner: SessionRunner, _: AgentContext) -> AgentResult:
         return await session_runner.result()
 
     agent = define_custom_agent(ai, 'missingMethodSnapTest', fn, store=store)
@@ -188,7 +188,7 @@ async def test_custom_agent_turn_that_raises_resolves_as_failed() -> None:
     ai = Genkit()
     store = InMemorySessionStore()
 
-    async def fn(session_runner: SessionRunner, _: ActionRunContext) -> AgentResult:
+    async def fn(session_runner: SessionRunner, _: AgentContext) -> AgentResult:
         async def handle_turn(inp: AgentInput, _: TurnContext) -> TurnResult | None:
             text = input_text(inp)
             if 'fail' in text.lower():
@@ -225,7 +225,7 @@ async def test_chat_resumes_from_blocked_snapshot() -> None:
     ai = Genkit()
     store = InMemorySessionStore()
 
-    async def fn(session_runner: SessionRunner, _: ActionRunContext) -> AgentResult:
+    async def fn(session_runner: SessionRunner, _: AgentContext) -> AgentResult:
         async def handle_turn(inp: AgentInput, _: TurnContext) -> TurnResult | None:
             text = input_text(inp)
             if 'bomb' in text.lower():
@@ -273,7 +273,7 @@ async def test_chat_points_at_detached_snapshot_so_send_needs_completed_or_reloa
     ai = Genkit()
     store = InMemorySessionStore()
 
-    async def fn(session_runner: SessionRunner, _: ActionRunContext) -> AgentResult:
+    async def fn(session_runner: SessionRunner, _: AgentContext) -> AgentResult:
         async def handle_turn(inp: AgentInput, _: TurnContext) -> TurnResult | None:
             text = input_text(inp)
             if 'slow' in text.lower():
@@ -300,7 +300,7 @@ async def test_chat_points_at_detached_snapshot_so_send_needs_completed_or_reloa
     too_soon = await chat.send('too soon')
     assert too_soon.finish_reason == AgentFinishReason.FAILED
     assert too_soon.error is not None
-    assert too_soon.error.reason is RuntimeErrorReason.SNAPSHOT_NOT_RESUMABLE
+    assert too_soon.error.reason is ErrorReason.SNAPSHOT_NOT_RESUMABLE
     assert 'not resumable' in too_soon.error.message
 
     status = await task.abort()
@@ -312,7 +312,7 @@ async def test_chat_points_at_detached_snapshot_so_send_needs_completed_or_reloa
     still = await chat.send('still stranded')
     assert still.finish_reason == AgentFinishReason.FAILED
     assert still.error is not None
-    assert still.error.reason is RuntimeErrorReason.SNAPSHOT_NOT_RESUMABLE
+    assert still.error.reason is ErrorReason.SNAPSHOT_NOT_RESUMABLE
     assert 'not resumable' in still.error.message
 
     chat = agent.chat(session_id=session_id)
@@ -328,7 +328,7 @@ async def test_load_chat_by_session_hydrates_aborted_leaf() -> None:
     ai = Genkit()
     store = InMemorySessionStore()
 
-    async def fn(session_runner: SessionRunner, _: ActionRunContext) -> AgentResult:
+    async def fn(session_runner: SessionRunner, _: AgentContext) -> AgentResult:
         async def handle_turn(inp: AgentInput, _: TurnContext) -> TurnResult | None:
             text = input_text(inp)
             if 'slow' in text.lower():
@@ -358,7 +358,7 @@ async def test_load_chat_by_session_hydrates_aborted_leaf() -> None:
     rejected = await reloaded.send('still there?')
     assert rejected.finish_reason == AgentFinishReason.FAILED
     assert rejected.error is not None
-    assert rejected.error.reason is RuntimeErrorReason.SNAPSHOT_NOT_RESUMABLE
+    assert rejected.error.reason is ErrorReason.SNAPSHOT_NOT_RESUMABLE
     assert 'not resumable' in rejected.error.message
 
     resumed = agent.chat(session_id=session_id)

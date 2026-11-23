@@ -21,14 +21,14 @@ import getPort from 'get-port';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import os from 'os';
 import path from 'path';
-import { Index } from '../src/file-trace-store';
+import { Index } from '../src/file-trace-store.js';
 import {
   LocalFileLogStore,
   LocalFileTraceStore,
   startTelemetryServer,
   stopTelemetryApi,
-} from '../src/index';
-import { sleep, span } from './utils';
+} from '../src/index.js';
+import { sleep, span } from './utils.js';
 
 const TRACE_ID = '1234';
 const TRACE_ID_1 = '1234';

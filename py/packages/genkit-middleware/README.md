@@ -35,7 +35,7 @@ from genkit_middleware import Retry, Fallback, Middleware
 ai = Genkit(plugins=[GoogleAI(), Middleware()])
 
 response = await ai.generate(
-    model=GoogleAI.gemini_model('gemini-flash-latest'),
+    model=GoogleAI.gemini('gemini-flash-latest'),
     prompt='Hello!',
     use=[
         Retry(max_retries=5),
@@ -74,7 +74,7 @@ retry = Retry(
 )
 
 response = await ai.generate(
-    model=GoogleAI.gemini_model('gemini-flash-latest'),
+    model=GoogleAI.gemini('gemini-flash-latest'),
     prompt='Hello!',
     use=[retry],
 )
@@ -97,7 +97,7 @@ fallback = Fallback(
 )
 
 response = await ai.generate(
-    model=GoogleAI.gemini_model('gemini-pro-latest'),
+    model=GoogleAI.gemini('gemini-pro-latest'),
     prompt='Hello!',
     use=[fallback],
 )
@@ -128,7 +128,7 @@ approval = ToolApproval(
 )
 
 first = await ai.generate(
-    model=GoogleAI.gemini_model('gemini-flash-latest'),
+    model=GoogleAI.gemini('gemini-flash-latest'),
     prompt='Delete the database',
     tools=['delete_database'],
     use=[approval],
@@ -140,7 +140,7 @@ tool by restarting it with ``resumed_metadata`` that includes ``tool_approved``:
 
 ```python
 response = await ai.generate(
-    model=GoogleAI.gemini_model('gemini-flash-latest'),
+    model=GoogleAI.gemini('gemini-flash-latest'),
     prompt='Delete the database',
     messages=list(first.messages),
     tools=['delete_database'],
@@ -162,7 +162,7 @@ skills = Skills(
 )
 
 response = await ai.generate(
-    model=GoogleAI.gemini_model('gemini-flash-latest'),
+    model=GoogleAI.gemini('gemini-flash-latest'),
     prompt='Help me with Python',
     use=[skills],
 )
@@ -194,7 +194,7 @@ fs = Filesystem(
 )
 
 response = await ai.generate(
-    model=GoogleAI.gemini_model('gemini-flash-latest'),
+    model=GoogleAI.gemini('gemini-flash-latest'),
     prompt='List files in the current directory',
     use=[fs],
 )
@@ -225,7 +225,7 @@ ai = Genkit(plugins=[GoogleAI(), Middleware()])
 
 agent = ai.define_agent(
     name='workspaceAgent',
-    model=GoogleAI.gemini_model('gemini-flash-latest'),
+    model=GoogleAI.gemini('gemini-flash-latest'),
     use=[Artifacts()],
     store=InMemorySessionStore(),
 )

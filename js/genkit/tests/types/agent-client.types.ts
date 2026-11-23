@@ -15,7 +15,7 @@
  */
 
 // Type-level assertions for the public `genkit/beta/client` agent surface.
-// Never executed: type-checked by `tsconfig.types-test.json` (part of
+// Never executed: type-checked by `tsconfig.test.json` (part of
 // `pnpm check`), since the runtime test runner strips types without checking.
 
 import {

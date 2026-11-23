@@ -27,7 +27,7 @@ from genkit_flask import genkit_flask_handler
 from genkit_google_genai import GoogleAI
 
 app = Flask(__name__)
-ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
 
 
 @app.post('/api/greet')
@@ -37,5 +37,10 @@ async def greet_user(name: str) -> str:
     res = await ai.generate(prompt=f'Say hello to {name} in one sentence.')
     return res.text
 ```
+
+The endpoint name defaults to the flow's name with dots replaced by underscores
+(e.g., `greet_user`). To override the endpoint name or prevent clashes with an
+existing view, pass `endpoint=` to the route decorator (e.g.,
+`@app.post('/api/greet', endpoint='custom_greet')`).
 
 Requires Flask 3.1+.

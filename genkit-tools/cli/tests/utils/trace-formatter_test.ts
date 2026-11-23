@@ -15,11 +15,11 @@
  */
 
 import type { TraceData } from '@genkit-ai/tools-common';
-import { describe, expect, it } from '@jest/globals';
+import { describe, expect, it } from 'vitest';
 import {
   cleanTraceJson,
   formatTraceTree,
-} from '../../src/utils/trace-formatter';
+} from '../../src/utils/trace-formatter.js';
 
 describe('trace-formatter', () => {
   describe('cleanTraceJson', () => {

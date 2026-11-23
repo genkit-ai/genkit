@@ -300,7 +300,7 @@ describe('a2ui() middleware', () => {
               { text: 'clicked:' },
               {
                 data: {
-                  envelopes: [
+                  messages: [
                     {
                       action: {
                         name: 'refresh',
@@ -332,6 +332,54 @@ describe('a2ui() middleware', () => {
     assert.match(joined, /Tokyo/);
   });
 
+  it('still sanitizes legacy inbound a2ui parts written with `envelopes`', async () => {
+    const mw = modelHook({});
+    let seen:
+      | { messages: Array<{ role: string; content: Array<{ text?: string }> }> }
+      | undefined;
+    await mw(
+      {
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { text: 'clicked:' },
+              {
+                data: {
+                  envelopes: [
+                    {
+                      action: {
+                        name: 'refresh',
+                        surfaceId: 's1',
+                        sourceComponentId: 'btn',
+                        timestamp: 't',
+                        context: { city: 'Tokyo' },
+                      },
+                    },
+                  ],
+                },
+                metadata: { mimeType: 'application/a2ui+json' },
+              },
+            ],
+          },
+        ],
+      },
+      undefined,
+      async (r: {
+        messages: Array<{ role: string; content: Array<{ text?: string }> }>;
+      }) => {
+        seen = r;
+        return { message: { role: 'model', content: [] } };
+      }
+    );
+    const userMsg = seen?.messages.find((m) => m.role === 'user');
+    assert.ok(userMsg);
+    assert.ok(!userMsg.content.some((p) => isA2uiPart(p)));
+    const joined = userMsg.content.map((p) => p.text ?? '').join(' ');
+    assert.match(joined, /UI action "refresh"/);
+    assert.match(joined, /Tokyo/);
+  });
+
   it('replays a prior assistant surface as a fenced a2ui block, not a sentinel', async () => {
     const mw = modelHook({});
     let seen: any;
@@ -344,7 +392,7 @@ describe('a2ui() middleware', () => {
               { text: 'Here you go:' },
               {
                 data: {
-                  envelopes: [
+                  messages: [
                     {
                       createSurface: {
                         surfaceId: 's1',
@@ -420,7 +468,7 @@ describe('a2ui() middleware', () => {
             role: 'model',
             content: [
               {
-                data: { envelopes: [] },
+                data: { messages: [] },
                 metadata: { mimeType: 'application/a2ui+json' },
               },
             ],
@@ -462,7 +510,7 @@ describe('a2ui() middleware', () => {
             content: [
               {
                 data: {
-                  envelopes: [
+                  messages: [
                     {
                       createSurface: {
                         surfaceId: 's1',
@@ -488,7 +536,7 @@ describe('a2ui() middleware', () => {
             content: [
               {
                 data: {
-                  envelopes: [{ action: { name: 'refresh', surfaceId: 's1' } }],
+                  messages: [{ action: { name: 'refresh', surfaceId: 's1' } }],
                 },
                 metadata: { mimeType: 'application/a2ui+json' },
               },
@@ -553,7 +601,7 @@ describe('a2ui() middleware', () => {
             content: [
               {
                 data: {
-                  envelopes: [
+                  messages: [
                     {
                       createSurface: {
                         surfaceId: 's1',

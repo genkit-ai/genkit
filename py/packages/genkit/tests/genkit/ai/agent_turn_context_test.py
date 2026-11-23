@@ -27,9 +27,8 @@ from genkit._ai._agents._base import define_custom_agent
 from genkit._ai._agents._runtime import SessionRunner
 from genkit._ai._agents._session import reserve_snapshot_id
 from genkit._ai._agents._types import TurnContext, TurnResult
-from genkit._core._action import ActionRunContext
 from genkit._core._model import AgentInput, AgentResult, Message
-from genkit.exp.agent import AgentFinishReason, InMemorySessionStore
+from genkit.exp.agent import AgentContext, AgentFinishReason, InMemorySessionStore
 
 
 def test_reserve_snapshot_id_is_unique_uuid() -> None:
@@ -45,7 +44,7 @@ async def test_handler_receives_reserved_id_reused_on_persisted_snapshot() -> No
     store = InMemorySessionStore()
     seen: dict[str, object] = {}
 
-    async def fn(session_runner: SessionRunner, _: ActionRunContext) -> AgentResult:
+    async def fn(session_runner: SessionRunner, _: AgentContext) -> AgentResult:
         async def handle_turn(_: AgentInput, turn_ctx: TurnContext) -> TurnResult | None:
             seen['snapshot_id'] = turn_ctx.snapshot_id
             seen['parent_snapshot_id'] = turn_ctx.parent_snapshot_id
@@ -75,7 +74,7 @@ async def test_second_turn_parent_is_first_turn_snapshot() -> None:
     snapshot_ids: list[str] = []
     parent_ids: list[str | None] = []
 
-    async def fn(session_runner: SessionRunner, _: ActionRunContext) -> AgentResult:
+    async def fn(session_runner: SessionRunner, _: AgentContext) -> AgentResult:
         async def handle_turn(_: AgentInput, turn_ctx: TurnContext) -> TurnResult | None:
             assert turn_ctx.snapshot_id is not None
             snapshot_ids.append(turn_ctx.snapshot_id)
@@ -101,7 +100,7 @@ async def test_no_store_means_no_reserved_snapshot_id() -> None:
     ai = Genkit()
     seen: dict[str, object] = {'snapshot_id': 'sentinel'}
 
-    async def fn(session_runner: SessionRunner, _: ActionRunContext) -> AgentResult:
+    async def fn(session_runner: SessionRunner, _: AgentContext) -> AgentResult:
         async def handle_turn(_: AgentInput, turn_ctx: TurnContext) -> TurnResult | None:
             seen['snapshot_id'] = turn_ctx.snapshot_id
             await session_runner.add_messages([Message(role='model', content=[Part.from_text('ok')])])
@@ -122,7 +121,7 @@ async def test_handler_can_name_external_dir_after_reserved_id(tmp_path: Path) -
     store = InMemorySessionStore()
     workspace_root = tmp_path / 'workspaces'
 
-    async def fn(session_runner: SessionRunner, _: ActionRunContext) -> AgentResult:
+    async def fn(session_runner: SessionRunner, _: AgentContext) -> AgentResult:
         async def handle_turn(_: AgentInput, turn_ctx: TurnContext) -> TurnResult | None:
             assert turn_ctx.snapshot_id is not None
             work = workspace_root / turn_ctx.snapshot_id

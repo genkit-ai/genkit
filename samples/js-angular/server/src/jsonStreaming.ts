@@ -56,7 +56,7 @@ export const streamCharacters = ai.defineFlow(
 
     let buffer = '';
     for await (const chunk of stream) {
-      buffer += chunk.content[0].text!;
+      buffer += chunk.text;
       if (buffer.length > 10) {
         sendChunk(parse(maybeStripMarkdown(buffer), Allow.ALL));
       }

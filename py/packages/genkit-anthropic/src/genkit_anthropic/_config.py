@@ -17,98 +17,47 @@
 """Typed configuration schema for Anthropic models.
 
 Extends the shared :class:`ModelConfig` (``version``, ``temperature``,
-``maxOutputTokens``, ...) with Anthropic-specific options.
+``maxOutputTokens``, ...) with flat Anthropic options. Choices are exported
+Literals; the plugin builds Anthropic's nested request fields from them.
 
-Unknown keys raise, at the top level and inside nested settings like
-``thinking``, so a typo fails before the request is sent. Anthropic body
-fields this class doesn't declare go in ``extra`` and are sent through
-the SDK's ``extra_body``. Top-level Genkit fields
-accept their usual camelCase aliases, while Anthropic-specific nested keys
-match the Anthropic plugin shape field-by-field.
+Unknown keys raise, so a typo fails before the request is sent. Anthropic
+body fields this class doesn't declare go in ``extra`` and are sent through
+the SDK's ``extra_body``.
 """
 
-from typing import Annotated, ClassVar, Literal, cast
+from collections.abc import Mapping
+from typing import ClassVar, Literal, TypeAlias, cast, get_args
 
 from anthropic.types.beta.message_create_params import MessageCreateParamsBase as BetaMessageCreateParamsBase
 from anthropic.types.message_create_params import MessageCreateParamsBase
-from pydantic import BaseModel, ConfigDict, Field, WithJsonSchema, model_validator
-from pydantic.alias_generators import to_camel
+from pydantic import ConfigDict, Field, model_validator
 from pydantic.config import JsonDict
 
+from genkit import GenkitError
 from genkit.model import ModelConfig
 
 BETA_ONLY_KEYS = frozenset(BetaMessageCreateParamsBase.__annotations__) - frozenset(
     MessageCreateParamsBase.__annotations__
 )
 
-_NESTED_CONFIG = ConfigDict(extra='forbid', populate_by_name=True)
+# Choice sets, exported from the package root. Literals, so callers pass plain
+# strings (thinking='adaptive') and type checkers reject a value outside the set.
+ThinkingMode: TypeAlias = Literal['enabled', 'adaptive', 'disabled']
+ThinkingDisplay: TypeAlias = Literal['summarized', 'omitted']
+Effort: TypeAlias = Literal['low', 'medium', 'high', 'xhigh', 'max']
 
-_THINKING_SCHEMA = {
-    'type': 'object',
-    'properties': {
-        'enabled': {'type': 'boolean'},
-        'budgetTokens': {'type': 'integer', 'minimum': 1024},
-        'budget_tokens': {'type': 'integer', 'minimum': 1024},
-        'adaptive': {'type': 'boolean'},
-        'display': {'type': 'string', 'enum': ['summarized', 'omitted']},
-        'type': {'type': 'string', 'enum': ['enabled', 'disabled', 'adaptive']},
-    },
-    'additionalProperties': False,
-    'description': (
-        'The thinking configuration to use for the request. Thinking is a feature that '
-        'allows the model to think about the request and provide a better response.'
+# Nested config keys that were flattened, and what replaces each.
+_REMOVED_KEYS = {
+    'output_config': 'output_config was flattened; use effort= and task_budget=',
+    'outputConfig': 'outputConfig was flattened; use effort= and task_budget=',
+    'metadata': 'metadata was flattened; use user_id=',
+    'tool_choice': (
+        "tool_choice is no longer a config field; pass ai.generate(tool_choice='auto' | 'required' | 'none'), "
+        "set disable_parallel_tool_use=True for one tool call per reply, or send Anthropic's object as "
+        "extra={'tool_choice': {...}}"
     ),
 }
-
-_OUTPUT_CONFIG_SCHEMA = {
-    'type': 'object',
-    'properties': {
-        'effort': {'type': 'string', 'enum': ['low', 'medium', 'high', 'xhigh', 'max']},
-        'task_budget': {
-            'type': 'object',
-            'properties': {
-                'type': {'type': 'string', 'const': 'tokens', 'default': 'tokens'},
-                'total': {'type': 'integer', 'minimum': 20000},
-            },
-            'required': ['total'],
-            'additionalProperties': False,
-        },
-    },
-    'additionalProperties': False,
-    'description': 'Configuration for output generation, such as setting the effort parameter and task budgets.',
-}
-
-_TOOL_CHOICE_SCHEMA = {
-    'type': 'object',
-    'properties': {
-        'type': {
-            'type': 'string',
-            'enum': ['auto', 'any', 'tool', 'none'],
-            'description': 'Tool choice mode.',
-        },
-        'name': {
-            'type': 'string',
-            'description': 'Tool name to require when type is tool.',
-        },
-        'disable_parallel_tool_use': {
-            'type': 'boolean',
-            'description': 'Allow at most one tool call in the reply. Not valid with type none.',
-        },
-    },
-    'required': ['type'],
-    'additionalProperties': False,
-    'description': (
-        'The tool choice to use for the request. This can be used to specify the tool to '
-        'use for the request. If not specified, the model will choose the tool to use.'
-    ),
-}
-
-_METADATA_SCHEMA = {
-    'type': 'object',
-    'properties': {'user_id': {'type': 'string'}},
-    'additionalProperties': False,
-    'description': 'The metadata to include in the request.',
-}
+_REMOVED_KEYS['toolChoice'] = _REMOVED_KEYS['tool_choice'].replace('tool_choice is', 'toolChoice is', 1)
 
 
 def _anthropic_config_schema_extra(schema: JsonDict) -> None:
@@ -168,129 +117,69 @@ def _anthropic_config_schema_extra(schema: JsonDict) -> None:
                         'An empty list suppresses the defaults.'
                     ),
                 },
+                'disableParallelToolUse': {
+                    'type': 'boolean',
+                    'title': 'Disable parallel tool use',
+                    'description': 'Allow at most one tool call per reply.',
+                },
+                'thinking': {
+                    'type': 'string',
+                    'enum': list(get_args(ThinkingMode)),
+                    'title': 'Thinking',
+                    'description': 'Extended thinking mode. A thinking budget alone means enabled.',
+                },
+                'thinkingBudget': {
+                    'type': 'integer',
+                    'minimum': 1024,
+                    'title': 'Thinking budget',
+                    'description': (
+                        'Thinking token budget. Required when thinking is enabled; ignored when adaptive or disabled.'
+                    ),
+                },
+                'thinkingDisplay': {
+                    'type': 'string',
+                    'enum': list(get_args(ThinkingDisplay)),
+                    'title': 'Thinking display',
+                    'description': (
+                        'Whether the reply includes summarized thinking or omits it. Ignored when thinking is disabled.'
+                    ),
+                },
+                'effort': {
+                    'type': 'string',
+                    'enum': list(get_args(Effort)),
+                    'title': 'Effort',
+                    'description': 'How much effort the model spends on the reply.',
+                },
+                'taskBudget': {
+                    'type': 'integer',
+                    'minimum': 20000,
+                    'title': 'Task budget',
+                    'description': 'Token budget for the whole task. Sent on the beta API.',
+                },
+                'userId': {
+                    'type': 'string',
+                    'title': 'User ID',
+                    'description': 'Opaque end-user ID, sent as metadata.user_id.',
+                },
             },
         )
     )
 
 
-class ThinkingConfig(BaseModel):
-    """Extended-thinking configuration.
-
-    ``enabled``, ``adaptive`` and ``disabled`` are mutually exclusive, and
-    ``budgetTokens`` is required when ``enabled`` is true.
-    """
-
-    model_config = _NESTED_CONFIG
-
-    enabled: bool | None = None
-    # Adaptive mode allows a fractional budget it ignores; integers enforced only when enabled.
-    budget_tokens: float | None = Field(default=None, alias='budgetTokens', ge=1024)
-    adaptive: bool | None = None
-    display: Literal['summarized', 'omitted'] | None = None
-    # The API's own spelling (`{'type': 'enabled', ...}`). A mode this list lacks
-    # can go out through `extra={'thinking': {...}}`, which replaces the setting.
-    type: Literal['enabled', 'disabled', 'adaptive'] | None = None
-
-    @model_validator(mode='after')
-    def _check_thinking(self) -> 'ThinkingConfig':
-        """Enforce cross-field thinking rules."""
-        thinking_type = self.type
-        enabled = self.enabled is True or thinking_type == 'enabled'
-        adaptive = self.adaptive is True or thinking_type == 'adaptive'
-        disabled = self.enabled is False or thinking_type == 'disabled'
-        budget_implies_enabled = self.budget_tokens is not None and not adaptive and not disabled
-
-        if enabled and adaptive:
-            raise ValueError('Cannot use both enabled and adaptive thinking modes simultaneously')
-        if disabled and (enabled or adaptive):
-            raise ValueError('Cannot disable thinking and request an enabled or adaptive thinking mode simultaneously')
-        if enabled and self.budget_tokens is None:
-            raise ValueError('budgetTokens is required when thinking is enabled')
-        if (
-            (enabled or budget_implies_enabled)
-            and self.budget_tokens is not None
-            and not float(self.budget_tokens).is_integer()
-        ):
-            raise ValueError('budgetTokens must be an integer when thinking is enabled')
-        return self
-
-
-class TaskBudget(BaseModel):
-    """Token budget for output generation."""
-
-    model_config = _NESTED_CONFIG
-
-    type: Literal['tokens'] = 'tokens'
-    total: int = Field(ge=20000)
-
-
-class OutputConfig(BaseModel):
-    """Output-generation configuration (effort and task budget)."""
-
-    model_config = _NESTED_CONFIG
-
-    effort: Literal['low', 'medium', 'high', 'xhigh', 'max'] | None = None
-    task_budget: TaskBudget | None = Field(default=None, alias='task_budget')
-
-
-class AutoToolChoice(BaseModel):
-    """Let the model decide whether to call a tool."""
-
-    model_config = _NESTED_CONFIG
-    type: Literal['auto']
-    disable_parallel_tool_use: bool | None = None
-    """Allow at most one tool call in the reply."""
-
-
-class AnyToolChoice(BaseModel):
-    """Require the model to call some tool."""
-
-    model_config = _NESTED_CONFIG
-    type: Literal['any']
-    disable_parallel_tool_use: bool | None = None
-    """Allow at most one tool call in the reply."""
-
-
-class SpecificToolChoice(BaseModel):
-    """Require the model to call the named tool."""
-
-    model_config = _NESTED_CONFIG
-    type: Literal['tool']
-    name: str
-    disable_parallel_tool_use: bool | None = None
-    """Allow at most one tool call in the reply."""
-
-
-class ToolChoiceNone(BaseModel):
-    """Prevent the model from calling a tool."""
-
-    model_config = _NESTED_CONFIG
-    type: Literal['none']
-
-
-ToolChoice = Annotated[
-    AutoToolChoice | AnyToolChoice | SpecificToolChoice | ToolChoiceNone,
-    Field(discriminator='type'),
-]
-
-
-class RequestMetadata(BaseModel):
-    """Metadata to include in the request.
-
-    Uses no alias generator, so ``user_id`` stays snake_case.
-    """
-
-    model_config = _NESTED_CONFIG
-
-    user_id: str | None = None
-
-
 class AnthropicConfig(ModelConfig):
     """Typed configuration for Anthropic (Claude) models.
 
-    Extends the shared :class:`ModelConfig` with Anthropic-specific options.
-    JSON keys stay snake_case for ``tool_choice`` and ``output_config`` and
-    camelCase elsewhere (``apiVersion``, inherited ``maxOutputTokens``).
+    Extends the shared :class:`ModelConfig` with flat Anthropic options. The
+    plugin builds Anthropic's nested request fields from them:
+
+    - ``thinking``, ``thinking_budget``, ``thinking_display`` → ``thinking``
+    - ``effort``, ``task_budget`` → ``output_config``
+    - ``user_id`` → ``metadata``
+
+    JSON keys are camelCase (``thinkingBudget``, inherited ``maxOutputTokens``).
+
+    Tool choice is Genkit's ``ai.generate(tool_choice=...)``; the plugin sends
+    it as Anthropic's ``tool_choice`` object.
 
     Claude requires a length cap, so an omitted ``max_output_tokens`` is sent
     as 4096; a reply cut off there ends with finish reason ``length``.
@@ -298,34 +187,63 @@ class AnthropicConfig(ModelConfig):
     ``extra`` is for Anthropic request fields this class doesn't declare
     (``service_tier``, ``container``, ...). Its keys are merged into the top
     level of the request body and win over the declared settings; a nested
-    value such as ``extra={'thinking': {...}}`` replaces the whole setting
-    rather than merging into it. A beta-only field in ``extra`` sends the
-    call to the beta API, the same as ``betas`` does.
+    value such as ``extra={'thinking': {...}}`` replaces the whole built
+    object rather than merging into it. A beta-only field in ``extra`` sends
+    the call to the beta API, the same as ``betas`` does. One exception:
+    ``extra={'tool_choice': ...}`` is dropped on a request with no tools, the
+    same as ``generate(tool_choice=)``, because the API rejects tool_choice
+    without tools.
+
+    Layered config: Genkit merges config key by key, ModelRef default first,
+    then the prompt's config, then the call's; a layer overrides only the
+    keys it sets, and ``None`` clears an inherited value. Three rules follow:
+
+    1. Rules that span fields are judged once, on the merged config, right
+       before the request is built. A layer is never rejected for something
+       another layer could still supply. Single-field checks (type, bounds,
+       unknown keys) still run on each layer.
+    2. When one field is a switch and the others only apply in some modes,
+       the switch wins: a setting the mode doesn't use isn't sent, and
+       nothing fails. ``thinking='disabled'`` over an inherited
+       ``thinking_budget`` turns thinking off.
+    3. When two fields pick the same thing and neither is a switch, a
+       conflict in the merged config fails before the request is sent, and
+       the message names the ``None`` that clears the inherited one.
     """
 
-    model_config = ConfigDict(
-        alias_generator=to_camel,
-        json_schema_extra=_anthropic_config_schema_extra,
-        populate_by_name=True,
-    )
+    model_config = ConfigDict(json_schema_extra=_anthropic_config_schema_extra)
 
-    # Config fields that are never create() kwargs. api_version picks the API
-    # surface. (api_key was removed from ModelConfig in #6597).
-    SDK_UNSUPPORTED_KEYS: ClassVar[frozenset[str]] = frozenset({'api_version'})
+    # Fields sent to messages.create() under their own name. Every other field
+    # is built into a request field by the plugin (thinking, output_config,
+    # metadata, tool_choice, model, max_tokens, betas) or picks the API surface
+    # (api_version).
+    CREATE_KWARGS: ClassVar[frozenset[str]] = frozenset({'temperature', 'top_k', 'top_p', 'stop_sequences'})
 
-    thinking: Annotated[ThinkingConfig | None, WithJsonSchema(_THINKING_SCHEMA)] = Field(
+    thinking: ThinkingMode | None = Field(
         default=None,
+        description='Extended thinking mode. A thinking_budget alone means enabled.',
     )
-    output_config: Annotated[OutputConfig | None, WithJsonSchema(_OUTPUT_CONFIG_SCHEMA)] = Field(
+    thinking_budget: int | None = Field(
         default=None,
-        alias='output_config',
+        ge=1024,
+        description='Thinking token budget. Required when thinking is enabled; ignored when adaptive or disabled.',
     )
-    tool_choice: Annotated[ToolChoice | None, WithJsonSchema(_TOOL_CHOICE_SCHEMA)] = Field(
+    thinking_display: ThinkingDisplay | None = Field(
         default=None,
-        alias='tool_choice',
+        description='Whether the reply includes summarized thinking or omits it. Ignored when thinking is disabled.',
     )
-    metadata: Annotated[RequestMetadata | None, WithJsonSchema(_METADATA_SCHEMA)] = Field(
+    effort: Effort | None = Field(default=None, description='How much effort the model spends on the reply.')
+    task_budget: int | None = Field(
         default=None,
+        ge=20000,
+        description='Token budget for the whole task. Sent on the beta API.',
+    )
+    user_id: str | None = Field(default=None, description='Opaque end-user ID, sent as metadata.user_id.')
+    disable_parallel_tool_use: bool | None = Field(
+        default=None,
+        description=(
+            'Allow at most one tool call per reply. Sent inside tool_choice; ignored when tool_choice is none.'
+        ),
     )
     api_version: Literal['stable', 'beta'] | None = Field(
         default=None,
@@ -336,6 +254,53 @@ class AnthropicConfig(ModelConfig):
         description='Anthropic beta feature headers to enable for this request. An empty list suppresses the defaults.',
     )
 
+    @model_validator(mode='before')
+    @classmethod
+    def _name_replacements_for_removed_keys(cls, data: object) -> object:
+        """Name the replacement for a removed key instead of the generic unknown-key error."""
+        if not isinstance(data, Mapping):
+            return data
+        for key, value in data.items():
+            if key == 'thinking' and isinstance(value, Mapping):
+                message = (
+                    "thinking was flattened; use thinking='enabled' | 'adaptive' | 'disabled', "
+                    'thinking_budget= and thinking_display='
+                )
+            elif key in _REMOVED_KEYS:
+                message = _REMOVED_KEYS[key]
+            else:
+                continue
+            raise GenkitError(status='INVALID_ARGUMENT', message=f'anthropic: {message}')
+        return data
+
+    # How the flattened groups behave when config layers merge. See "Layered
+    # config" in the class docstring for the three rules.
+    #
+    # - thinking / thinking_budget / thinking_display (rule 2): `thinking` is
+    #   the switch. 'disabled' ignores the budget and the display; 'adaptive'
+    #   ignores the budget. A call that sets thinking='disabled' over a default
+    #   of thinking='enabled', thinking_budget=4096 turns thinking off instead
+    #   of failing. The budget stays in the merged config, so a later
+    #   thinking='enabled' picks it back up. _to_anthropic_thinking leaves the
+    #   ignored fields out of the request. The one case this can't read: a
+    #   call that sets only thinking_budget over an inherited 'disabled'
+    #   merges to the same values as the case above, so it stays disabled;
+    #   turning thinking on takes thinking='enabled'.
+    # - effort / task_budget: independent; overriding one keeps the other.
+    # - user_id: one field.
+    # - disable_parallel_tool_use: ignored under generate(tool_choice='none'),
+    #   since Anthropic's none variant has no such field (rule 2).
+    # - api_version vs task_budget / betas (rule 3): neither side is a switch
+    #   for the other. Dropping the beta field would quietly lose a spend cap
+    #   or a feature; switching to beta would override an explicit 'stable'.
+    #   So the merged config fails and the message names both ways out.
+
+    def thinking_mode(self) -> ThinkingMode | None:
+        """The thinking mode the request sends; a budget alone means enabled."""
+        if self.thinking is not None:
+            return self.thinking
+        return 'enabled' if self.thinking_budget is not None else None
+
     def beta_only_fields(self) -> set[str]:
         """Return the names of beta-only request fields set on this config, including in ``extra``."""
         present = {
@@ -345,17 +310,30 @@ class AnthropicConfig(ModelConfig):
         }
         if self.betas:
             present.add('betas')
-        if self.output_config is not None and self.output_config.task_budget is not None:
-            present.add('output_config.task_budget')
+        if self.task_budget is not None:
+            present.add('task_budget')
         return present
 
-    @model_validator(mode='after')
-    def _check_api_surface(self) -> 'AnthropicConfig':
-        """Reject beta-only fields on the stable surface so an explicit apiVersion is never silently overridden."""
-        if self.api_version != 'stable':
-            return self
-        beta_only = self.beta_only_fields()
-        if beta_only:
-            names = ', '.join(sorted(beta_only))
-            raise ValueError(f"{names} require the beta API surface; remove them or set apiVersion to 'beta'")
-        return self
+    def check_merged(self) -> None:
+        """Raise ``ValueError`` if the merged config can't be sent (rule 1).
+
+        These rules span fields, so they aren't model validators: a validator
+        also runs on each layer by itself, and would reject
+        ``thinking='enabled'`` in a call whose default supplies the budget.
+        The plugin calls this once, on the config the request is built from.
+        """
+        # 'enabled' can't be sent without budget_tokens, and no layer set one.
+        if self.thinking == 'enabled' and self.thinking_budget is None:
+            raise ValueError("thinking_budget is required when thinking is 'enabled'")
+        # No mode and no budget means no thinking object to carry the display,
+        # so it would be dropped without a word.
+        if self.thinking_display is not None and self.thinking_mode() is None:
+            raise ValueError('thinking_display needs thinking= or thinking_budget=')
+        # Rule 3: an explicit 'stable' and a beta-only field conflict.
+        if self.api_version == 'stable':
+            beta_only = self.beta_only_fields()
+            if beta_only:
+                names = ', '.join(sorted(beta_only))
+                raise ValueError(
+                    f"{names} require the beta API surface; set apiVersion to 'beta' or clear them with None"
+                )

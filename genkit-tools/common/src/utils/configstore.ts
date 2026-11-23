@@ -15,7 +15,7 @@
  */
 
 import Configstore from 'configstore';
-import { toolsPackage } from './package';
+import { toolsPackage } from './package.js';
 
 const USER_SETTINGS_TAG = 'userSettings';
 

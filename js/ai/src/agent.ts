@@ -1511,7 +1511,8 @@ export interface WaitForSnapshotDataInput extends GetSnapshotDataInput {
  *    to mount next to it.
  */
 export interface Agent<State = unknown>
-  extends BidiAction<
+  extends
+    BidiAction<
       typeof AgentInputSchema,
       typeof AgentOutputSchema,
       typeof AgentStreamChunkSchema,
@@ -1939,8 +1940,7 @@ export function defineCustomAgent<State = unknown>(
 
       let detachedSnapshotId: string | undefined;
       let resolveDetach:
-        | ((value: void | PromiseLike<void>) => void)
-        | undefined;
+        ((value: void | PromiseLike<void>) => void) | undefined;
       let rejectDetach: ((reason: any) => void) | undefined;
       const detachPromise = new Promise<void>((resolve, reject) => {
         resolveDetach = resolve;
@@ -2139,8 +2139,7 @@ export function defineCustomAgent<State = unknown>(
         { result: AgentResult; finalSnapshotId?: string } | undefined
       > => {
         let settled:
-          | { result: AgentResult; finalSnapshotId?: string }
-          | undefined;
+          { result: AgentResult; finalSnapshotId?: string } | undefined;
         // An error the agent function threw outside a turn. Attached, it
         // propagates as the action's own failure; detached, it lands on the
         // pending row, since there is no longer a caller to throw to.
