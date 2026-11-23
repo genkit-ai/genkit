@@ -104,7 +104,7 @@ describe('start command', () => {
       resolveServerStarted();
     });
 
-    start.parseAsync(['node', 'genkit']);
+    void start.parseAsync(['node', 'genkit']);
 
     await serverStartedPromise;
 
@@ -133,7 +133,7 @@ describe('start command', () => {
       return Promise.resolve({} as any);
     });
 
-    start.parseAsync(['node', 'genkit', '--noui']);
+    void start.parseAsync(['node', 'genkit', '--noui']);
 
     await managerStartedPromise;
     // Wait for the synchronous continuation after startManager resolves
@@ -183,7 +183,7 @@ describe('start command', () => {
         startManagerSpy.mockImplementation(() =>
           Promise.resolve({} as BaseRuntimeManager)
         );
-        start.parseAsync([
+        void start.parseAsync([
           'node',
           'genkit',
           '--noui',
@@ -204,7 +204,12 @@ describe('start command', () => {
     });
 
     it('does not generate a secret nobody can receive, and warns', async () => {
-      start.parseAsync(['node', 'genkit', '--noui', '--experimental-auth']);
+      void start.parseAsync([
+        'node',
+        'genkit',
+        '--noui',
+        '--experimental-auth',
+      ]);
       await waitForCall(startManagerSpy);
 
       expect(managerUtils.getDevEnvVars).toHaveBeenCalledWith(
@@ -261,7 +266,12 @@ describe('start command', () => {
     });
 
     it('prints the vars to export when nothing can hand them to the app', async () => {
-      start.parseAsync(['node', 'genkit', '--noui', '--experimental-use-otel']);
+      void start.parseAsync([
+        'node',
+        'genkit',
+        '--noui',
+        '--experimental-use-otel',
+      ]);
       await waitForCall(startManagerSpy);
 
       expect(startManagerSpy).toHaveBeenCalledWith(

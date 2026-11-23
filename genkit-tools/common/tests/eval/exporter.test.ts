@@ -102,7 +102,7 @@ describe('exporter', () => {
   });
 
   describe('toCsv', () => {
-    it('should handle vanilla strings', () => {
+    it('should handle vanilla strings', async () => {
       const evalResults: EvalResult[] = [
         {
           testCaseId: 'testCase1',
@@ -121,7 +121,7 @@ describe('exporter', () => {
           traceIds: [],
         },
       ];
-      toCsv({ key: EVAL_RUN_KEY, results: evalResults }, CSV_OUTPUT_FILE);
+      await toCsv({ key: EVAL_RUN_KEY, results: evalResults }, CSV_OUTPUT_FILE);
 
       const expectedHeader =
         'testCaseId,input,output,context,traceIds,faithfulness_score,faithfulness_rationale,faithfulness_error,faithfulness_traceId,faithfulness_spanId';
@@ -132,7 +132,7 @@ describe('exporter', () => {
       );
     });
 
-    it('should unnest metrics', () => {
+    it('should unnest metrics', async () => {
       const evalResults: EvalResult[] = [
         {
           testCaseId: 'testCase1',
@@ -159,7 +159,7 @@ describe('exporter', () => {
         },
       ];
 
-      toCsv({ key: EVAL_RUN_KEY, results: evalResults }, CSV_OUTPUT_FILE);
+      await toCsv({ key: EVAL_RUN_KEY, results: evalResults }, CSV_OUTPUT_FILE);
 
       const expectedHeader =
         'testCaseId,input,output,context,traceIds,faithfulness_score,faithfulness_rationale,faithfulness_error,faithfulness_traceId,faithfulness_spanId,answer_relevancy_score,answer_relevancy_rationale,answer_relevancy_error,answer_relevancy_traceId,answer_relevancy_spanId';
@@ -170,7 +170,7 @@ describe('exporter', () => {
       );
     });
 
-    it('should handle errors in metrics', () => {
+    it('should handle errors in metrics', async () => {
       const evalResults: EvalResult[] = [
         {
           testCaseId: 'testCase1',
@@ -187,7 +187,7 @@ describe('exporter', () => {
         },
       ];
 
-      toCsv({ key: EVAL_RUN_KEY, results: evalResults }, CSV_OUTPUT_FILE);
+      await toCsv({ key: EVAL_RUN_KEY, results: evalResults }, CSV_OUTPUT_FILE);
 
       const expectedHeader =
         'testCaseId,input,output,context,traceIds,faithfulness_score,faithfulness_rationale,faithfulness_error,faithfulness_traceId,faithfulness_spanId';
@@ -198,7 +198,7 @@ describe('exporter', () => {
       );
     });
 
-    it('should stringify structured input', () => {
+    it('should stringify structured input', async () => {
       const evalResults: EvalResult[] = [
         {
           testCaseId: 'testCase1',
@@ -218,7 +218,7 @@ describe('exporter', () => {
         },
       ];
 
-      toCsv({ key: EVAL_RUN_KEY, results: evalResults }, CSV_OUTPUT_FILE);
+      await toCsv({ key: EVAL_RUN_KEY, results: evalResults }, CSV_OUTPUT_FILE);
 
       const expectedHeader =
         'testCaseId,input,output,context,traceIds,faithfulness_score,faithfulness_rationale,faithfulness_error,faithfulness_traceId,faithfulness_spanId';
@@ -229,7 +229,7 @@ describe('exporter', () => {
       );
     });
 
-    it('should handle carriage returns', () => {
+    it('should handle carriage returns', async () => {
       const evalResults: EvalResult[] = [
         {
           testCaseId: 'testCase1',
@@ -246,7 +246,7 @@ describe('exporter', () => {
         },
       ];
 
-      toCsv({ key: EVAL_RUN_KEY, results: evalResults }, CSV_OUTPUT_FILE);
+      await toCsv({ key: EVAL_RUN_KEY, results: evalResults }, CSV_OUTPUT_FILE);
 
       const expectedHeader =
         'testCaseId,input,output,context,traceIds,faithfulness_score,faithfulness_rationale,faithfulness_error,faithfulness_traceId,faithfulness_spanId';
@@ -260,7 +260,7 @@ carriage return",,`;
       );
     });
 
-    it('should handle context and trace arrays', () => {
+    it('should handle context and trace arrays', async () => {
       const evalResults: EvalResult[] = [
         {
           testCaseId: 'testCase1',
@@ -280,7 +280,7 @@ carriage return",,`;
         },
       ];
 
-      toCsv({ key: EVAL_RUN_KEY, results: evalResults }, CSV_OUTPUT_FILE);
+      await toCsv({ key: EVAL_RUN_KEY, results: evalResults }, CSV_OUTPUT_FILE);
 
       const expectedHeader =
         'testCaseId,input,output,context,traceIds,faithfulness_score,faithfulness_rationale,faithfulness_error,faithfulness_traceId,faithfulness_spanId';
@@ -291,7 +291,7 @@ carriage return",,`;
       );
     });
 
-    it('should handle commas in strings', () => {
+    it('should handle commas in strings', async () => {
       const evalResults: EvalResult[] = [
         {
           testCaseId: 'testCase1',
@@ -311,7 +311,7 @@ carriage return",,`;
         },
       ];
 
-      toCsv({ key: EVAL_RUN_KEY, results: evalResults }, CSV_OUTPUT_FILE);
+      await toCsv({ key: EVAL_RUN_KEY, results: evalResults }, CSV_OUTPUT_FILE);
 
       const expectedHeader =
         'testCaseId,input,output,context,traceIds,faithfulness_score,faithfulness_rationale,faithfulness_error,faithfulness_traceId,faithfulness_spanId';
@@ -322,7 +322,7 @@ carriage return",,`;
       );
     });
 
-    it('should include ground truth', () => {
+    it('should include ground truth', async () => {
       const evalResults: EvalResult[] = [
         {
           testCaseId: 'testCase1',
@@ -343,7 +343,7 @@ carriage return",,`;
         },
       ];
 
-      toCsv({ key: EVAL_RUN_KEY, results: evalResults }, CSV_OUTPUT_FILE);
+      await toCsv({ key: EVAL_RUN_KEY, results: evalResults }, CSV_OUTPUT_FILE);
 
       const expectedHeader =
         'testCaseId,input,output,context,traceIds,reference,faithfulness_score,faithfulness_rationale,faithfulness_error,faithfulness_traceId,faithfulness_spanId';
@@ -356,8 +356,8 @@ carriage return",,`;
   });
 
   describe('toJson', () => {
-    it('should write json string', () => {
-      toJson(EVAL_RUN, JSON_OUTPUT_FILE);
+    it('should write json string', async () => {
+      await toJson(EVAL_RUN, JSON_OUTPUT_FILE);
       expect(fs.promises.writeFile).toHaveBeenCalledWith(
         JSON_OUTPUT_FILE,
         JSON.stringify(EVAL_RESULTS, undefined, '  ')

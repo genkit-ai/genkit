@@ -89,7 +89,7 @@ export async function runNewEvaluation(
   let metadata = {};
 
   if (datasetId) {
-    const datasetStore = await getDatasetStore();
+    const datasetStore = getDatasetStore();
     logger.debug(`Fetching dataset ${datasetId}...`);
     const dataset = await datasetStore.getDataset(datasetId);
     if (dataset.length === 0) {

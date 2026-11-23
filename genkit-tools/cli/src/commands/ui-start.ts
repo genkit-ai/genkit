@@ -125,7 +125,7 @@ export const uiStart = new Command('ui:start')
       );
     }
     if (options.open) {
-      open(`http://localhost:${port}`);
+      await Promise.resolve(open(`http://localhost:${port}`)).catch(() => {});
     }
   });
 

@@ -401,10 +401,9 @@ export class RuntimeManager extends BaseRuntimeManager {
     await manager.setupRuntimesWatcher();
     await manager.setupDevUiWatcher();
     if (manager.manageHealth) {
-      manager.healthCheckInterval = setInterval(
-        async () => await manager.performHealthChecks(),
-        HEALTH_CHECK_INTERVAL
-      );
+      manager.healthCheckInterval = setInterval(() => {
+        void manager.performHealthChecks();
+      }, HEALTH_CHECK_INTERVAL);
     }
     return manager;
   }
@@ -818,7 +817,9 @@ export class RuntimeManager extends BaseRuntimeManager {
         ignoreInitial: false,
       });
       this.watchers.push(watcher);
-      watcher.on('add', (filePath) => this.handleNewRuntime(filePath));
+      watcher.on('add', (filePath) => {
+        void this.handleNewRuntime(filePath);
+      });
       if (this.manageHealth) {
         watcher.on('unlink', (filePath) => this.handleRemovedRuntime(filePath));
       }
@@ -843,7 +844,9 @@ export class RuntimeManager extends BaseRuntimeManager {
         ignoreInitial: false,
       });
       this.watchers.push(watcher);
-      watcher.on('add', (filePath) => this.handleNewDevUi(filePath));
+      watcher.on('add', (filePath) => {
+        void this.handleNewDevUi(filePath);
+      });
       if (this.manageHealth) {
         watcher.on('unlink', (filePath) => this.handleRemovedDevUi(filePath));
       }

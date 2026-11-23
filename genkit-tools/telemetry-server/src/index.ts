@@ -381,7 +381,9 @@ export async function startTelemetryServer(params: {
     logger.error(error);
   });
 
-  process.on('SIGTERM', async () => await stopTelemetryApi());
+  process.on('SIGTERM', () => {
+    void stopTelemetryApi();
+  });
 }
 
 /**
