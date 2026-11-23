@@ -111,10 +111,14 @@ describe('wrapSchemaRoot local references', () => {
     }) as Record<string, unknown>;
     expect(JSON.stringify(schema)).toContain('"$ref":"#/items/');
 
-    const wrapped = wrapSchemaRoot(schema) as any;
-    expect(JSON.stringify(wrapped)).toContain(
-      '"$ref":"#/properties/value/items/'
-    );
+    // Strict hosts accept references only to top-level definitions.
+    const refs: string[] = [];
+    JSON.stringify(wrapSchemaRoot(schema), (key, value) => {
+      if (key === '$ref') refs.push(value);
+      return value;
+    });
+    expect(refs.length).toBeGreaterThan(0);
+    for (const ref of refs) expect(ref).toMatch(/^#\/\$defs\/[\w-]+$/);
     expect(validWrapped(schema, [{ first: { n: 1 }, second: { n: 2 } }])).toBe(
       true
     );
@@ -139,34 +143,57 @@ describe('wrapSchemaRoot local references', () => {
     );
   });
 
-  it('rewrites "#" and leaves $defs, definitions and data alone', () => {
-    const wrapped = wrapSchemaRoot({
+  it('moves referenced subschemas into $defs', () => {
+    const first = {
+      type: 'object',
+      properties: { n: { type: 'number' } },
+      required: ['n'],
+      additionalProperties: false,
+    };
+    const schema = {
       type: 'array',
       items: {
-        anyOf: [
-          { $ref: '#' },
-          { $ref: '#/$defs/A' },
-          { $ref: '#/definitions/B' },
-          { $ref: '#/items/anyOf/1' },
-          { $ref: 'https://example.com/schema' },
-        ],
+        type: 'object',
+        properties: {
+          first,
+          second: { $ref: '#/items/properties/first' },
+          all: { $ref: '#' },
+          a: { $ref: '#/$defs/value' },
+          remote: { $ref: 'https://example.com/schema' },
+          gone: { $ref: '#/nowhere' },
+        },
+        default: { $ref: '#/items' },
       },
-      default: [{ $ref: '#/items' }],
-      $defs: { A: { type: 'string', items: { $ref: '#/items' } } },
-    }) as any;
-    expect(wrapped.properties.value.items.anyOf).toStrictEqual([
-      { $ref: '#/properties/value' },
-      { $ref: '#/$defs/A' },
-      { $ref: '#/definitions/B' },
-      { $ref: '#/properties/value/items/anyOf/1' },
-      { $ref: 'https://example.com/schema' },
-    ]);
-    expect(wrapped.properties.value.default).toStrictEqual([
-      { $ref: '#/items' },
-    ]);
-    expect(wrapped.$defs.A.items).toStrictEqual({
-      $ref: '#/properties/value/items',
+      // A definition already named "value" pushes the hoisted root to
+      // "value_2".
+      $defs: { value: { type: 'string' } },
+    };
+    expect(wrapSchemaRoot(schema)).toStrictEqual({
+      type: 'object',
+      properties: { value: { $ref: '#/$defs/value_2' } },
+      required: ['value'],
+      additionalProperties: false,
+      $defs: {
+        value: { type: 'string' },
+        value_2: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              first: { $ref: '#/$defs/value_items_properties_first' },
+              second: { $ref: '#/$defs/value_items_properties_first' },
+              all: { $ref: '#/$defs/value_2' },
+              a: { $ref: '#/$defs/value' },
+              remote: { $ref: 'https://example.com/schema' },
+              gone: { $ref: '#/nowhere' },
+            },
+            default: { $ref: '#/items' },
+          },
+        },
+        value_items_properties_first: first,
+      },
     });
+    expect(schema.items.properties.all.$ref).toBe('#');
   });
 });
 

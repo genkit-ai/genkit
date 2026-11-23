@@ -36,70 +36,149 @@ export function hasObjectRoot(schema: JsonSchema): boolean {
   return schema.type === 'object';
 }
 
-/** Where the caller's schema sits once wrapped, as a JSON pointer. */
-const WRAPPED_ROOT = `#/properties/${WRAPPER_KEY}`;
-
 /** Keywords whose values are data, not subschemas, so `$ref` there is not a
  * reference. */
 const DATA_KEYWORDS = new Set(['const', 'enum', 'default', 'examples']);
 
-/**
- * Re-points local references into the caller's schema (`#`, `#/items/...`) at
- * its new place under the wrapper. References into `$defs` and `definitions`
- * are left alone, because those stay at the root.
- */
-function rewriteRefs(node: unknown): unknown {
-  if (Array.isArray(node)) return node.map(rewriteRefs);
-  if (node === null || typeof node !== 'object') return node;
-  const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(node)) {
-    if (key === '$ref' && typeof value === 'string') {
-      out[key] = rewriteRef(value);
-    } else if (DATA_KEYWORDS.has(key)) {
-      out[key] = value;
-    } else {
-      out[key] = rewriteRefs(value);
-    }
-  }
-  return out;
+type Json = unknown;
+
+function isRecord(node: Json): node is Record<string, Json> {
+  return node !== null && typeof node === 'object' && !Array.isArray(node);
 }
 
-function rewriteRef(ref: string): string {
-  if (ref === '#') return WRAPPED_ROOT;
-  if (
-    !ref.startsWith('#/') ||
-    ref === '#/$defs' ||
-    ref.startsWith('#/$defs/') ||
-    ref === '#/definitions' ||
-    ref.startsWith('#/definitions/')
-  ) {
-    return ref;
+/** Whether `ref` points into the schema itself rather than into `$defs` or
+ * `definitions`. */
+function isLocalRef(ref: string): boolean {
+  if (ref !== '#' && !ref.startsWith('#/')) return false;
+  return !['#/$defs', '#/definitions'].some(
+    (defs) => ref === defs || ref.startsWith(`${defs}/`)
+  );
+}
+
+/** Calls `found` with every local reference in `node`. */
+function collectLocalRefs(node: Json, found: (ref: string) => void): void {
+  if (Array.isArray(node)) {
+    node.forEach((v) => collectLocalRefs(v, found));
+  } else if (isRecord(node)) {
+    for (const [key, value] of Object.entries(node)) {
+      if (key === '$ref' && typeof value === 'string') {
+        if (isLocalRef(value)) found(value);
+      } else if (!DATA_KEYWORDS.has(key)) {
+        collectLocalRefs(value, found);
+      }
+    }
   }
-  return WRAPPED_ROOT + ref.slice(1);
+}
+
+/** Whether the JSON pointer `ref` names a schema inside `schema`. */
+function resolvesToSchema(schema: JsonSchema, ref: string): boolean {
+  let node: Json = schema;
+  for (const raw of ref.replace(/^#/, '').split('/').slice(1)) {
+    const seg = raw.replace(/~1/g, '/').replace(/~0/g, '~');
+    if (Array.isArray(node)) {
+      const i = Number(seg);
+      if (!/^\d+$/.test(seg) || i >= node.length) return false;
+      node = node[i];
+    } else if (isRecord(node) && Object.hasOwn(node, seg)) {
+      node = node[seg];
+    } else {
+      return false;
+    }
+  }
+  return isRecord(node);
+}
+
+function escapePointer(key: string): string {
+  return key.replace(/~/g, '~0').replace(/\//g, '~1');
+}
+
+/**
+ * Copies a schema, moving the subschemas that local references point at into
+ * `defs` and pointing both their old place and the references there.
+ */
+class RefHoister {
+  /** Each referenced JSON pointer, and its name in `defs`. */
+  private readonly targets = new Map<string, string>();
+  readonly defs: Record<string, Json> = {};
+
+  constructor(schema: JsonSchema) {
+    const taken = new Set(
+      isRecord(schema.$defs) ? Object.keys(schema.$defs) : []
+    );
+    const refs = new Set<string>();
+    collectLocalRefs(schema, (ref) => {
+      if (resolvesToSchema(schema, ref)) refs.add(ref);
+    });
+    for (const ref of [...refs].sort()) {
+      const base = (WRAPPER_KEY + ref.slice(1)).replace(/[^\w-]/g, '_');
+      let name = base;
+      for (let i = 2; taken.has(name); i++) name = `${base}_${i}`;
+      taken.add(name);
+      this.targets.set(ref, name);
+    }
+  }
+
+  /** Copies `node`, found at JSON pointer `ptr` in the caller's schema. */
+  walk(node: Json, ptr: string): Json {
+    const name = this.targets.get(ptr);
+    if (name === undefined) return this.copy(node, ptr);
+    this.defs[name] = this.copy(node, ptr);
+    return { $ref: `#/$defs/${name}` };
+  }
+
+  private copy(node: Json, ptr: string): Json {
+    if (Array.isArray(node)) {
+      return node.map((v, i) => this.walk(v, `${ptr}/${i}`));
+    }
+    if (!isRecord(node)) return node;
+    const out: Record<string, Json> = {};
+    for (const [key, value] of Object.entries(node)) {
+      if (key === '$ref' && typeof value === 'string') {
+        const name = this.targets.get(value);
+        out[key] = name === undefined ? value : `#/$defs/${name}`;
+      } else if (DATA_KEYWORDS.has(key)) {
+        out[key] = value;
+      } else {
+        out[key] = this.walk(value, `${ptr}/${escapePointer(key)}`);
+      }
+    }
+    return out;
+  }
 }
 
 /**
  * Wraps `schema` as the single required property of an object schema.
- * Definitions stay at the root so `#/$defs/...` references resolve, `$schema`
- * is only meaningful there, and other local references are rewritten to the
- * schema's new place.
+ * `$schema`, `$defs` and `definitions` stay at the root, so references into
+ * the definitions still resolve.
+ *
+ * Any other local reference (`#`, `#/items/...`) pointed into the caller's
+ * schema, which is no longer the root. Strict hosts accept references only to
+ * top-level definitions, so each referenced subschema moves into `$defs` and
+ * both its old place and every reference to it point there instead.
  */
 export function wrapSchemaRoot(schema: JsonSchema): JsonSchema {
-  const { $schema, $defs, definitions, ...inner } = rewriteRefs(
-    schema
-  ) as JsonSchema & {
-    $schema?: unknown;
-    $defs?: unknown;
-    definitions?: unknown;
-  };
+  const { $schema, $defs, definitions, ...inner } = schema;
+  const hoister = new RefHoister(schema);
+  if (isRecord($defs)) {
+    for (const [name, def] of Object.entries($defs)) {
+      hoister.defs[name] = hoister.walk(def, `#/$defs/${escapePointer(name)}`);
+    }
+  }
+  const value = hoister.walk(inner, '#');
+  const defs =
+    isRecord($defs) || Object.keys(hoister.defs).length > 0
+      ? hoister.defs
+      : $defs;
   return {
     ...($schema !== undefined ? { $schema } : {}),
     type: 'object',
-    properties: { [WRAPPER_KEY]: inner },
+    properties: { [WRAPPER_KEY]: value },
     required: [WRAPPER_KEY],
     additionalProperties: false,
-    ...($defs !== undefined ? { $defs } : {}),
-    ...(definitions !== undefined ? { definitions } : {}),
+    ...(defs !== undefined ? { $defs: defs } : {}),
+    ...(definitions !== undefined
+      ? { definitions: hoister.walk(definitions, '#/definitions') }
+      : {}),
   };
 }
 
