@@ -55,6 +55,13 @@ export {
 export interface PluginOptions extends Partial<Omit<ClientOptions, 'apiKey'>> {
   apiKey?: ClientOptions['apiKey'] | false;
   name: string;
+  /**
+   * What the host accepts as the root of a `json_schema` response format.
+   * `'object'` (OpenAI, Azure OpenAI and gateways forwarding to them) wraps an
+   * array, enum, scalar or `anyOf` root in an object and unwraps the reply.
+   * Defaults to `'any'`, which sends the schema unchanged.
+   */
+  jsonSchemaRoot?: 'object' | 'any';
   initializer?: (client: OpenAI) => Promise<ResolvableAction[]>;
   resolver?: (
     client: OpenAI,

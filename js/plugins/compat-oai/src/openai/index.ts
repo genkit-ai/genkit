@@ -192,10 +192,13 @@ const listActions = async (client: OpenAI): Promise<ActionMetadata[]> => {
 };
 
 export function openAIPlugin(options?: OpenAIPluginOptions): GenkitPluginV2 {
-  const pluginOptions = { name: 'openai', ...options };
-  return openAICompatible({
+  const pluginOptions = {
     name: 'openai',
+    jsonSchemaRoot: 'object' as const,
     ...options,
+  };
+  return openAICompatible({
+    ...pluginOptions,
     initializer: async (client) => {
       const models = [] as ResolvableAction[];
       models.push(
