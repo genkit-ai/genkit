@@ -537,7 +537,80 @@ describe('otlp-protobuf', () => {
     ]);
   });
 
+  it('auto-detects traces and logs without an explicit signal and decodes kvlistValue and bytesValue', () => {
+    const traceIdHex = 'c5892692eb25cce482eb13587b73c425';
+    const spanIdHex = '86dc3d35cc11e336';
+    const rawBytes = Buffer.from([0xde, 0xad, 0xbe, 0xef]);
+
+    const spanBuf = Buffer.concat([
+      pbBytes(1, Buffer.from(traceIdHex, 'hex')),
+      pbBytes(2, Buffer.from(spanIdHex, 'hex')),
+      pbBytes(5, 'spanWithNestedValues'),
+      pbVarintField(6, 1),
+      pbFixed64(7, 1760827335359000000n),
+      pbFixed64(8, 1760827336695073000n),
+      pbBytes(
+        9,
+        pbKeyValue(
+          'nested',
+          pbBytes(
+            6,
+            Buffer.concat([
+              pbBytes(1, pbKeyValue('innerStr', pbBytes(1, 'hello'))),
+              pbBytes(1, pbKeyValue('innerInt', pbVarintField(3, 7))),
+            ])
+          )
+        )
+      ),
+      pbBytes(9, pbKeyValue('raw', pbBytes(7, rawBytes))),
+    ]);
+    const traceReqBuf = pbBytes(1, pbBytes(2, pbBytes(2, spanBuf)));
+
+    const autoDecodedTrace = decodeOtlpProtobuf(traceReqBuf);
+    const traceResult = traceDataFromOtlp(autoDecodedTrace);
+    assert.strictEqual(traceResult.length, 1);
+    assert.deepStrictEqual(
+      traceResult[0].spans[spanIdHex].attributes['nested'],
+      { innerStr: 'hello', innerInt: 7 }
+    );
+    assert.strictEqual(
+      traceResult[0].spans[spanIdHex].attributes['raw'],
+      rawBytes.toString('base64')
+    );
+
+    const logRecordBuf = Buffer.concat([
+      pbFixed64(1, 1760827335359000000n),
+      pbVarintField(2, 9),
+      pbBytes(3, 'INFO'),
+      pbBytes(5, pbBytes(1, 'auto-detected log')),
+      pbBytes(9, Buffer.from(traceIdHex, 'hex')),
+      pbBytes(10, Buffer.from(spanIdHex, 'hex')),
+    ]);
+    const logReqBuf = pbBytes(1, pbBytes(2, pbBytes(2, logRecordBuf)));
+
+    const autoDecodedLogs = decodeOtlpProtobuf(logReqBuf);
+    const logResult = logDataFromOtlp(autoDecodedLogs);
+    assert.strictEqual(logResult.length, 1);
+    assert.strictEqual(logResult[0].body, 'auto-detected log');
+    assert.strictEqual(logResult[0].traceId, traceIdHex);
+    assert.strictEqual(logResult[0].spanId, spanIdHex);
+  });
+
   it('throws on truncated or malformed protobuf payloads', () => {
     assert.throws(() => decodeOtlpProtobuf(Buffer.from([0x0a, 0x10, 0x01])));
+    // Unclosed group (wire type 3 without matching wire type 4)
+    assert.throws(
+      () =>
+        decodeOtlpProtobuf(Buffer.concat([pbTag(2, 3), pbVarintField(1, 1)])),
+      /unexpected EOF in group/
+    );
+    // Mismatched end-group field number
+    assert.throws(
+      () =>
+        decodeOtlpProtobuf(
+          Buffer.concat([pbTag(2, 3), pbVarintField(1, 1), pbTag(3, 4)])
+        ),
+      /mismatched end-group field number/
+    );
   });
 });

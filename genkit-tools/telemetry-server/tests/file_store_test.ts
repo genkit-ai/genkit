@@ -1383,6 +1383,11 @@ describe('otlp-endpoint', () => {
       body: reqBuf,
     });
     assert.strictEqual(res.status, 200);
+    assert.match(
+      res.headers.get('content-type') ?? '',
+      /^application\/x-protobuf\b/
+    );
+    assert.strictEqual((await res.arrayBuffer()).byteLength, 0);
 
     const getResp = await fetch(`${url}/api/traces/${traceIdHex}`);
     assert.strictEqual(getResp.status, 200);
@@ -1442,6 +1447,11 @@ describe('otlp-endpoint', () => {
       body: reqBuf,
     });
     assert.strictEqual(res.status, 200);
+    assert.match(
+      res.headers.get('content-type') ?? '',
+      /^application\/x-protobuf\b/
+    );
+    assert.strictEqual((await res.arrayBuffer()).byteLength, 0);
 
     const getResp = await fetch(`${url}/api/traces/${traceIdHex}/logs`);
     assert.strictEqual(getResp.status, 200);
@@ -1454,14 +1464,42 @@ describe('otlp-endpoint', () => {
     assert.strictEqual(logs[0].severityNumber, 9);
   });
 
-  it('acknowledges /api/otlp/v1/metrics for json and protobuf', async () => {
-    const protoRes = await fetch(`${url}/api/otlp/v1/metrics`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-protobuf' },
-      body: Buffer.from([0x0a, 0x02, 0x12, 0x00]),
-    });
-    assert.strictEqual(protoRes.status, 200);
-    assert.deepStrictEqual(await protoRes.json(), {});
+  it('acknowledges /api/otlp/v1/metrics for json and protobuf (including trailing slash)', async () => {
+    // Non-empty ExportMetricsServiceRequest with Metric.name (field 1, wire type 2)
+    const metricBuf = Buffer.from([0x0a, 0x05, 0x63, 0x6f, 0x75, 0x6e, 0x74]);
+    const scopeMetricsBuf = Buffer.concat([
+      Buffer.from([0x12, metricBuf.length]),
+      metricBuf,
+    ]);
+    const resourceMetricsBuf = Buffer.concat([
+      Buffer.from([0x12, scopeMetricsBuf.length]),
+      scopeMetricsBuf,
+    ]);
+    const metricsReqBuf = Buffer.concat([
+      Buffer.from([0x0a, resourceMetricsBuf.length]),
+      resourceMetricsBuf,
+    ]);
+
+    for (const metricsPath of [
+      '/api/otlp/v1/metrics',
+      '/api/otlp/v1/metrics/',
+    ]) {
+      const protoRes = await fetch(`${url}${metricsPath}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-protobuf' },
+        body: metricsReqBuf,
+      });
+      assert.strictEqual(protoRes.status, 200);
+      assert.match(
+        protoRes.headers.get('content-type') ?? '',
+        /^application\/x-protobuf\b/
+      );
+      assert.strictEqual((await protoRes.arrayBuffer()).byteLength, 0);
+    }
+
+    const tracesResp = await fetch(`${url}/api/traces`);
+    const { traces } = await tracesResp.json();
+    assert.deepStrictEqual(traces, []);
 
     const jsonRes = await fetch(`${url}/api/otlp/v1/metrics`, {
       method: 'POST',
@@ -1470,6 +1508,57 @@ describe('otlp-endpoint', () => {
     });
     assert.strictEqual(jsonRes.status, 200);
     assert.deepStrictEqual(await jsonRes.json(), {});
+  });
+
+  it('acknowledges bodyless POSTs with supported content types as 200', async () => {
+    const net = await import('net');
+    const sendBodylessPost = (contentType: string) =>
+      new Promise<{ statusCode: number; headers: string; body: Buffer }>(
+        (resolve, reject) => {
+          const chunks: Buffer[] = [];
+          const socket = net.connect(port, '127.0.0.1', () => {
+            socket.write(
+              `POST /api/otlp/v1/traces HTTP/1.1\r\n` +
+                `Host: localhost:${port}\r\n` +
+                `Content-Type: ${contentType}\r\n` +
+                `Connection: close\r\n\r\n`
+            );
+          });
+          socket.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+          socket.on('end', () => {
+            const raw = Buffer.concat(chunks);
+            const sep = raw.indexOf('\r\n\r\n');
+            const headerPart = raw.subarray(0, sep).toString('utf8');
+            const statusLine = headerPart.split('\r\n')[0];
+            const statusCode = Number(statusLine.split(' ')[1]);
+            resolve({
+              statusCode,
+              headers: headerPart.toLowerCase(),
+              body: raw.subarray(sep + 4),
+            });
+          });
+          socket.on('error', reject);
+        }
+      );
+
+    const warnMock = mock.method(logger, 'warn', () => {});
+    try {
+      const protoRes = await sendBodylessPost('application/x-protobuf');
+      assert.strictEqual(protoRes.statusCode, 200);
+      assert.ok(
+        protoRes.headers.includes('content-type: application/x-protobuf')
+      );
+      assert.strictEqual(protoRes.body.length, 0);
+
+      const jsonRes = await sendBodylessPost('application/json');
+      assert.strictEqual(jsonRes.statusCode, 200);
+      assert.ok(jsonRes.headers.includes('content-type: application/json'));
+      assert.strictEqual(jsonRes.body.toString('utf8'), '{}');
+
+      assert.strictEqual(warnMock.mock.callCount(), 0);
+    } finally {
+      warnMock.mock.restore();
+    }
   });
 
   it('returns 415 and logs a one-time warning for unsupported content types', async () => {

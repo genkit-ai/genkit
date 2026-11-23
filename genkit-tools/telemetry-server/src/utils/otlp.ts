@@ -228,7 +228,7 @@ class ProtoReader {
     return textDecoder.decode(this.readBytes(wireType));
   }
 
-  skipField(wireType: number): void {
+  skipField(wireType: number, fieldNumber?: number): void {
     switch (wireType) {
       case 0:
         this.readVarint();
@@ -246,11 +246,19 @@ class ProtoReader {
         break;
       case 3:
         while (!this.eof()) {
-          const { wireType: innerWire } = this.readTag();
-          if (innerWire === 4) break;
-          this.skipField(innerWire);
+          const { fieldNumber: innerField, wireType: innerWire } =
+            this.readTag();
+          if (innerWire === 4) {
+            if (fieldNumber !== undefined && innerField !== fieldNumber) {
+              throw new Error(
+                `Invalid protobuf payload: mismatched end-group field number ${innerField}, expected ${fieldNumber}`
+              );
+            }
+            return;
+          }
+          this.skipField(innerWire, innerField);
         }
-        break;
+        throw new Error('Invalid protobuf payload: unexpected EOF in group');
       case 5:
         if (this.pos + 4 > this.len) {
           throw new Error(
@@ -302,7 +310,7 @@ function decodeAnyValue(bytes: Uint8Array): OtlpValue {
         );
         break;
       default:
-        reader.skipField(wireType);
+        reader.skipField(wireType, fieldNumber);
         break;
     }
   }
@@ -317,7 +325,7 @@ function decodeArrayValue(bytes: Uint8Array): { values: OtlpValue[] } {
     if (fieldNumber === 1) {
       values.push(decodeAnyValue(reader.readBytes(wireType)));
     } else {
-      reader.skipField(wireType);
+      reader.skipField(wireType, fieldNumber);
     }
   }
   return { values };
@@ -331,7 +339,7 @@ function decodeKeyValueList(bytes: Uint8Array): { values: OtlpAttribute[] } {
     if (fieldNumber === 1) {
       values.push(decodeKeyValue(reader.readBytes(wireType)));
     } else {
-      reader.skipField(wireType);
+      reader.skipField(wireType, fieldNumber);
     }
   }
   return { values };
@@ -351,7 +359,7 @@ function decodeKeyValue(bytes: Uint8Array): OtlpAttribute {
         value = decodeAnyValue(reader.readBytes(wireType));
         break;
       default:
-        reader.skipField(wireType);
+        reader.skipField(wireType, fieldNumber);
         break;
     }
   }
@@ -372,7 +380,7 @@ function decodeResource(bytes: Uint8Array): OtlpResourceSpan['resource'] {
         droppedAttributesCount = reader.readUint32(wireType);
         break;
       default:
-        reader.skipField(wireType);
+        reader.skipField(wireType, fieldNumber);
         break;
     }
   }
@@ -393,7 +401,7 @@ function decodeScope(bytes: Uint8Array): OtlpScopeSpan['scope'] {
         version = reader.readString(wireType);
         break;
       default:
-        reader.skipField(wireType);
+        reader.skipField(wireType, fieldNumber);
         break;
     }
   }
@@ -416,7 +424,7 @@ function decodeStatus(bytes: Uint8Array): NonNullable<OtlpSpan['status']> {
         code = reader.readUint32(wireType);
         break;
       default:
-        reader.skipField(wireType);
+        reader.skipField(wireType, fieldNumber);
         break;
     }
   }
@@ -482,7 +490,7 @@ function decodeSpan(bytes: Uint8Array): OtlpSpan {
         status = decodeStatus(reader.readBytes(wireType));
         break;
       default:
-        reader.skipField(wireType);
+        reader.skipField(wireType, fieldNumber);
         break;
     }
   }
@@ -519,7 +527,7 @@ function decodeScopeSpan(bytes: Uint8Array): OtlpScopeSpan {
         spans.push(decodeSpan(reader.readBytes(wireType)));
         break;
       default:
-        reader.skipField(wireType);
+        reader.skipField(wireType, fieldNumber);
         break;
     }
   }
@@ -543,7 +551,7 @@ function decodeResourceSpan(bytes: Uint8Array): OtlpResourceSpan {
         scopeSpans.push(decodeScopeSpan(reader.readBytes(wireType)));
         break;
       default:
-        reader.skipField(wireType);
+        reader.skipField(wireType, fieldNumber);
         break;
     }
   }
@@ -597,7 +605,7 @@ function decodeLogRecord(bytes: Uint8Array): OtlpLogRecord {
         observedTimeUnixNano = reader.readFixed64String(wireType);
         break;
       default:
-        reader.skipField(wireType);
+        reader.skipField(wireType, fieldNumber);
         break;
     }
   }
@@ -631,7 +639,7 @@ function decodeScopeLog(bytes: Uint8Array): OtlpScopeLog {
         logRecords.push(decodeLogRecord(reader.readBytes(wireType)));
         break;
       default:
-        reader.skipField(wireType);
+        reader.skipField(wireType, fieldNumber);
         break;
     }
   }
@@ -655,7 +663,7 @@ function decodeResourceLog(bytes: Uint8Array): OtlpResourceLog {
         scopeLogs.push(decodeScopeLog(reader.readBytes(wireType)));
         break;
       default:
-        reader.skipField(wireType);
+        reader.skipField(wireType, fieldNumber);
         break;
     }
   }
@@ -700,14 +708,14 @@ function isResourceLogsMessage(resourceBytes: Uint8Array): boolean {
             ) {
               return false;
             }
-            itemReader.skipField(w);
+            itemReader.skipField(w, f);
           }
         } else {
-          scopeReader.skipField(sw);
+          scopeReader.skipField(sw, sf);
         }
       }
     } else {
-      resReader.skipField(wireType);
+      resReader.skipField(wireType, fieldNumber);
     }
   }
   return false;
@@ -738,7 +746,7 @@ export function decodeOtlpProtobuf(
         resourceSpans.push(decodeResourceSpan(entryBytes));
       }
     } else {
-      reader.skipField(wireType);
+      reader.skipField(wireType, fieldNumber);
     }
   }
 

@@ -310,11 +310,18 @@ export async function startTelemetryServer(params: {
     ],
     async (request, response) => {
       try {
-        if (request.body === undefined) {
+        const contentTypeHeader = request.headers['content-type'];
+        const mediaType =
+          typeof contentTypeHeader === 'string'
+            ? contentTypeHeader.split(';')[0].trim().toLowerCase()
+            : '';
+        const isProtobuf = mediaType === 'application/x-protobuf';
+        const isJson = mediaType === 'application/json';
+        if (!isJson && !isProtobuf) {
           if (!warnedUnsupportedContentType) {
             warnedUnsupportedContentType = true;
             logger.warn(
-              `Unsupported OTLP Content-Type "${request.headers['content-type'] ?? 'none'}" on ${request.path}; expected application/json or application/x-protobuf.`
+              `Unsupported OTLP Content-Type "${contentTypeHeader ?? 'none'}" on ${request.path}; expected application/json or application/x-protobuf.`
             );
           }
           response.status(415).json({
@@ -325,8 +332,20 @@ export async function startTelemetryServer(params: {
           return;
         }
 
-        if (request.path === '/api/otlp/v1/metrics') {
-          response.status(200).json({});
+        const sendOtlpOk = () => {
+          if (isProtobuf) {
+            response
+              .status(200)
+              .type('application/x-protobuf')
+              .send(Buffer.alloc(0));
+          } else {
+            response.status(200).json({});
+          }
+        };
+
+        const normalizedPath = request.path.replace(/\/+$/, '');
+        if (normalizedPath === '/api/otlp/v1/metrics') {
+          sendOtlpOk();
           return;
         }
 
@@ -334,9 +353,9 @@ export async function startTelemetryServer(params: {
         const payload = Buffer.isBuffer(request.body)
           ? decodeOtlpProtobuf(
               request.body,
-              request.path === '/api/otlp/v1/logs'
+              normalizedPath === '/api/otlp/v1/logs'
                 ? 'logs'
-                : request.path === '/api/otlp/v1/traces' || parentTraceId
+                : normalizedPath === '/api/otlp/v1/traces' || parentTraceId
                   ? 'traces'
                   : undefined
             )
@@ -344,7 +363,7 @@ export async function startTelemetryServer(params: {
 
         if (!payload?.resourceSpans?.length && !payload?.resourceLogs?.length) {
           // Acknowledge and ignore empty payloads.
-          response.status(200).json({});
+          sendOtlpOk();
           return;
         }
         const traces = traceDataFromOtlp(payload);
@@ -385,7 +404,7 @@ export async function startTelemetryServer(params: {
           }
         }
 
-        response.status(200).json({});
+        sendOtlpOk();
       } catch (err) {
         logger.error(`Error processing OTLP payload: ${err}`);
         response.status(500).json({
