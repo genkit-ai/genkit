@@ -1847,6 +1847,28 @@ describe('toGeminiTool', () => {
       }
     );
 
+    const draft4DollarId = toGeminiTool({
+      name: 'draft4_child_dollar_id_annotation',
+      description: 'Draft 4 tool with non-resource $id keyword',
+      inputSchema: {
+        $schema: 'http://json-schema.org/draft-04/schema#',
+        type: 'object',
+        properties: {
+          meta: {
+            $id: 'metadata',
+            type: 'object',
+            properties: { name: { $ref: '#/definitions/Name' } },
+          },
+        },
+        definitions: { Name: { type: 'string' } },
+      },
+    });
+    assert.deepStrictEqual(draft4DollarId.parameters?.properties?.meta, {
+      type: SchemaType.OBJECT,
+      properties: { name: { type: SchemaType.STRING } },
+      required: undefined,
+    });
+
     const draft2020 = toGeminiTool({
       name: 'draft2020_child_id_annotation',
       description: 'Draft 2020-12 tool with non-resource id keyword',
@@ -2498,6 +2520,52 @@ describe('toGeminiTool', () => {
         }),
       /Tool schema is too deep to convert/
     );
+  });
+
+  it('should preserve a __proto__ property on referenced objects during serialization', () => {
+    const inputSchema = JSON.parse(`{
+      "type": "object",
+      "properties": {
+        "payload": { "$ref": "#/$defs/Payload" }
+      },
+      "$defs": {
+        "Payload": {
+          "type": "object",
+          "properties": {
+            "__proto__": { "type": "string" }
+          },
+          "required": ["__proto__"]
+        }
+      }
+    }`);
+    const got = toGeminiTool({
+      name: 'proto_property_ref',
+      description: 'Tool referencing an object with a __proto__ property',
+      inputSchema,
+    });
+    const payloadProps = got.parameters?.properties?.payload?.properties;
+    assert.ok(payloadProps);
+    assert.strictEqual(
+      Object.prototype.hasOwnProperty.call(payloadProps, '__proto__'),
+      true
+    );
+    assert.deepStrictEqual(
+      Object.getOwnPropertyDescriptor(payloadProps, '__proto__')?.value,
+      { type: SchemaType.STRING }
+    );
+    assert.deepStrictEqual(got.parameters?.properties?.payload?.required, [
+      '__proto__',
+    ]);
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(got.parameters)), {
+      type: 'OBJECT',
+      properties: {
+        payload: {
+          type: 'OBJECT',
+          properties: JSON.parse('{"__proto__":{"type":"STRING"}}'),
+          required: ['__proto__'],
+        },
+      },
+    });
   });
 
   it('should throw an error for unsupported schema types', () => {

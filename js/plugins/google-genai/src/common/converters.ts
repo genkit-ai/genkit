@@ -117,10 +117,14 @@ function hasSchemaResourceMarker(
   if (refSiblingsIgnored && typeof record.$ref === 'string') {
     return false;
   }
+  const idKey = isDraft4 ? 'id' : '$id';
   return (
-    (typeof record.$id === 'string' && record.$id.length > 0) ||
-    (typeof record.$schema === 'string' && record.$schema.length > 0) ||
-    (isDraft4 && typeof record.id === 'string' && record.id.length > 0)
+    (Object.prototype.hasOwnProperty.call(record, idKey) &&
+      typeof record[idKey] === 'string' &&
+      record[idKey].length > 0) ||
+    (Object.prototype.hasOwnProperty.call(record, '$schema') &&
+      typeof record.$schema === 'string' &&
+      record.$schema.length > 0)
   );
 }
 
@@ -352,7 +356,12 @@ function toGeminiSchemaProperty(
           currentNestedResource
         );
         if (prop) {
-          nestedProperties[key] = prop;
+          Object.defineProperty(nestedProperties, key, {
+            value: prop,
+            enumerable: true,
+            writable: true,
+            configurable: true,
+          });
         }
       }
     }
