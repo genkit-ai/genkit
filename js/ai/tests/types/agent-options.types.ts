@@ -15,7 +15,7 @@
  */
 
 // Type-level assertions for agent call options. Never executed: type-checked
-// by `tsconfig.types-test.json` (part of `pnpm check`), since the runtime test
+// by `tsconfig.test.json` (part of `pnpm check`), since the runtime test
 // runner strips types without checking them.
 
 import type { ActionContext } from '@genkit-ai/core';

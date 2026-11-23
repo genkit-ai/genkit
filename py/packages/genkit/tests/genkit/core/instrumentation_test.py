@@ -273,14 +273,14 @@ async def _ok() -> str:
 
 @pytest.mark.asyncio
 async def test_provider_sees_real_action_kind() -> None:
-    """A provider sees action_type 'model', 'flow', 'tool.v2' for those actions."""
+    """A provider sees action_type 'model', 'flow', 'tool' for those actions."""
     rec = FakeInstrumentation('rec', [])
     configure_instrumentation(rec)
 
     for name, kind in (('m', ActionKind.MODEL), ('f', ActionKind.FLOW), ('t', ActionKind.TOOL)):
         await Action(name=name, kind=kind, fn=_ok).run()
 
-    assert [(m.name, m.action_type) for m in rec.seen] == [('m', 'model'), ('f', 'flow'), ('t', 'tool.v2')]
+    assert [(m.name, m.action_type) for m in rec.seen] == [('m', 'model'), ('f', 'flow'), ('t', 'tool')]
 
 
 @pytest.mark.asyncio

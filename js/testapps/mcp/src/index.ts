@@ -167,7 +167,7 @@ ai.defineFlow('test-resource', async (q) => {
   const { text } = await ai.generate({
     prompt: [
       { text: 'analyze this: ' },
-      { resource: { uri: 'test://static/resource/1' } },
+      { resource: { uri: 'demo://resource/static/document/architecture.md' } },
     ],
     resources: await mcpHost.getActiveResources(ai),
   });
@@ -179,7 +179,7 @@ ai.defineFlow('dynamic-test-resources', async (q) => {
   const { text } = await ai.generate({
     prompt: [
       { text: 'analyze this: ' },
-      { resource: { uri: 'test://static/resource/1' } },
+      { resource: { uri: 'demo://resource/static/document/architecture.md' } },
     ],
     resources: ['test-mcp-manager:resource/*'],
   });
@@ -191,9 +191,9 @@ ai.defineFlow('dynamic-test-one-resource', async (q) => {
   const { text } = await ai.generate({
     prompt: [
       { text: 'analyze this: ' },
-      { resource: { uri: 'test://static/resource/1' } },
+      { resource: { uri: 'demo://resource/static/document/architecture.md' } },
     ],
-    resources: ['test-mcp-manager:resource/everything/Resource 1'],
+    resources: ['test-mcp-manager:resource/everything/architecture.md'],
   });
 
   return text;

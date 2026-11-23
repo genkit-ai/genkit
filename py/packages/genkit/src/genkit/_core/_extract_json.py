@@ -16,6 +16,8 @@
 
 """Utility functions for extracting JSON data from text and markdown."""
 
+import json
+import re
 from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
@@ -24,6 +26,7 @@ import json5
 from partial_json_parser import loads
 
 CHAR_NON_BREAKING_SPACE = '\u00a0'
+_SCAN_TOKEN_RE = re.compile(r'"(?:\\.|[^"\\])*(?:"|\\?)|[{}[\]\'/]', re.DOTALL)
 
 
 def parse_partial_json(json_string: str) -> Any:  # noqa: ANN401
@@ -48,53 +51,62 @@ def extract_partial_json(text: str) -> Any:  # noqa: ANN401
     return scan_json(text, throw_on_bad_json=False, allow_partial=True)
 
 
+def is_complete_json(text: str) -> bool:
+    """Return True when ``text`` contains a complete JSON value without repair."""
+    if not text.strip():
+        return False
+    try:
+        scan_json(text, throw_on_bad_json=True, allow_partial=False)
+    except ValueError:
+        return False
+    return True
+
+
 def scan_json(text: str, *, throw_on_bad_json: bool, allow_partial: bool) -> Any:  # noqa: ANN401
     """Scan ``text`` for a JSON value. Used by extract_json and extract_partial_json."""
-    if not text.strip():
+    stripped = text.strip()
+    if not stripped:
         return None
 
-    stripped = text.strip()
     with suppress(ValueError):
-        return json5.loads(stripped)
+        return json.loads(stripped)
 
     opening_char: str | None = None
     closing_char: str | None = None
     start_pos: int | None = None
     nesting_count = 0
-    in_string = False
-    escape_next = False
+    saw_json5_syntax = False
+    tried_stripped_json5 = False
 
-    for i in range(len(text)):
-        char = text[i].replace(CHAR_NON_BREAKING_SPACE, ' ')
-
-        if escape_next:
-            escape_next = False
+    for match in _SCAN_TOKEN_RE.finditer(text):
+        tok = match.group(0)
+        if tok[0] == '"':
             continue
 
-        if char == '\\':
-            escape_next = True
+        if opening_char is not None and tok in ("'", '/'):
+            saw_json5_syntax = True
             continue
 
-        if char == '"':
-            in_string = not in_string
-            continue
-
-        if in_string:
-            continue
-
-        if not opening_char and char in '{[':
-            opening_char = char
-            closing_char = '}' if char == '{' else ']'
-            start_pos = i
+        if not opening_char and tok in '{[':
+            opening_char = tok
+            closing_char = '}' if tok == '{' else ']'
+            start_pos = match.start()
+            nesting_count = 1
+        elif tok == opening_char:
             nesting_count += 1
-        elif char == opening_char:
-            nesting_count += 1
-        elif char == closing_char:
+        elif tok == closing_char:
             nesting_count -= 1
             if not nesting_count:
+                candidate = text[start_pos or 0 : match.end()]
+                with suppress(ValueError):
+                    return json.loads(candidate)
                 try:
-                    return json5.loads(text[start_pos or 0 : i + 1])
+                    return json5.loads(candidate)
                 except ValueError:
+                    if saw_json5_syntax and not tried_stripped_json5:
+                        tried_stripped_json5 = True
+                        with suppress(ValueError):
+                            return json5.loads(stripped)
                     # {name} or a set literal is a balanced group that isn't
                     # JSON; keep looking so surrounding prose doesn't hide the
                     # object they asked for.
@@ -102,6 +114,10 @@ def scan_json(text: str, *, throw_on_bad_json: bool, allow_partial: bool) -> Any
                     closing_char = None
                     start_pos = None
                     nesting_count = 0
+
+    if not tried_stripped_json5 and (stripped[0] not in '{[' or saw_json5_syntax):
+        with suppress(ValueError):
+            return json5.loads(stripped)
 
     if allow_partial and start_pos is not None and nesting_count > 0:
         try:

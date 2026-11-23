@@ -10,7 +10,7 @@ from httpx import ASGITransport, AsyncClient
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from genkit import Genkit, GenkitError
-from genkit._core._error import RuntimeErrorReason
+from genkit._core._error import ErrorReason
 from genkit._core._reflection import create_reflection_asgi_app
 
 
@@ -21,8 +21,8 @@ class Receipt(BaseModel):
 
 def _assert_invalid_output(error: GenkitError, flow_name: str) -> None:
     assert error.status == 'INTERNAL'
-    assert error.reason is RuntimeErrorReason.INVALID_OUTPUT
-    assert isinstance(error.cause, ValidationError)
+    assert error.reason is ErrorReason.INVALID_OUTPUT
+    assert isinstance(error.__cause__, ValidationError)
     assert f"Flow '{flow_name}' returned a value that doesn't match its return annotation" in str(error)
 
 
@@ -215,7 +215,7 @@ async def test_tool_returning_wrong_shape_is_not_checked() -> None:
         return 'x'  # type: ignore[return-value]
 
     result = await echo('ada')
-    assert result.output == 'x'
+    assert result == 'x'
 
 
 @pytest.mark.asyncio

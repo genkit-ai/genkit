@@ -3651,8 +3651,7 @@ describe('contextCompression middleware', () => {
     assert.strictEqual(
       (
         summaryMsg.metadata?.contextCompression as
-          | Record<string, unknown>
-          | undefined
+          Record<string, unknown> | undefined
       )?.summaryMessage,
       true
     );
@@ -4178,8 +4177,7 @@ describe('contextCompression middleware', () => {
 
     assert.strictEqual(summaryCalled, false);
     const cc = (res.custom as Record<string, unknown>)?.contextCompression as
-      | Record<string, unknown>
-      | undefined;
+      Record<string, unknown> | undefined;
     assert.ok(cc);
     assert.strictEqual(cc.summarizationSkipped, true);
     assert.strictEqual(cc.toolResponsesTruncated, 1);
@@ -4308,8 +4306,7 @@ describe('contextCompression middleware', () => {
 
     assert.strictEqual(summaryCalled, 1);
     const cc = (res.custom as Record<string, unknown>)?.contextCompression as
-      | Record<string, unknown>
-      | undefined;
+      Record<string, unknown> | undefined;
     assert.ok(cc);
     assert.strictEqual(cc.summarized, true);
     assert.strictEqual(cc.truncationNoticeInserted, false);
@@ -4706,13 +4703,11 @@ function anchoredToolLoopHistory(
 function compressionStats(response: { custom: unknown }) {
   return (
     response.custom as
-      | { contextCompression?: Record<string, unknown> }
-      | undefined
+      { contextCompression?: Record<string, unknown> } | undefined
   )?.contextCompression;
 }
 
 function compressionMetadata(target: { metadata?: Record<string, unknown> }) {
   return target.metadata?.contextCompression as
-    | Record<string, unknown>
-    | undefined;
+    Record<string, unknown> | undefined;
 }

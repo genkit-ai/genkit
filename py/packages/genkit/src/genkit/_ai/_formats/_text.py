@@ -18,7 +18,7 @@
 
 from typing import Any
 
-from genkit._ai._formats._types import FormatDef, Formatter, FormatterConfig
+from genkit._ai._formats._types import FormatHandler, Formatter, FormatterConfig
 from genkit._ai._model import (
     Message,
     ModelResponseChunk,
@@ -26,7 +26,7 @@ from genkit._ai._model import (
 from genkit._core._compat import override
 
 
-class TextFormat(FormatDef):
+class TextFormat(Formatter):
     """Defines a text format for use with AI models.
 
     This is the simplest format, returning the raw text content from the model's response.
@@ -53,14 +53,14 @@ class TextFormat(FormatDef):
         )
 
     @override
-    def handle(self, schema: dict[str, object] | None) -> Formatter[Any, Any]:
-        """Creates a Formatter for handling text data.
+    def handle(self, schema: dict[str, object] | None) -> FormatHandler[Any, Any]:
+        """Creates a FormatHandler for handling text data.
 
         Args:
             schema: Optional schema (ignored for text).
 
         Returns:
-            A Formatter instance configured for text handling.
+            A FormatHandler instance configured for text handling.
         """
 
         def message_parser(msg: Message) -> str:
@@ -85,7 +85,7 @@ class TextFormat(FormatDef):
             """
             return chunk.text
 
-        return Formatter(
+        return FormatHandler(
             chunk_parser=chunk_parser,
             message_parser=message_parser,
             instructions=None,

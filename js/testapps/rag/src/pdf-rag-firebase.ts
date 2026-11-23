@@ -16,9 +16,8 @@
 
 import { defineFirestoreRetriever } from '@genkit-ai/firebase';
 import { googleAI } from '@genkit-ai/google-genai';
-import { FieldValue } from '@google-cloud/firestore';
 import { initializeApp } from 'firebase-admin/app';
-import { getFirestore } from 'firebase-admin/firestore';
+import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 import { readFile } from 'fs/promises';
 import { z } from 'genkit';
 import { chunk } from 'llm-chunk';

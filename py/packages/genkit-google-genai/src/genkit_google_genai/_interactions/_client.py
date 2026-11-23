@@ -28,7 +28,7 @@ from genkit_google_genai._provider_errors import TRANSPORT_ERRORS, transport_err
 from google.genai.interactions import Interaction
 
 from genkit import GenkitError
-from genkit.plugin_api import GENKIT_CLIENT_HEADER, loop_local_client, provider_error
+from genkit.plugin_api import GENKIT_USER_AGENT, loop_local_client, provider_error
 
 DEFAULT_API_VERSION = 'v1beta'
 DEFAULT_BASE_URL = 'https://generativelanguage.googleapis.com'
@@ -66,7 +66,7 @@ def headers(*, api_key: str, client_options: ClientOptions | None) -> dict[str, 
     for name in RESERVED_HEADERS:
         custom.pop(name, None)
     custom['Content-Type'] = 'application/json'
-    custom['x-goog-api-client'] = GENKIT_CLIENT_HEADER
+    custom['x-goog-api-client'] = GENKIT_USER_AGENT
     custom['Api-Revision'] = API_REVISION
     custom['x-goog-api-key'] = api_key
     return dict(custom)
@@ -149,27 +149,22 @@ async def request(
     allow_empty: bool = False,
 ) -> Interaction | None:
     """Issue one Interactions HTTP call and parse the Interaction body."""
-    # Auth/key headers are per-request; the loop-local client is just the transport.
-    client = _http_client()
+    # Auth/key headers are per-request; the client is just the transport.
+    # The timeout always goes on the request so a caller's own client gets the
+    # same budget as the default one instead of httpx's 5 second default.
+    http_client_factory = client_options.http_client_factory if client_options else None
+    client = http_client_factory() if http_client_factory is not None else _http_client()
     request_headers = headers(api_key=api_key, client_options=client_options)
     timeout = timeout_seconds(client_options)
 
     try:
-        if timeout is not None:
-            response = await client.request(
-                method,
-                url,
-                headers=request_headers,
-                json=json_body,
-                timeout=timeout,
-            )
-        else:
-            response = await client.request(
-                method,
-                url,
-                headers=request_headers,
-                json=json_body,
-            )
+        response = await client.request(
+            method,
+            url,
+            headers=request_headers,
+            json=json_body,
+            timeout=timeout if timeout is not None else NO_TIMEOUT,
+        )
     except TRANSPORT_ERRORS as error:
         raise transport_error(error) from error
 
