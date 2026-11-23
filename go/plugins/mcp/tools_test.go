@@ -188,6 +188,7 @@ func inProcessTools(t *testing.T, srv *server.MCPServer) map[string]ai.Tool {
 	}
 
 	gc := &GenkitMCPClient{options: MCPClientOptions{Name: "srv"}, server: &ServerRef{Client: c}}
+	gc.active.Store(c)
 	tools, err := gc.GetActiveTools(ctx, nil)
 	if err != nil {
 		t.Fatal(err)

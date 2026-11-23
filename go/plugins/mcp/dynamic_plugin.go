@@ -35,7 +35,7 @@ func (c *GenkitMCPClient) Init(context.Context) []api.Action { return nil }
 // ListActions describes the tools currently exposed by the MCP server. Genkit's
 // reflection API uses these descriptors to show the tools in the Dev UI.
 func (c *GenkitMCPClient) ListActions(ctx context.Context) []api.ActionDesc {
-	if !c.isConnected() {
+	if c.activeClient() == nil {
 		return nil
 	}
 	lookupCtx, cancel := context.WithTimeout(ctx, dynamicToolDiscoveryTimeout)
@@ -60,7 +60,7 @@ func (c *GenkitMCPClient) ListActions(ctx context.Context) []api.ActionDesc {
 // ResolveAction resolves an MCP tool by its server-side name. The Genkit
 // registry registers the returned action under this client's provider name.
 func (c *GenkitMCPClient) ResolveAction(atype api.ActionType, id string) api.Action {
-	if (atype != api.ActionTypeToolV2 && atype != api.ActionTypeTool) || id == "" || !c.isConnected() {
+	if (atype != api.ActionTypeToolV2 && atype != api.ActionTypeTool) || id == "" || c.activeClient() == nil {
 		return nil
 	}
 	// DynamicPlugin.ResolveAction has no context parameter. Bound the remote

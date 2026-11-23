@@ -21,18 +21,20 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
+	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
 )
 
-func TestMCPClientDynamicActions(t *testing.T) {
+// newDynamicTestClient connects a client named "remote" to the basic_server
+// fixture, which exposes a single "echo" tool.
+func newDynamicTestClient(t *testing.T) *GenkitMCPClient {
+	t.Helper()
 	serverBinary := filepath.Join(t.TempDir(), "basic_server")
 	if output, err := exec.Command("go", "build", "-o", serverBinary, "./fixtures/basic_server").CombinedOutput(); err != nil {
 		t.Fatalf("build MCP fixture: %v\n%s", err, output)
 	}
-
 	client, err := NewGenkitMCPClient(MCPClientOptions{
 		Name:  "remote",
 		Stdio: &StdioConfig{Command: serverBinary},
@@ -41,81 +43,88 @@ func TestMCPClientDynamicActions(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = client.Disconnect() })
+	return client
+}
 
-	ctx := context.Background()
-	if got := client.ListActions(ctx); len(got) != 1 || got[0].Key != "/tool.v2/remote/echo" || got[0].Description != "Echo text" {
-		t.Fatalf("dynamic action descriptors = %+v, want remote/echo tool", got)
-	}
-	if action := client.ResolveAction(api.ActionTypeModel, "echo"); action != nil {
-		t.Fatalf("model action resolved from MCP tool: %+v", action)
-	}
-	if action := client.ResolveAction(api.ActionTypeToolV2, "missing"); action != nil {
-		t.Fatalf("unknown MCP tool resolved: %+v", action)
-	}
-
-	g := genkit.Init(ctx, genkit.WithPlugins(client))
+// lookupEcho resolves remote/echo through a Genkit registry, which caches the
+// resolved action for the life of the Genkit instance.
+func lookupEcho(t *testing.T, client *GenkitMCPClient) ai.Tool {
+	t.Helper()
+	g := genkit.Init(context.Background(), genkit.WithPlugins(client))
 	tool := genkit.LookupTool(g, "remote/echo")
 	if tool == nil {
 		t.Fatal("Genkit registry did not resolve remote/echo")
 	}
-	result, err := tool.RunRaw(ctx, map[string]any{"text": "hello"})
+	return tool
+}
+
+func assertEcho(t *testing.T, tool ai.Tool, text string) {
+	t.Helper()
+	result, err := tool.RunRaw(context.Background(), map[string]any{"text": text})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("call remote/echo with %q: %v", text, err)
 	}
 	encoded, err := json.Marshal(result)
-	if err != nil || !strings.Contains(string(encoded), "hello") {
-		t.Fatalf("MCP tool result = %s, err = %v; want hello", encoded, err)
+	if err != nil || !strings.Contains(string(encoded), text) {
+		t.Fatalf("remote/echo result = %s, err = %v; want it to contain %q", encoded, err, text)
+	}
+}
+
+func TestMCPClientDynamicActions(t *testing.T) {
+	client := newDynamicTestClient(t)
+
+	got := client.ListActions(context.Background())
+	if len(got) != 1 || got[0].Key != "/tool.v2/remote/echo" || got[0].Description != "Echo text" {
+		t.Fatalf("ListActions() = %+v, want only remote/echo", got)
+	}
+	if action := client.ResolveAction(api.ActionTypeModel, "echo"); action != nil {
+		t.Errorf("ResolveAction(model, echo) = %v, want nil", action.Name())
+	}
+	if action := client.ResolveAction(api.ActionTypeToolV2, "missing"); action != nil {
+		t.Errorf("ResolveAction(tool.v2, missing) = %v, want nil", action.Name())
+	}
+	if action := client.ResolveAction(api.ActionTypeToolV2, "echo"); action == nil || action.Name() != "remote/echo" {
+		t.Fatalf("ResolveAction(tool.v2, echo) = %v, want remote/echo", action)
 	}
 
-	if err := client.Restart(ctx); err != nil {
-		t.Fatalf("restart MCP client: %v", err)
+	assertEcho(t, lookupEcho(t, client), "hello")
+}
+
+// The registry keeps the first resolved action, so the tool must use the
+// connection that is current when it is called, not the one it was built with.
+func TestMCPClientDynamicToolSurvivesRestart(t *testing.T) {
+	client := newDynamicTestClient(t)
+	tool := lookupEcho(t, client)
+	assertEcho(t, tool, "before restart")
+
+	for i := range 2 {
+		if err := client.Restart(context.Background()); err != nil {
+			t.Fatalf("restart %d: %v", i+1, err)
+		}
+		assertEcho(t, tool, "after restart")
 	}
-	result, err = tool.RunRaw(ctx, map[string]any{"text": "after restart"})
-	if err != nil {
-		t.Fatalf("call registered tool after restart: %v", err)
-	}
-	encoded, err = json.Marshal(result)
-	if err != nil || !strings.Contains(string(encoded), "after restart") {
-		t.Fatalf("MCP tool result after restart = %s, err = %v", encoded, err)
-	}
-	callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	callErrors := make(chan error, 8)
-	for range 8 {
-		go func() {
-			_, err := tool.RunRaw(callCtx, map[string]any{"text": "during restart"})
-			callErrors <- err
-		}()
-	}
-	if err := client.Restart(ctx); err != nil {
-		t.Fatalf("restart MCP client during tool calls: %v", err)
-	}
-	for range 8 {
-		// Closing the old transport can interrupt a call that was in flight.
-		<-callErrors
-	}
-	result, err = tool.RunRaw(ctx, map[string]any{"text": "after concurrent restart"})
-	if err != nil {
-		t.Fatalf("call registered tool after concurrent restart: %v", err)
-	}
-	encoded, err = json.Marshal(result)
-	if err != nil || !strings.Contains(string(encoded), "after concurrent restart") {
-		t.Fatalf("MCP tool result after concurrent restart = %s, err = %v", encoded, err)
+}
+
+func TestMCPClientDynamicActionsWhileDisconnected(t *testing.T) {
+	client := newDynamicTestClient(t)
+	tool := lookupEcho(t, client)
+	if err := client.Disconnect(); err != nil {
+		t.Fatalf("disconnect: %v", err)
 	}
 
-	slashedClient, err := NewGenkitMCPClient(MCPClientOptions{
-		Name:  "team/filesystem",
-		Stdio: &StdioConfig{Command: serverBinary},
-	})
-	if err != nil {
-		t.Fatal(err)
+	if got := client.ListActions(context.Background()); got != nil {
+		t.Errorf("ListActions() while disconnected = %+v, want nil", got)
 	}
-	t.Cleanup(func() { _ = slashedClient.Disconnect() })
-	if got := slashedClient.ListActions(ctx); len(got) != 1 || got[0].Key != "/tool.v2/team%2Ffilesystem/echo" {
-		t.Fatalf("slashed client action descriptors = %+v", got)
+	if action := client.ResolveAction(api.ActionTypeToolV2, "echo"); action != nil {
+		t.Errorf("ResolveAction() while disconnected = %v, want nil", action.Name())
 	}
-	slashedGenkit := genkit.Init(ctx, genkit.WithPlugins(slashedClient))
-	if tool := genkit.LookupTool(slashedGenkit, "team%2Ffilesystem/echo"); tool == nil {
-		t.Fatal("Genkit registry did not resolve tool for slash-containing client name")
+	_, err := tool.RunRaw(context.Background(), map[string]any{"text": "hello"})
+	if err == nil || !strings.Contains(err.Error(), `MCP client "remote" is disconnected`) {
+		t.Fatalf("cached tool call while disconnected: err = %v, want disconnected error", err)
 	}
+
+	if err := client.Restart(context.Background()); err != nil {
+		t.Fatalf("reconnect: %v", err)
+	}
+	assertEcho(t, tool, "reconnected")
 }

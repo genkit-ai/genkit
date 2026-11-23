@@ -31,7 +31,7 @@ import (
 
 // GetActiveTools retrieves all tools available from the MCP server
 func (c *GenkitMCPClient) GetActiveTools(ctx context.Context, g *genkit.Genkit) ([]ai.Tool, error) {
-	if !c.isConnected() {
+	if !c.IsEnabled() || c.server == nil {
 		return nil, nil
 	}
 
@@ -136,7 +136,7 @@ func (c *GenkitMCPClient) getTools(ctx context.Context) ([]mcp.Tool, error) {
 
 // fetchToolsPage retrieves a single page of tools from the MCP server
 func (c *GenkitMCPClient) fetchToolsPage(ctx context.Context, cursor mcp.Cursor) ([]mcp.Tool, mcp.Cursor, error) {
-	remoteClient := c.clientForRequest()
+	remoteClient := c.activeClient()
 	if remoteClient == nil {
 		return nil, "", fmt.Errorf("MCP client %q is disconnected", c.Name())
 	}
@@ -164,7 +164,9 @@ func (c *GenkitMCPClient) createToolFunction(mcpTool mcp.Tool) func(*ai.ToolCont
 
 	return func(toolCtx *ai.ToolContext, args interface{}) (interface{}, error) {
 		ctx := toolCtx.Context // Get context from tool context
-		remoteClient := c.clientForRequest()
+		// Read the connection at call time: the registry caches this tool, and
+		// Restart replaces the connection it was created with.
+		remoteClient := c.activeClient()
 		if remoteClient == nil {
 			return nil, fmt.Errorf("MCP client %q is disconnected", c.Name())
 		}

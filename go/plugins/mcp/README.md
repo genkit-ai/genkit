@@ -84,9 +84,9 @@ tool := genkit.LookupTool(g, "filesystem/read_file")
 
 Dynamic tool names use `client-name/tool-name`. The existing `GetActiveTools`
 method still returns detached tools with underscore-prefixed names for callers
-that want to choose when to register them. Reserved characters in client names
-are escaped in the Genkit provider name (for example, `team/filesystem` becomes
-`team%2Ffilesystem`).
+that want to choose when to register them. Genkit treats the first `/` in an
+action name as the end of the provider name, so a client whose name contains
+`/` cannot resolve its tools dynamically.
 
 Genkit caches a tool after its first lookup. If the MCP server changes its tool
 names or schemas, create a new Genkit instance to refresh those cached actions.
