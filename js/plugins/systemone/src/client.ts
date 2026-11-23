@@ -602,18 +602,42 @@ function hook<T>(name: string, which: 'route' | 'unwrap', run: () => T): T {
 
 async function readBody(resp: Response): Promise<string> {
   if (!resp.body) return '';
-  const reader = resp.body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    size += value.byteLength;
-    if (size > MAX_BODY_BYTES) {
-      await reader.cancel();
-      throw new BodyTooLarge(`response is larger than ${MAX_BODY_BYTES} bytes`);
+  const take = (chunk: Uint8Array | string): boolean => {
+    const bytes = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+    size += bytes.byteLength;
+    if (size > MAX_BODY_BYTES) return false;
+    chunks.push(bytes);
+    return true;
+  };
+  const body = resp.body as unknown;
+  if (typeof (body as ReadableStream).getReader === 'function') {
+    const reader = (body as ReadableStream<Uint8Array>).getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!take(value)) {
+        await reader.cancel();
+        throw new BodyTooLarge(
+          `response is larger than ${MAX_BODY_BYTES} bytes`
+        );
+      }
     }
-    chunks.push(value);
+  } else {
+    // A fetch of your own may hand back a Node.js stream as the body, as
+    // node-fetch v2 does; it is async iterable.
+    const stream = body as AsyncIterable<Uint8Array | string> & {
+      destroy?: () => void;
+    };
+    for await (const chunk of stream) {
+      if (!take(chunk)) {
+        stream.destroy?.();
+        throw new BodyTooLarge(
+          `response is larger than ${MAX_BODY_BYTES} bytes`
+        );
+      }
+    }
   }
   return Buffer.concat(chunks).toString('utf8');
 }

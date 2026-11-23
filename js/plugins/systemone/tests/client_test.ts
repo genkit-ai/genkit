@@ -16,6 +16,7 @@
 
 import * as assert from 'assert';
 import { GenkitError } from 'genkit';
+import { Readable } from 'node:stream';
 import { after, before, describe, it } from 'node:test';
 import {
   Client,
@@ -221,6 +222,54 @@ describe('client', () => {
         e.status === 'INTERNAL' && /larger than 8388608 bytes/.test(e.message)
     );
     assert.strictEqual(calls, 1);
+  });
+
+  it('reads a Node.js stream body from a fetch of your own', async () => {
+    const nodeBody = (body: Readable): Response =>
+      ({
+        status: 200,
+        ok: true,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        body,
+      }) as unknown as Response;
+    const answer = JSON.stringify({
+      model: 'jev',
+      answers: { urgent: { noul: 0.93 } },
+    });
+    const small = new Client({
+      fetch: async () =>
+        nodeBody(
+          Readable.from([Buffer.from(answer.slice(0, 5)), answer.slice(5)])
+        ),
+      baseUrl: 'http://unused',
+      endpoint: { name: 'test', path: '', modelsPath: '' },
+      sleep: async () => {},
+    });
+    const res = await small.decide('jev', request);
+    assert.deepStrictEqual(res.answers, { urgent: { noul: 0.93 } });
+
+    let calls = 0;
+    const stream = Readable.from(
+      (function* () {
+        for (let i = 0; i < 9; i++) yield Buffer.alloc(1 << 20, 0x78);
+      })()
+    );
+    const big = new Client({
+      fetch: async () => {
+        calls++;
+        return nodeBody(stream);
+      },
+      baseUrl: 'http://unused',
+      endpoint: { name: 'test', path: '', modelsPath: '' },
+      sleep: async () => {},
+    });
+    await assert.rejects(
+      big.decide('jev', request),
+      (e: GenkitError) =>
+        e.status === 'INTERNAL' && /larger than 8388608 bytes/.test(e.message)
+    );
+    assert.strictEqual(calls, 1);
+    assert.strictEqual(stream.destroyed, true);
   });
 
   it('does not retry 501 or 505', async () => {
