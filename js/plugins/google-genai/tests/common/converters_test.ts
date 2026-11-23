@@ -2026,23 +2026,40 @@ describe('toGeminiTool', () => {
     );
 
     const draft2020Anchor = toGeminiTool({
-      name: 'draft2020_ref_sibling_anchor',
-      description: 'Draft 2020-12 tool with sibling $anchor alongside $ref',
+      name: 'draft2020_ref_sibling_annotations',
+      description:
+        'Draft 2020-12 tool with sibling $anchor, description, and content annotations alongside $ref',
       inputSchema: {
         $schema: 'https://json-schema.org/draft/2020-12/schema',
         type: 'object',
         properties: {
           names: {
             type: 'array',
-            items: { $ref: '#/$defs/Name', $anchor: 'nameItem' },
+            items: {
+              $ref: '#/$defs/Name',
+              $anchor: 'nameItem',
+              description: 'item name',
+            },
+          },
+          attachment: {
+            $ref: '#/$defs/Text',
+            contentEncoding: 'base64',
+            contentMediaType: 'application/json',
+            contentSchema: { type: 'object' },
           },
         },
-        $defs: { Name: { type: 'string' } },
+        $defs: {
+          Name: { type: 'string', description: 'canonical name' },
+          Text: { type: 'string', description: 'raw text' },
+        },
       },
     });
-    assert.deepStrictEqual(draft2020Anchor.parameters?.properties?.names, {
-      type: SchemaType.ARRAY,
-      items: { type: SchemaType.STRING },
+    assert.deepStrictEqual(draft2020Anchor.parameters?.properties, {
+      names: {
+        type: SchemaType.ARRAY,
+        items: { type: SchemaType.STRING, description: 'item name' },
+      },
+      attachment: { type: SchemaType.STRING, description: 'raw text' },
     });
 
     assert.throws(

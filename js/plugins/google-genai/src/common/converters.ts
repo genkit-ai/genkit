@@ -75,6 +75,9 @@ const REF_ANNOTATION_KEYS = new Set([
   'deprecated',
   'readOnly',
   'writeOnly',
+  'contentEncoding',
+  'contentMediaType',
+  'contentSchema',
 ]);
 
 const SCHEMA_MAP_KEYWORDS = new Set([
