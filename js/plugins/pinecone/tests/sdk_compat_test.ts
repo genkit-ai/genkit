@@ -59,16 +59,21 @@ test('indexes and retrieves through the Pinecone SDK transport', async () => {
         return response({ upsertedCount: 1 });
       }
       if (url === `https://${indexHost}/query`) {
+        const queryRequest = body as { includeMetadata?: boolean } | undefined;
         return response({
           matches: [
             {
               id: 'record-1',
               score: 1,
-              metadata: {
-                _content: 'A test document',
-                _contentType: 'text',
-                docMetadata: JSON.stringify({ source: 'test' }),
-              },
+              ...(queryRequest?.includeMetadata
+                ? {
+                    metadata: {
+                      _content: 'A test document',
+                      _contentType: 'text',
+                      docMetadata: JSON.stringify({ source: 'test' }),
+                    },
+                  }
+                : {}),
             },
           ],
           namespace: 'team',
@@ -118,5 +123,50 @@ test('indexes and retrieves through the Pinecone SDK transport', async () => {
   assert.deepEqual(upsertBody.vectors[0].values, [0.1, 0.2, 0.3]);
   assert.equal(upsertBody.vectors[0].metadata._content, 'A test document');
   assert.equal(upsertBody.namespace, 'team');
-  assert.equal((query?.body as { namespace: string }).namespace, 'team');
+
+  const queryBody = query?.body as {
+    namespace: string;
+    topK: number;
+    vector: number[];
+    includeMetadata: boolean;
+    includeValues: boolean;
+  };
+  assert.equal(queryBody.namespace, 'team');
+  assert.equal(queryBody.topK, 1);
+  assert.deepEqual(queryBody.vector, [0.1, 0.2, 0.3]);
+  assert.equal(queryBody.includeMetadata, true);
+  assert.equal(queryBody.includeValues, false);
+});
+
+test('skips upsert when indexing an empty document batch', async () => {
+  const calls: Array<{ url: string; body: unknown }> = [];
+  const indexName = 'sdk-compat-empty-test';
+  const clientParams: PineconeConfiguration = {
+    apiKey: 'test-api-key',
+    controllerHostUrl: 'https://api.test.pinecone.io',
+    fetchApi: async (input, init) => {
+      calls.push({
+        url: String(input),
+        body: init?.body ? JSON.parse(String(init.body)) : undefined,
+      });
+      throw new Error(`Unexpected Pinecone request: ${String(input)}`);
+    },
+  };
+
+  const ai = genkit({});
+  const embedder = ai.defineEmbedder(
+    { name: 'emptyTestEmbedder' },
+    async () => ({
+      embeddings: [{ embedding: [0.1, 0.2, 0.3] }],
+    })
+  );
+  configurePineconeIndexer(ai, { indexId: indexName, clientParams, embedder });
+
+  await ai.index({
+    indexer: pineconeIndexerRef({ indexId: indexName }),
+    documents: [],
+    options: { namespace: 'team' },
+  });
+
+  assert.equal(calls.length, 0);
 });

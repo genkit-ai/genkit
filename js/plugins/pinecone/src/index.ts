@@ -271,34 +271,36 @@ export function configurePineconeIndexer<
           })
         )
       );
-      await scopedIndex.upsert({
-        records: embeddings
-          .map((value, i) => {
-            const doc = docs[i];
-            // The array of embeddings for this document
-            const docEmbeddings: Embedding[] = value;
+      const records = embeddings
+        .map((value, i) => {
+          const doc = docs[i];
+          // The array of embeddings for this document
+          const docEmbeddings: Embedding[] = value;
 
-            // Create one doc per docEmbedding so we can store them 1:1.
-            // They should be unique because the embedding metadata is
-            // added to the new docs.
-            const embeddingDocs = doc.getEmbeddingDocuments(docEmbeddings);
+          // Create one doc per docEmbedding so we can store them 1:1.
+          // They should be unique because the embedding metadata is
+          // added to the new docs.
+          const embeddingDocs = doc.getEmbeddingDocuments(docEmbeddings);
 
-            return docEmbeddings.map((docEmbedding, j) => {
-              const metadata: RecordMetadata = {
-                docMetadata: JSON.stringify(embeddingDocs[j].metadata),
-              };
-              metadata[contentKey] = embeddingDocs[j].data;
-              metadata[CONTENT_TYPE] = embeddingDocs[j].dataType || '';
-              const id = Md5.hashStr(JSON.stringify(embeddingDocs[j]));
-              return {
-                id,
-                values: docEmbedding.embedding,
-                metadata,
-              };
-            });
-          })
-          .flat(),
-      });
+          return docEmbeddings.map((docEmbedding, j) => {
+            const metadata: RecordMetadata = {
+              docMetadata: JSON.stringify(embeddingDocs[j].metadata),
+            };
+            metadata[contentKey] = embeddingDocs[j].data;
+            metadata[CONTENT_TYPE] = embeddingDocs[j].dataType || '';
+            const id = Md5.hashStr(JSON.stringify(embeddingDocs[j]));
+            return {
+              id,
+              values: docEmbedding.embedding,
+              metadata,
+            };
+          });
+        })
+        .flat();
+      if (records.length === 0) {
+        return;
+      }
+      await scopedIndex.upsert({ records });
     }
   );
 }
