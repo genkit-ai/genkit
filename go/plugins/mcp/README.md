@@ -228,8 +228,8 @@ MCP clients list `greet` with `prompts/list` and render it, without calling a
 model, with `prompts/get` and a `name` argument. Each input schema property
 becomes a string argument, converted when the property's `type` is `integer`,
 `number`, `boolean`, `object` or `array`. Arguments are required when the
-input schema requires them, as with `prompt.Render`; omitted optional arguments
-take the prompt's default input. A prompt whose input schema is not an object is
+input schema requires them, as `prompt.Render` enforces for any non-nil input;
+omitted optional arguments take the prompt's default input. A prompt whose input schema is not an object is
 skipped with a warning.
 
 Rendered messages may hold text, data, and image or audio media given as

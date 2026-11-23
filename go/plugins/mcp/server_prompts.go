@@ -114,8 +114,8 @@ func genkitPromptDefaults(desc api.ActionDesc) map[string]any {
 
 // genkitPromptArguments lists the properties of a normalized object schema as
 // MCP prompt arguments, sorted by name. An argument is required when the input
-// schema requires it, as prompt.Render validates supplied input against the
-// schema without filling in default values.
+// schema requires it: prompt.Render uses the default input only when the whole
+// input is nil, and a prompts/get request always supplies an input map.
 func genkitPromptArguments(schema map[string]any) []mcp.PromptArgument {
 	properties, _ := schema["properties"].(map[string]any)
 	required, _ := schema["required"].([]any)
