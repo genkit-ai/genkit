@@ -27,7 +27,7 @@
     "compile": "tsup-node",
     "build:clean": "rimraf ./lib",
     "build": "pnpm build:clean && pnpm check && pnpm compile && pnpm check:public-types",
-    "check:public-types": "tsc -p tsconfig.public-types.json --noEmit",
+    "check:public-types": "node ./tests/check-public-types.mjs",
     "build:watch": "tsup-node --watch",
     "test": "tsx --test ./tests/*_test.ts"
   },
