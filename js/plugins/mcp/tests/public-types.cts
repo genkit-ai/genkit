@@ -15,6 +15,8 @@
  */
 
 import {
+  GenkitMcpClient,
+  GenkitMcpHost,
   createMcpClient,
   createMcpHost,
   createMcpServer,
@@ -24,7 +26,9 @@ import {
   type McpClientOptionsWithCache,
   type McpHostOptions,
   type McpHostOptionsWithCache,
+  type McpServerConfig,
   type McpServerOptions,
+  type McpStdioServerConfig,
 } from '@genkit-ai/mcp';
 import type { Genkit } from 'genkit';
 
@@ -34,11 +38,22 @@ export function verifyPublicTypes(
   clientOptionsWithCache: McpClientOptionsWithCache,
   hostOptions: McpHostOptions,
   hostOptionsWithCache: McpHostOptionsWithCache,
-  serverOptions: McpServerOptions
-): void {
-  createMcpClient(clientOptions);
-  defineMcpClient(ai, clientOptionsWithCache);
-  createMcpHost(hostOptions);
-  defineMcpHost(ai, hostOptionsWithCache);
-  createMcpServer(ai, serverOptions);
+  serverOptions: McpServerOptions,
+  serverConfig: McpServerConfig,
+  stdioServerConfig: McpStdioServerConfig
+): boolean {
+  const client = createMcpClient(clientOptions);
+  const definedClient = defineMcpClient(ai, clientOptionsWithCache);
+  const host = createMcpHost(hostOptions);
+  const definedHost = defineMcpHost(ai, hostOptionsWithCache);
+  const server = createMcpServer(ai, serverOptions);
+  const configs: McpServerConfig[] = [serverConfig, stdioServerConfig];
+  return (
+    client instanceof GenkitMcpClient &&
+    definedClient instanceof GenkitMcpClient &&
+    host instanceof GenkitMcpHost &&
+    definedHost instanceof GenkitMcpHost &&
+    typeof server.start === 'function' &&
+    configs.length > 0
+  );
 }

@@ -16,7 +16,7 @@
 
 import { realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { resolve } from 'node:path';
+import { isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
@@ -25,7 +25,8 @@ const pkgDir = realpathSync(fileURLToPath(new URL('..', import.meta.url)));
 const configPath = resolve(pkgDir, 'tsconfig.public-types.json');
 
 const formatHost = {
-  getCanonicalFileName: (fileName) => fileName,
+  getCanonicalFileName: (fileName) =>
+    ts.sys.useCaseSensitiveFileNames ? fileName : fileName.toLowerCase(),
   getCurrentDirectory: () => pkgDir,
   getNewLine: () => ts.sys.newLine,
 };
@@ -37,19 +38,69 @@ function reportDiagnostics(diagnostics) {
   process.stderr.write(formatted);
 }
 
-function getModuleSpecifiers(sourceFile) {
+function collectModuleReferences(sourceFile) {
   const specifiers = [];
-  for (const statement of sourceFile.statements) {
+  const dynamicErrors = [];
+
+  function visit(node) {
     if (
-      (ts.isImportDeclaration(statement) ||
-        ts.isExportDeclaration(statement)) &&
-      statement.moduleSpecifier &&
-      ts.isStringLiteral(statement.moduleSpecifier)
+      (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+      node.moduleSpecifier &&
+      ts.isStringLiteralLike(node.moduleSpecifier)
     ) {
-      specifiers.push(statement.moduleSpecifier);
+      specifiers.push(node.moduleSpecifier);
+    } else if (
+      ts.isImportEqualsDeclaration(node) &&
+      ts.isExternalModuleReference(node.moduleReference)
+    ) {
+      if (ts.isStringLiteralLike(node.moduleReference.expression)) {
+        specifiers.push(node.moduleReference.expression);
+      } else {
+        dynamicErrors.push(
+          `non-literal require() specifier '${node.moduleReference.expression.getText(sourceFile)}'`
+        );
+      }
+    } else if (ts.isImportTypeNode(node)) {
+      if (
+        ts.isLiteralTypeNode(node.argument) &&
+        ts.isStringLiteralLike(node.argument.literal)
+      ) {
+        specifiers.push(node.argument.literal);
+      } else {
+        dynamicErrors.push(
+          `non-literal import() type specifier '${node.argument.getText(sourceFile)}'`
+        );
+      }
+    } else if (ts.isCallExpression(node)) {
+      const isDynamicImport =
+        node.expression.kind === ts.SyntaxKind.ImportKeyword;
+      const isRequireCall =
+        ts.isIdentifier(node.expression) && node.expression.text === 'require';
+      if (isDynamicImport || isRequireCall) {
+        const arg = node.arguments[0];
+        if (arg && ts.isStringLiteralLike(arg)) {
+          specifiers.push(arg);
+        } else {
+          dynamicErrors.push(
+            `non-literal ${isDynamicImport ? 'import()' : 'require()'} call`
+          );
+        }
+      }
     }
+
+    ts.forEachChild(node, visit);
   }
-  return specifiers;
+
+  visit(sourceFile);
+  return { specifiers, dynamicErrors };
+}
+
+function isFilePathSpecifier(specifierText) {
+  return (
+    specifierText.startsWith('.') ||
+    specifierText.startsWith('/') ||
+    isAbsolute(specifierText)
+  );
 }
 
 function main() {
@@ -69,6 +120,14 @@ function main() {
   );
   if (parsed.errors.length > 0) {
     reportDiagnostics(parsed.errors);
+    process.exitCode = 1;
+    return;
+  }
+
+  if (parsed.options.skipLibCheck !== false) {
+    console.error(
+      'tsconfig.public-types.json must keep compilerOptions.skipLibCheck set to false'
+    );
     process.exitCode = 1;
     return;
   }
@@ -111,11 +170,21 @@ function main() {
       continue;
     }
 
-    const specifiers = getModuleSpecifiers(sourceFile);
+    for (const ref of sourceFile.referencedFiles) {
+      failures.push(
+        `${fixture} uses triple-slash path reference '${ref.fileName}' instead of package exports`
+      );
+    }
+
+    const { specifiers, dynamicErrors } = collectModuleReferences(sourceFile);
+    for (const message of dynamicErrors) {
+      failures.push(`${fixture} uses ${message}`);
+    }
+
     for (const specifier of specifiers) {
-      if (specifier.text.startsWith('.')) {
+      if (isFilePathSpecifier(specifier.text)) {
         failures.push(
-          `${fixture} uses relative specifier '${specifier.text}' instead of package exports`
+          `${fixture} uses file-path specifier '${specifier.text}' instead of package exports`
         );
       }
     }
