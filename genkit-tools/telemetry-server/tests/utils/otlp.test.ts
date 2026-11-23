@@ -15,7 +15,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { logDataFromOtlp, traceDataFromOtlp } from '../src/utils/otlp.js';
+import { logDataFromOtlp, traceDataFromOtlp } from '../../src/utils/otlp.js';
 
 describe('otlp-traces', () => {
   it('should transform OTLP payload to TraceData', () => {
