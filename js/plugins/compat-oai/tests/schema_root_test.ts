@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
-import { toJsonSchema, validateSchema } from '@genkit-ai/core/schema';
 import { afterEach, beforeEach, describe, expect, it } from '@jest/globals';
 import { genkit, z } from 'genkit';
 import type { GenerateRequest } from 'genkit/model';
+import { toJsonSchema, validateSchema } from 'genkit/schema';
 import OpenAI from 'openai';
 import { openAICompatible } from '../src';
 import {
