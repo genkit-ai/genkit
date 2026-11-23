@@ -180,7 +180,7 @@ type TicketRequest struct {
 type TriageResult struct {
 	Decision Triage `json:"decision"`
 	Route    string `json:"route"`
-	Model    string `json:"model" jsonschema_description:"The model version that answered, which is what thresholds are tuned against"`
+	Model    string `json:"model" jsonschema_description:"The model that answered, which is what thresholds are tuned against: the version a server names, or the model the request named when it names none"`
 }
 
 // Harm is the rubric of the screening score.
