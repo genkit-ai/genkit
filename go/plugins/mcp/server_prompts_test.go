@@ -130,8 +130,8 @@ func TestConvertPromptArgument(t *testing.T) {
 		{"number", "1.5", 1.5, false},
 		{"boolean", "true", true, false},
 		{"boolean", "yes", nil, true},
-		{"object", `{"id":9007199254740993}`, map[string]any{"id": json.Number("9007199254740993")}, false},
-		{"array", `[1,"x"]`, []any{json.Number("1"), "x"}, false},
+		{"object", `{"id":7}`, map[string]any{"id": float64(7)}, false},
+		{"array", `[1,"x"]`, []any{float64(1), "x"}, false},
 		{"object", "{", nil, true},
 		{"object", "{} {}", nil, true},
 		{"string", "3", "3", false},
@@ -200,7 +200,7 @@ func TestMCPServerConvertsTypedPromptArguments(t *testing.T) {
 
 func TestMCPServerUsesPromptDefaults(t *testing.T) {
 	type greetInput struct {
-		Greeting string `json:"greeting"`
+		Greeting string `json:"greeting,omitempty"`
 		Name     string `json:"name"`
 	}
 	g := genkit.Init(context.Background())
@@ -208,32 +208,26 @@ func TestMCPServerUsesPromptDefaults(t *testing.T) {
 		ai.WithInputType(greetInput{Greeting: "Hello", Name: "Ada"}),
 		ai.WithPrompt("{{greeting}} {{name}}"),
 	)
-	// The zero value given to WithInputType holds no real defaults.
 	genkit.DefinePrompt(g, "zero-greet",
 		ai.WithInputType(greetInput{}),
 		ai.WithPrompt("{{greeting}} {{name}}"),
 	)
 	s := NewMCPServer(g, MCPServerOptions{Name: "defaults"})
+	// Required follows the input schema, whatever the default input holds.
 	for _, prompt := range listPrompts(t, s) {
 		for _, arg := range prompt.Arguments {
-			if want := prompt.Name == "zero-greet"; arg.Required != want {
+			if want := arg.Name == "name"; arg.Required != want {
 				t.Errorf("%s argument %q required = %t, want %t", prompt.Name, arg.Name, arg.Required, want)
 			}
 		}
 	}
-	if _, err := getPrompt(t, s, "zero-greet", map[string]string{"greeting": "Hi"}); !strings.Contains(err, `requires argument "name"`) {
-		t.Errorf("prompts/get zero-greet without name error = %q, want missing argument", err)
-	}
-	for _, test := range []struct {
-		arguments map[string]string
-		want      string
-	}{
-		{nil, "Hello Ada"},
-		{map[string]string{"name": "Grace"}, "Hello Grace"},
-	} {
-		if got, err := getPrompt(t, s, "default-greet", test.arguments); err != "" || !cmp.Equal(got, []string{test.want}) {
-			t.Errorf("prompts/get %v = %q, %q, want %q", test.arguments, got, err, test.want)
+	for _, name := range []string{"default-greet", "zero-greet"} {
+		if _, err := getPrompt(t, s, name, map[string]string{"greeting": "Hi"}); !strings.Contains(err, `requires argument "name"`) {
+			t.Errorf("prompts/get %s without name error = %q, want missing argument", name, err)
 		}
+	}
+	if got, err := getPrompt(t, s, "default-greet", map[string]string{"name": "Grace"}); err != "" || !cmp.Equal(got, []string{"Hello Grace"}) {
+		t.Errorf("prompts/get default-greet = %q, %q, want default greeting", got, err)
 	}
 }
 

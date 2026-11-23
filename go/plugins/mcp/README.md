@@ -227,9 +227,10 @@ genkit.DefinePrompt(g, "greet",
 MCP clients list `greet` with `prompts/list` and render it, without calling a
 model, with `prompts/get` and a `name` argument. Each input schema property
 becomes a string argument, converted when the property's `type` is `integer`,
-`number`, `boolean`, `object` or `array`. Omitted arguments take the prompt's
-default input. A prompt whose input schema is not an object is skipped with a
-warning.
+`number`, `boolean`, `object` or `array`. Arguments are required when the
+input schema requires them, as with `prompt.Render`; omitted optional arguments
+take the prompt's default input. A prompt whose input schema is not an object is
+skipped with a warning.
 
 Rendered messages may hold text, data, and image or audio media given as
 base64 `data:` URIs; any other part makes `prompts/get` fail. MCP has no system

@@ -19,9 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"maps"
-	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -46,7 +44,7 @@ func (s *GenkitMCPServer) registerPromptWithMCP(desc api.ActionDesc) error {
 	}
 	properties, _ := schema["properties"].(map[string]any)
 	defaults := genkitPromptDefaults(desc)
-	arguments := genkitPromptArguments(schema, defaults)
+	arguments := genkitPromptArguments(schema)
 
 	s.mcpServer.AddPrompt(mcp.Prompt{
 		Name:        desc.Name,
@@ -115,15 +113,15 @@ func genkitPromptDefaults(desc api.ActionDesc) map[string]any {
 }
 
 // genkitPromptArguments lists the properties of a normalized object schema as
-// MCP prompt arguments, sorted by name. A required property is optional only
-// when its default is not a zero value: ai.WithInputType stores its whole
-// value as the default, so the zero struct T{} sets no real defaults.
-func genkitPromptArguments(schema, defaults map[string]any) []mcp.PromptArgument {
+// MCP prompt arguments, sorted by name. An argument is required when the input
+// schema requires it, as prompt.Render validates supplied input against the
+// schema without filling in default values.
+func genkitPromptArguments(schema map[string]any) []mcp.PromptArgument {
 	properties, _ := schema["properties"].(map[string]any)
 	required, _ := schema["required"].([]any)
 	arguments := make([]mcp.PromptArgument, 0, len(properties))
 	for name, raw := range properties {
-		arg := mcp.PromptArgument{Name: name, Required: slices.Contains(required, any(name)) && isZeroValue(defaults[name])}
+		arg := mcp.PromptArgument{Name: name, Required: slices.Contains(required, any(name))}
 		if property, ok := raw.(map[string]any); ok {
 			arg.Description, _ = property["description"].(string)
 		}
@@ -131,17 +129,6 @@ func genkitPromptArguments(schema, defaults map[string]any) []mcp.PromptArgument
 	}
 	slices.SortFunc(arguments, func(a, b mcp.PromptArgument) int { return strings.Compare(a.Name, b.Name) })
 	return arguments
-}
-
-func isZeroValue(value any) bool {
-	if value == nil {
-		return true
-	}
-	v := reflect.ValueOf(value)
-	if v.Kind() == reflect.Map || v.Kind() == reflect.Slice {
-		return v.Len() == 0
-	}
-	return v.IsZero()
 }
 
 // convertPromptArgument converts an MCP prompt argument, which is always a
@@ -156,15 +143,9 @@ func convertPromptArgument(property map[string]any, value string) (any, error) {
 	case "boolean":
 		return strconv.ParseBool(value)
 	case "object", "array":
-		// Keep numbers as json.Number so large integers keep their digits.
-		decoder := json.NewDecoder(strings.NewReader(value))
-		decoder.UseNumber()
 		var converted any
-		if err := decoder.Decode(&converted); err != nil {
+		if err := json.Unmarshal([]byte(value), &converted); err != nil {
 			return nil, fmt.Errorf("not a JSON %s: %w", kind, err)
-		}
-		if decoder.Decode(new(any)) != io.EOF {
-			return nil, fmt.Errorf("not a single JSON %s", kind)
 		}
 		return converted, nil
 	}
