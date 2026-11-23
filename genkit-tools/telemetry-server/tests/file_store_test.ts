@@ -263,6 +263,41 @@ describe('local-file-store', () => {
     assert.deepStrictEqual(tracesResponse.traces, wantTraces.reverse());
   });
 
+  it('lists traces filtered by dynamic action key with reserved URL characters', async () => {
+    const hostAKey = '/dynamic-action-provider/host+a&b#c:tool/search';
+    const hostBKey = '/dynamic-action-provider/host-b:tool/search';
+    const traces: TraceData[] = [];
+    for (const [traceId, spanId, key] of [
+      [TRACE_ID_1, SPAN_A, hostAKey],
+      [TRACE_ID_2, SPAN_B, hostBKey],
+    ]) {
+      const spanData = span(traceId, spanId, 100, 100);
+      spanData.displayName = 'search';
+      spanData.attributes['genkit:metadata:subtype'] = 'tool';
+      spanData.attributes['genkit:key'] = key;
+      const trace: TraceData = {
+        traceId,
+        displayName: 'search',
+        spans: { [spanId]: spanData },
+      };
+      traces.push(trace);
+      const res = await fetch(`${url}/api/traces`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(trace),
+      });
+      assert.strictEqual(res.status, 200);
+    }
+
+    const params = new URLSearchParams({
+      filter: JSON.stringify({ eq: { key: hostAKey } } as TraceQueryFilter),
+    });
+    const getResp = await fetch(`${url}/api/traces?${params.toString()}`);
+    assert.strictEqual(getResp.status, 200);
+    const tracesResponse = await getResp.json();
+    assert.deepStrictEqual(tracesResponse.traces, [traces[0]]);
+  });
+
   it('lists trace data with pagination', async () => {
     const wantTraces = [] as TraceData[];
     for (let i = 0; i < 20; i++) {
@@ -462,6 +497,83 @@ describe('index', () => {
         status: 0,
       },
     ]);
+  });
+
+  it('filters same-named MCP tool traces by dynamic action key', () => {
+    const hostAKey = '/dynamic-action-provider/host-a:tool/search';
+    const hostBKey = '/dynamic-action-provider/host-b:tool/search';
+    for (const [traceId, spanId, key] of [
+      [TRACE_ID_1, SPAN_A, hostAKey],
+      [TRACE_ID_2, SPAN_B, hostBKey],
+    ]) {
+      const rootSpan = span(traceId, spanId, 100, 100);
+      rootSpan.displayName = 'search';
+      rootSpan.attributes['genkit:metadata:subtype'] = 'tool';
+      rootSpan.attributes['genkit:key'] = key;
+      index.add({
+        traceId,
+        spans: { [spanId]: rootSpan },
+      } as TraceData);
+    }
+
+    assert.deepStrictEqual(
+      index.search({ limit: 5, filter: { eq: { key: hostAKey } } }).data,
+      [
+        {
+          id: TRACE_ID_1,
+          type: 'tool',
+          name: 'search',
+          key: hostAKey,
+          start: 1,
+          end: 2,
+          status: 0,
+        },
+      ]
+    );
+  });
+
+  it('ignores empty or non-string genkit:key attributes', () => {
+    const emptyKeySpan = span(TRACE_ID_1, SPAN_A, 100, 100);
+    emptyKeySpan.displayName = 'emptyKey';
+    emptyKeySpan.startTime = 100;
+    emptyKeySpan.attributes['genkit:key'] = '';
+
+    const nonStringKeySpan = span(TRACE_ID_2, SPAN_B, 200, 200);
+    nonStringKeySpan.displayName = 'nonStringKey';
+    nonStringKeySpan.startTime = 200;
+    nonStringKeySpan.attributes['genkit:key'] = 123;
+
+    index.add({
+      traceId: TRACE_ID_1,
+      spans: { [SPAN_A]: emptyKeySpan },
+    } as TraceData);
+    index.add({
+      traceId: TRACE_ID_2,
+      spans: { [SPAN_B]: nonStringKeySpan },
+    } as TraceData);
+
+    assert.deepStrictEqual(index.search({ limit: 5 }).data, [
+      {
+        id: TRACE_ID_2,
+        type: 'flow',
+        name: 'nonStringKey',
+        start: 200,
+        end: 2,
+        status: 0,
+      },
+      {
+        id: TRACE_ID_1,
+        type: 'flow',
+        name: 'emptyKey',
+        start: 100,
+        end: 2,
+        status: 0,
+      },
+    ]);
+    assert.deepStrictEqual(
+      index.search({ limit: 5, filter: { eq: { key: '' } } }).data,
+      []
+    );
   });
 
   it('should apply search filters', () => {
