@@ -15,11 +15,29 @@
  */
 
 import type { TraceData, TraceQueryFilter } from '@genkit-ai/tools-common';
+import { logger } from '@genkit-ai/tools-common/utils';
+import { SpanKind, SpanStatusCode, context, trace } from '@opentelemetry/api';
+import { SeverityNumber } from '@opentelemetry/api-logs';
+import {
+  ProtobufLogsSerializer,
+  ProtobufTraceSerializer,
+} from '@opentelemetry/otlp-transformer';
+import {
+  InMemoryLogRecordExporter,
+  LoggerProvider,
+  SimpleLogRecordProcessor,
+} from '@opentelemetry/sdk-logs';
+import {
+  InMemorySpanExporter,
+  SimpleSpanProcessor,
+  TracerProvider,
+} from '@opentelemetry/sdk-trace';
 import fs from 'fs';
 import getPort from 'get-port';
+import net from 'net';
 import os from 'os';
 import path from 'path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Index } from '../src/file-trace-store.js';
 import {
   LocalFileLogStore,
@@ -1313,6 +1331,410 @@ describe('otlp-endpoint', () => {
       body: 'invalid json',
     });
     expect(res.status).toBe(500);
+  });
+
+  it('saves protobuf traces on /api/otlp/v1/traces', async () => {
+    const traceIdHex = '0102030405060708090a0b0c0d0e0f10';
+    const spanIdHex = '1112131415161718';
+    const startTimeBuf = Buffer.alloc(8);
+    startTimeBuf.writeBigUInt64LE(1760827335359000000n, 0);
+    const endTimeBuf = Buffer.alloc(8);
+    endTimeBuf.writeBigUInt64LE(1760827336695000000n, 0);
+
+    const spanBuf = Buffer.concat([
+      Buffer.from([0x0a, 0x10]),
+      Buffer.from(traceIdHex, 'hex'),
+      Buffer.from([0x12, 0x08]),
+      Buffer.from(spanIdHex, 'hex'),
+      Buffer.from([0x2a, 0x05]),
+      Buffer.from('span1'),
+      Buffer.from([0x30, 0x01]),
+      Buffer.from([0x39]),
+      startTimeBuf,
+      Buffer.from([0x41]),
+      endTimeBuf,
+    ]);
+    const scopeBuf = Buffer.concat([
+      Buffer.from([0x0a, 0x0a]),
+      Buffer.from('test-scope'),
+    ]);
+    const scopeSpansBuf = Buffer.concat([
+      Buffer.from([0x0a, scopeBuf.length]),
+      scopeBuf,
+      Buffer.from([0x12, spanBuf.length]),
+      spanBuf,
+    ]);
+    const resourceSpansBuf = Buffer.concat([
+      Buffer.from([0x12, scopeSpansBuf.length]),
+      scopeSpansBuf,
+    ]);
+    const reqBuf = Buffer.concat([
+      Buffer.from([0x0a, resourceSpansBuf.length]),
+      resourceSpansBuf,
+    ]);
+
+    const res = await fetch(`${url}/api/otlp/v1/traces`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-protobuf' },
+      body: reqBuf,
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type') ?? '').toMatch(
+      /^application\/x-protobuf\b/
+    );
+    expect((await res.arrayBuffer()).byteLength).toBe(0);
+
+    const getResp = await fetch(`${url}/api/traces/${traceIdHex}`);
+    expect(getResp.status).toBe(200);
+    const trace = await getResp.json();
+    expect(trace.traceId).toBe(traceIdHex);
+    expect(trace.spans[spanIdHex].spanId).toBe(spanIdHex);
+    expect(trace.spans[spanIdHex].displayName).toBe('span1');
+    expect(trace.spans[spanIdHex].startTime).toBe(1760827335359);
+    expect(trace.spans[spanIdHex].endTime).toBe(1760827336695);
+  });
+
+  it('saves protobuf logs on /api/otlp/v1/logs', async () => {
+    const traceIdHex = '0102030405060708090a0b0c0d0e0f10';
+    const spanIdHex = '1112131415161718';
+    const timeBuf = Buffer.alloc(8);
+    timeBuf.writeBigUInt64LE(1760827335359000000n, 0);
+    const bodyValueBuf = Buffer.concat([
+      Buffer.from([0x0a, 0x09]),
+      Buffer.from('hello log'),
+    ]);
+
+    const logRecordBuf = Buffer.concat([
+      Buffer.from([0x09]),
+      timeBuf,
+      Buffer.from([0x10, 0x09]), // severity_number = 9
+      Buffer.from([0x1a, 0x04]),
+      Buffer.from('INFO'),
+      Buffer.from([0x2a, bodyValueBuf.length]),
+      bodyValueBuf,
+      Buffer.from([0x4a, 0x10]),
+      Buffer.from(traceIdHex, 'hex'),
+      Buffer.from([0x52, 0x08]),
+      Buffer.from(spanIdHex, 'hex'),
+    ]);
+    const scopeBuf = Buffer.concat([
+      Buffer.from([0x0a, 0x0a]),
+      Buffer.from('test-scope'),
+    ]);
+    const scopeLogsBuf = Buffer.concat([
+      Buffer.from([0x0a, scopeBuf.length]),
+      scopeBuf,
+      Buffer.from([0x12, logRecordBuf.length]),
+      logRecordBuf,
+    ]);
+    const resourceLogsBuf = Buffer.concat([
+      Buffer.from([0x12, scopeLogsBuf.length]),
+      scopeLogsBuf,
+    ]);
+    const reqBuf = Buffer.concat([
+      Buffer.from([0x0a, resourceLogsBuf.length]),
+      resourceLogsBuf,
+    ]);
+
+    const res = await fetch(`${url}/api/otlp/v1/logs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-protobuf' },
+      body: reqBuf,
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type') ?? '').toMatch(
+      /^application\/x-protobuf\b/
+    );
+    expect((await res.arrayBuffer()).byteLength).toBe(0);
+
+    const getResp = await fetch(`${url}/api/traces/${traceIdHex}/logs`);
+    expect(getResp.status).toBe(200);
+    const { logs } = await getResp.json();
+    expect(logs).toHaveLength(1);
+    expect(logs[0].traceId).toBe(traceIdHex);
+    expect(logs[0].spanId).toBe(spanIdHex);
+    expect(logs[0].body).toBe('hello log');
+    expect(logs[0].severityText).toBe('INFO');
+    expect(logs[0].severityNumber).toBe(9);
+  });
+
+  it('acknowledges /api/otlp/v1/metrics for json and protobuf (including trailing slash)', async () => {
+    // Non-empty ExportMetricsServiceRequest with Metric.name (field 1, wire type 2)
+    const metricBuf = Buffer.from([0x0a, 0x05, 0x63, 0x6f, 0x75, 0x6e, 0x74]);
+    const scopeMetricsBuf = Buffer.concat([
+      Buffer.from([0x12, metricBuf.length]),
+      metricBuf,
+    ]);
+    const resourceMetricsBuf = Buffer.concat([
+      Buffer.from([0x12, scopeMetricsBuf.length]),
+      scopeMetricsBuf,
+    ]);
+    const metricsReqBuf = Buffer.concat([
+      Buffer.from([0x0a, resourceMetricsBuf.length]),
+      resourceMetricsBuf,
+    ]);
+
+    for (const metricsPath of [
+      '/api/otlp/v1/metrics',
+      '/api/otlp/v1/metrics/',
+    ]) {
+      const protoRes = await fetch(`${url}${metricsPath}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-protobuf' },
+        body: metricsReqBuf,
+      });
+      expect(protoRes.status).toBe(200);
+      expect(protoRes.headers.get('content-type') ?? '').toMatch(
+        /^application\/x-protobuf\b/
+      );
+      expect((await protoRes.arrayBuffer()).byteLength).toBe(0);
+    }
+
+    const tracesResp = await fetch(`${url}/api/traces`);
+    const { traces } = await tracesResp.json();
+    expect(traces).toEqual([]);
+
+    const jsonRes = await fetch(`${url}/api/otlp/v1/metrics`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ resourceMetrics: [{ scopeMetrics: [] }] }),
+    });
+    expect(jsonRes.status).toBe(200);
+    expect(await jsonRes.json()).toEqual({});
+  });
+
+  it('acknowledges bodyless POSTs with supported content types as 200', async () => {
+    const sendBodylessPost = (contentType: string) =>
+      new Promise<{ statusCode: number; headers: string; body: Buffer }>(
+        (resolve, reject) => {
+          const chunks: Buffer[] = [];
+          const socket = net.connect(port, '127.0.0.1', () => {
+            socket.write(
+              `POST /api/otlp/v1/traces HTTP/1.1\r\n` +
+                `Host: localhost:${port}\r\n` +
+                `Content-Type: ${contentType}\r\n` +
+                `Connection: close\r\n\r\n`
+            );
+          });
+          socket.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+          socket.on('end', () => {
+            const raw = Buffer.concat(chunks);
+            const sep = raw.indexOf('\r\n\r\n');
+            const headerPart = raw.subarray(0, sep).toString('utf8');
+            const statusLine = headerPart.split('\r\n')[0];
+            const statusCode = Number(statusLine.split(' ')[1]);
+            resolve({
+              statusCode,
+              headers: headerPart.toLowerCase(),
+              body: raw.subarray(sep + 4),
+            });
+          });
+          socket.on('error', reject);
+        }
+      );
+
+    const warnMock = vi.spyOn(logger, 'warn').mockImplementation(() => logger);
+    try {
+      const protoRes = await sendBodylessPost('application/x-protobuf');
+      expect(protoRes.statusCode).toBe(200);
+      expect(
+        protoRes.headers.includes('content-type: application/x-protobuf')
+      ).toBeTruthy();
+      expect(protoRes.body).toHaveLength(0);
+
+      const jsonRes = await sendBodylessPost('application/json');
+      expect(jsonRes.statusCode).toBe(200);
+      expect(
+        jsonRes.headers.includes('content-type: application/json')
+      ).toBeTruthy();
+      expect(jsonRes.body.toString('utf8')).toBe('{}');
+
+      expect(warnMock).toHaveBeenCalledTimes(0);
+    } finally {
+      warnMock.mockRestore();
+    }
+  });
+
+  it('returns 415 and logs a one-time warning for unsupported content types', async () => {
+    const warnMock = vi.spyOn(logger, 'warn').mockImplementation(() => logger);
+    try {
+      const res1 = await fetch(`${url}/api/otlp/v1/traces`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: 'hello',
+      });
+      expect(res1.status).toBe(415);
+      expect(warnMock).toHaveBeenCalledTimes(1);
+
+      const res2 = await fetch(`${url}/api/otlp/v1/logs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/grpc' },
+        body: Buffer.from([0]),
+      });
+      expect(res2.status).toBe(415);
+      // Warning is logged only once per server instance
+      expect(warnMock).toHaveBeenCalledTimes(1);
+    } finally {
+      warnMock.mockRestore();
+    }
+  });
+
+  it('rejects protobuf on /api/otlp without a signal path', async () => {
+    const res = await fetch(`${url}/api/otlp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-protobuf' },
+      body: Buffer.from([0x0a, 0x00]),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('ingests spans and logs encoded by @opentelemetry/otlp-transformer Protobuf serializers', async () => {
+    const spanExporter = new InMemorySpanExporter();
+    const tracerProvider = new TracerProvider({
+      spanProcessors: [new SimpleSpanProcessor({ exporter: spanExporter })],
+    });
+    const tracer = tracerProvider.getTracer('otel-sdk-tracer', '1.2.3');
+
+    const logExporter = new InMemoryLogRecordExporter();
+    const loggerProvider = new LoggerProvider({
+      processors: [new SimpleLogRecordProcessor({ exporter: logExporter })],
+    });
+    const otelLogger = loggerProvider.getLogger('otel-sdk-logger', '1.2.3');
+
+    const rootSpan = tracer.startSpan('root-flow', {
+      kind: SpanKind.SERVER,
+      attributes: {
+        'genkit:name': 'root-flow',
+        'genkit:isRoot': true,
+      },
+    });
+    const rootCtx = trace.setSpan(context.active(), rootSpan);
+
+    const childSpan = tracer.startSpan(
+      'model-call',
+      {
+        kind: SpanKind.CLIENT,
+        attributes: {
+          'gen_ai.request.model': 'gemini-flash-latest',
+          'gen_ai.usage.input_tokens': 42,
+          'gen_ai.response.finish_reasons': ['stop'],
+        },
+      },
+      rootCtx
+    );
+    childSpan.setStatus({
+      code: SpanStatusCode.ERROR,
+      message: 'rate limited',
+    });
+
+    otelLogger.emit({
+      severityNumber: SeverityNumber.INFO,
+      severityText: 'INFO',
+      body: 'inference operation details',
+      attributes: {
+        'gen_ai.system': 'google_genai',
+        'gen_ai.request.temperature': 0.5,
+      },
+      context: trace.setSpan(context.active(), childSpan),
+    });
+
+    const childSpanContext = childSpan.spanContext();
+    const rootSpanContext = rootSpan.spanContext();
+    childSpan.end();
+    rootSpan.end();
+
+    await tracerProvider.forceFlush();
+    await loggerProvider.forceFlush();
+
+    const finishedSpans = spanExporter.getFinishedSpans();
+    expect(finishedSpans).toHaveLength(2);
+    const traceBytes = ProtobufTraceSerializer.serializeRequest(finishedSpans);
+    if (!traceBytes) throw new Error('serializeRequest returned undefined');
+
+    const traceRes = await fetch(`${url}/api/otlp/v1/traces`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-protobuf' },
+      body: Buffer.from(traceBytes),
+    });
+    expect(traceRes.status).toBe(200);
+    expect(traceRes.headers.get('content-type') ?? '').toMatch(
+      /^application\/x-protobuf\b/
+    );
+    const traceResBytes = new Uint8Array(await traceRes.arrayBuffer());
+    expect(ProtobufTraceSerializer.deserializeResponse(traceResBytes)).toEqual(
+      {}
+    );
+
+    const finishedLogs = logExporter.getFinishedLogRecords();
+    expect(finishedLogs).toHaveLength(1);
+    const logBytes = ProtobufLogsSerializer.serializeRequest(finishedLogs);
+    if (!logBytes) throw new Error('serializeRequest returned undefined');
+
+    const logRes = await fetch(`${url}/api/otlp/v1/logs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-protobuf' },
+      body: Buffer.from(logBytes),
+    });
+    expect(logRes.status).toBe(200);
+    expect(logRes.headers.get('content-type') ?? '').toMatch(
+      /^application\/x-protobuf\b/
+    );
+    const logResBytes = new Uint8Array(await logRes.arrayBuffer());
+    expect(ProtobufLogsSerializer.deserializeResponse(logResBytes)).toEqual({});
+
+    const getTraceRes = await fetch(
+      `${url}/api/traces/${rootSpanContext.traceId}`
+    );
+    expect(getTraceRes.status).toBe(200);
+    const savedTrace = await getTraceRes.json();
+    expect(savedTrace.traceId).toBe(rootSpanContext.traceId);
+
+    const savedRoot = savedTrace.spans[rootSpanContext.spanId];
+    expect(savedRoot).toBeTruthy();
+    expect(savedRoot.displayName).toBe('root-flow');
+    expect(savedRoot.spanKind).toBe('SERVER');
+    expect(savedRoot.parentSpanId).toBeUndefined();
+    expect(savedRoot.attributes['genkit:name']).toBe('root-flow');
+    expect(savedRoot.attributes['genkit:isRoot']).toBe(true);
+    expect(savedRoot.instrumentationLibrary).toEqual({
+      name: 'otel-sdk-tracer',
+      version: '1.2.3',
+    });
+
+    const savedChild = savedTrace.spans[childSpanContext.spanId];
+    expect(savedChild).toBeTruthy();
+    expect(savedChild.displayName).toBe('model-call');
+    expect(savedChild.spanKind).toBe('CLIENT');
+    expect(savedChild.parentSpanId).toBe(rootSpanContext.spanId);
+    expect(savedChild.attributes['gen_ai.request.model']).toBe(
+      'gemini-flash-latest'
+    );
+    expect(savedChild.attributes['gen_ai.usage.input_tokens']).toBe(42);
+    expect(savedChild.attributes['gen_ai.response.finish_reasons']).toEqual([
+      'stop',
+    ]);
+    expect(savedChild.status).toEqual({
+      code: 2,
+      message: 'rate limited',
+    });
+
+    const getLogsRes = await fetch(
+      `${url}/api/traces/${rootSpanContext.traceId}/logs`
+    );
+    expect(getLogsRes.status).toBe(200);
+    const { logs } = await getLogsRes.json();
+    expect(logs).toHaveLength(1);
+    expect(logs[0].traceId).toBe(childSpanContext.traceId);
+    expect(logs[0].spanId).toBe(childSpanContext.spanId);
+    expect(logs[0].severityNumber).toBe(SeverityNumber.INFO);
+    expect(logs[0].severityText).toBe('INFO');
+    expect(logs[0].body).toBe('inference operation details');
+    expect(logs[0].attributes['gen_ai.system']).toBe('google_genai');
+    expect(logs[0].attributes['gen_ai.request.temperature']).toBe(0.5);
+    expect(logs[0].instrumentationLibrary).toEqual({
+      name: 'otel-sdk-logger',
+      version: '1.2.3',
+    });
   });
 });
 
