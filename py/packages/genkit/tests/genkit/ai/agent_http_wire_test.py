@@ -242,7 +242,7 @@ async def test_get_snapshot_connection_refused_raises_unavailable() -> None:
         with pytest.raises(GenkitError) as exc:
             await transport.get_snapshot(snapshot_id='snap-1')
     assert exc.value.status == 'UNAVAILABLE'
-    assert isinstance(exc.value.cause, httpx.ConnectError)
+    assert isinstance(exc.value.__cause__, httpx.ConnectError)
 
 
 @pytest.mark.asyncio
@@ -285,7 +285,7 @@ async def test_get_snapshot_server_error_keeps_server_status() -> None:
         with pytest.raises(GenkitError) as exc:
             await transport.get_snapshot(snapshot_id='snap-1')
     assert exc.value.status == 'PERMISSION_DENIED'
-    assert exc.value.cause is None
+    assert exc.value.__cause__ is None
 
 
 @pytest.mark.asyncio

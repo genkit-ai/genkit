@@ -20,10 +20,8 @@ classifiers = [
   "Development Status :: 4 - Beta",
   "Environment :: Console",
   "Environment :: Web Environment",
-  "Framework :: Django",
   "Framework :: AsyncIO",
   "Framework :: Django",
-  "Framework :: Django :: 4.2",
   "Framework :: Django :: 5.0",
   "Framework :: Django :: 5.1",
   "Framework :: Pydantic",
@@ -44,9 +42,9 @@ classifiers = [
   "License :: OSI Approved :: Apache Software License",
 ]
 dependencies = [
-  "genkit",
-  "pydantic>=2.10.5",
-  "django>=4.2",
+  "genkit>=0.13.0,<2",
+  "pydantic>=2.11",
+  "django>=5.0",
 ]
 description = "A Genkit flow as a Django view"
 keywords = [
@@ -58,7 +56,7 @@ license = "Apache-2.0"
 name = "genkit-django"
 readme = "README.md"
 requires-python = ">=3.10"
-version = "0.12.0"
+version = "0.13.0"
 
 [project.urls]
 "Bug Tracker"   = "https://github.com/genkit-ai/genkit/issues"

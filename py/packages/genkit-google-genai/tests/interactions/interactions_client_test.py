@@ -38,8 +38,8 @@ from genkit_google_genai._interactions._options import ClientOptions
 from google.genai.interactions import Interaction
 
 from genkit import GenkitError
-from genkit._core._error import get_callable_json, get_http_status
-from genkit.plugin_api import GENKIT_CLIENT_HEADER
+from genkit.plugin_api import GENKIT_USER_AGENT
+from genkit.web import error_body, error_status
 
 
 def test_google_ai_url_defaults() -> None:
@@ -68,7 +68,7 @@ def test_headers_set_api_revision_and_strip_reserved_custom() -> None:
     built = httpx.Headers(result)
     assert built['Api-Revision'] == API_REVISION
     assert built['x-goog-api-key'] == 'k'
-    assert built['x-goog-api-client'] == GENKIT_CLIENT_HEADER
+    assert built['x-goog-api-client'] == GENKIT_USER_AGENT
     assert built['x-custom'] == '1'
 
 
@@ -207,8 +207,8 @@ async def test_429_retry_after_header_sets_retry_delay(http_client: MagicMock) -
         with pytest.raises(GenkitError) as exc_info:
             await create_interaction('key', {'model': 'lyria'})
     assert exc_info.value.status == 'RESOURCE_EXHAUSTED'
-    assert exc_info.value.response_metadata == {'retry_after_ms': 1500.0}
-    assert isinstance(exc_info.value.cause, httpx.HTTPStatusError)
+    assert exc_info.value.retry_after_ms == 1500.0
+    assert isinstance(exc_info.value.__cause__, httpx.HTTPStatusError)
     assert exc_info.value.details['error'] == {'message': 'slow down'}
 
 
@@ -230,7 +230,7 @@ async def test_timeout_is_deadline_exceeded(http_client: MagicMock) -> None:
         with pytest.raises(GenkitError) as exc_info:
             await create_interaction('key', {'model': 'lyria'}, ClientOptions(timeout=1000))
     assert exc_info.value.status == 'DEADLINE_EXCEEDED'
-    assert exc_info.value.cause is late
+    assert exc_info.value.__cause__ is late
 
 
 @pytest.mark.asyncio
@@ -245,7 +245,7 @@ async def test_connection_refused_is_unavailable(http_client: MagicMock, failure
         with pytest.raises(GenkitError) as exc_info:
             await create_interaction('key', {'model': 'lyria'})
     assert exc_info.value.status == 'UNAVAILABLE'
-    assert exc_info.value.cause is failure
+    assert exc_info.value.__cause__ is failure
 
 
 @pytest.mark.asyncio
@@ -307,7 +307,7 @@ async def test_http_errors_mapped_to_status(
 
 
 @pytest.mark.asyncio
-async def test_error_without_retry_after_has_no_response_metadata(http_client: MagicMock) -> None:
+async def test_error_without_retry_after_has_no_retry_after_ms(http_client: MagicMock) -> None:
     http_client.request.return_value = mock_response(
         status_code=429,
         json_body={'error': {'message': 'slow down'}},
@@ -316,7 +316,7 @@ async def test_error_without_retry_after_has_no_response_metadata(http_client: M
         with pytest.raises(GenkitError) as exc_info:
             await create_interaction('key', {'model': 'lyria'})
     assert exc_info.value.status == 'RESOURCE_EXHAUSTED'
-    assert exc_info.value.response_metadata is None
+    assert exc_info.value.retry_after_ms is None
 
 
 @pytest.mark.asyncio
@@ -332,6 +332,6 @@ async def test_interactions_http_error_is_served_as_internal_error(http_client: 
 
     error = exc_info.value
     assert error.status == 'UNAUTHENTICATED'
-    assert get_callable_json(error) == {'message': 'Internal Error', 'status': 'INTERNAL'}
-    assert get_http_status(error) == 500
-    assert 'API key not valid' not in str(get_callable_json(error))
+    assert error_body(error) == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert error_status(error) == 500
+    assert 'API key not valid' not in str(error_body(error))

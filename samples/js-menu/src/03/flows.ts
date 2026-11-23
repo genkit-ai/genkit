@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-import type { MessageData } from '@genkit-ai/ai/model';
 import { googleAI } from '@genkit-ai/google-genai';
+import type { MessageData } from 'genkit/model';
 import { ai } from '../genkit.js';
 import type { MenuItem } from '../types';
 import {
