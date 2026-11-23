@@ -25,12 +25,12 @@
     "@vitest/eslint-plugin": "^1.6.28",
     "eslint": "^10.14.0",
     "eslint-config-prettier": "^10.1.8",
-    "json-schema": "^0.4.0",
+    "json-schema": "catalog:",
     "only-allow": "^1.2.2",
     "tsx": "^4.23.15",
     "typescript-eslint": "^8.72.1",
-    "zod": "3.25.76",
-    "zod-to-json-schema": "~3.25.2"
+    "zod": "catalog:",
+    "zod-to-json-schema": "catalog:"
   },
   "pnpm": {
     "overrides": {
