@@ -179,10 +179,16 @@ export class GenkitMcpServer {
     for (const action of [...toolList, ...flowList]) {
       const mcpName = mcpToolName(action);
       if (mcpToolNames.has(mcpName)) {
-        throw new GenkitError({
-          status: 'FAILED_PRECONDITION',
-          message: `Multiple actions would be exposed as MCP tool '${mcpName}'.`,
-        });
+        // Flows come after tools, so a collision involving a flow ends on one.
+        if (action.__action.actionType === 'flow') {
+          throw new GenkitError({
+            status: 'FAILED_PRECONDITION',
+            message: `Multiple actions would be exposed as MCP tool '${mcpName}'.`,
+          });
+        }
+        logger.warn(
+          `[MCP Server] Multiple tools would be exposed as MCP tool '${mcpName}'.`
+        );
       }
       mcpToolNames.add(mcpName);
     }
@@ -235,10 +241,7 @@ export class GenkitMcpServer {
    * @returns A Promise resolving to an MCP CallToolResult.
    * @throws GenkitError if the requested tool is not found.
    */
-  async callTool(
-    req: CallToolRequest,
-    extra?: { signal?: AbortSignal }
-  ): Promise<CallToolResult> {
+  async callTool(req: CallToolRequest): Promise<CallToolResult> {
     await this.setup();
     const tool =
       this.mcpTools().find(([name]) => name === req.params.name)?.[1] ??
@@ -259,7 +262,7 @@ export class GenkitMcpServer {
             ? args?.input
             : undefined;
     }
-    const result = await tool(input, { abortSignal: extra?.signal });
+    const result = await tool(input);
     return {
       content: [
         {
@@ -452,29 +455,34 @@ function flowToolSpec(flow: Flow): {
     inputSchema: {
       type: 'object',
       properties: { input: rebaseRefs(inputSchema) as object },
-      // Raw JSON Schema inputs are treated as required.
-      ...(schema?.isOptional() ? {} : { required: ['input'] }),
+      required: ['input'],
     },
     mode: 'wrapped',
   };
 }
 
+const LITERAL_KEYWORDS = new Set(['const', 'enum', 'default', 'examples']);
+
 /**
  * Rewrites root-relative `$ref` pointers (emitted by zod-to-json-schema for
  * reused schemas) so they still resolve once nested under `properties.input`.
+ * Literal values (`const`, `enum`, `default`, `examples`) are left as is.
  */
 function rebaseRefs(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(rebaseRefs);
   if (!value || typeof value !== 'object') return value;
   return Object.fromEntries(
-    Object.entries(value).map(([key, entry]) => [
-      key,
-      key === '$ref' &&
-      typeof entry === 'string' &&
-      (entry === '#' || entry.startsWith('#/'))
-        ? `#/properties/input${entry.slice(1)}`
-        : rebaseRefs(entry),
-    ])
+    Object.entries(value).map(([key, entry]) => {
+      if (LITERAL_KEYWORDS.has(key)) return [key, entry];
+      if (
+        key === '$ref' &&
+        typeof entry === 'string' &&
+        /^#(\/|$)/.test(entry)
+      ) {
+        return [key, `#/properties/input${entry.slice(1)}`];
+      }
+      return [key, rebaseRefs(entry)];
+    })
   );
 }
 

@@ -247,7 +247,10 @@ describe('createMcpServer', async () => {
     });
 
     it('should reject an MCP tool name collision', async () => {
-      ai.defineTool({ name: 'flow_testTool' }, async () => 'collision');
+      ai.defineTool(
+        { name: 'flow_testTool', description: 'collision' },
+        async () => 'collision'
+      );
       const collidingServer = createMcpServer(ai, { name: 'colliding-server' });
       try {
         await assert.rejects(
@@ -257,6 +260,14 @@ describe('createMcpServer', async () => {
       } finally {
         await collidingServer.server?.close();
       }
+    });
+
+    it('should still start when two tools share a short name', async () => {
+      const server = await isolatedServer((ai) => {
+        ai.defineTool({ name: 'a/x', description: 'a' }, async () => 'a');
+        ai.defineTool({ name: 'b/x', description: 'b' }, async () => 'b');
+      });
+      assert.strictEqual(await call(server, 'b/x'), 'b');
     });
 
     async function isolatedServer(define: (ai: GenkitBeta) => void) {
@@ -275,7 +286,7 @@ describe('createMcpServer', async () => {
     async function call(server: GenkitMcpServer, name: string, args?: object) {
       const result = await server.callTool({
         method: 'tools/call',
-        params: { name, arguments: args },
+        params: { name, arguments: args as Record<string, unknown> },
       });
       return (result.content as Array<{ text: string }>)[0].text;
     }
@@ -319,7 +330,7 @@ describe('createMcpServer', async () => {
       assert.strictEqual(await call(server, 'flow_search'), 'limit=none');
     });
 
-    it('should not require input for an optional scalar flow', async () => {
+    it('should require input for an optional scalar flow', async () => {
       const server = await isolatedServer((ai) =>
         ai.defineFlow(
           { name: 'greet', inputSchema: z.string().optional() },
@@ -327,15 +338,14 @@ describe('createMcpServer', async () => {
         )
       );
       const schema = await toolSchema(server, 'flow_greet');
-      assert.strictEqual(schema?.required, undefined);
-      assert.strictEqual(
-        await call(server, 'flow_greet', { input: 'ann' }),
-        'hi ann'
-      );
+      assert.deepStrictEqual(schema?.required, ['input']);
     });
 
     it('should rebase $ref pointers in a wrapped flow input schema', async () => {
-      const part = z.object({ label: z.string() });
+      const part = z.object({
+        label: z.string(),
+        link: z.record(z.string()).default({ $ref: '#/keep' }),
+      });
       const server = await isolatedServer((ai) =>
         ai.defineFlow(
           { name: 'pair', inputSchema: z.tuple([part, part]) },
@@ -343,6 +353,8 @@ describe('createMcpServer', async () => {
         )
       );
       const jsonSchema = (await toolSchema(server, 'flow_pair')) as JSONSchema;
+      const link = jsonSchema.properties.input.items[0].properties.link;
+      assert.deepStrictEqual(link.default, { $ref: '#/keep' });
       const valid = (input: unknown) =>
         validateSchema({ input }, { jsonSchema }).valid;
       assert.strictEqual(valid([{ label: 'a' }, { label: 'b' }]), true);
