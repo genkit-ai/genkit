@@ -83,7 +83,15 @@ const SCHEMA_MAP_KEYWORDS = new Set([
   'dependencies',
 ]);
 
-function hasSchemaResourceMarker(value: unknown): boolean {
+function isDraft4Schema(schema: unknown): boolean {
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
+    return false;
+  }
+  const dialect = (schema as Record<string, unknown>).$schema;
+  return typeof dialect === 'string' && /\/draft-0?4\b/i.test(dialect);
+}
+
+function hasSchemaResourceMarker(value: unknown, isDraft4 = false): boolean {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return false;
   }
@@ -91,7 +99,7 @@ function hasSchemaResourceMarker(value: unknown): boolean {
   return (
     (typeof record.$id === 'string' && record.$id.length > 0) ||
     (typeof record.$schema === 'string' && record.$schema.length > 0) ||
-    (typeof record.id === 'string' && record.id.length > 0)
+    (isDraft4 && typeof record.id === 'string' && record.id.length > 0)
   );
 }
 
@@ -123,9 +131,10 @@ function toGeminiSchemaProperty(
     });
   }
   consumeSchemaBudget(budget);
+  const isDraft4 = isDraft4Schema(root);
   const currentNestedResource =
     nestedResourceReason ??
-    (property !== root && hasSchemaResourceMarker(property)
+    (property !== root && hasSchemaResourceMarker(property, isDraft4)
       ? 'nested'
       : undefined);
   if (property && typeof property === 'object' && '$ref' in property) {
@@ -208,7 +217,7 @@ function toGeminiSchemaProperty(
       if (
         !inSchemaMap &&
         referenced !== root &&
-        hasSchemaResourceMarker(referenced)
+        hasSchemaResourceMarker(referenced, isDraft4)
       ) {
         crossedNestedResource = true;
       }
@@ -260,7 +269,7 @@ function toGeminiSchemaProperty(
     baseSchema.description = property.description;
   }
   if (property.enum) {
-    if (Array.isArray(property.enum)) {
+    if (resolvingRefs.size > 0 && Array.isArray(property.enum)) {
       consumeSchemaBudget(budget, property.enum.length);
     }
     baseSchema.enum = property.enum;
@@ -289,7 +298,7 @@ function toGeminiSchemaProperty(
     });
   }
   if (propertyType === 'object') {
-    if (Array.isArray(property.required)) {
+    if (resolvingRefs.size > 0 && Array.isArray(property.required)) {
       consumeSchemaBudget(budget, property.required.length);
     }
     const nestedProperties: Record<string, Schema> = {};

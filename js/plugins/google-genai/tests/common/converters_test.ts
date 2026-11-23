@@ -1846,6 +1846,28 @@ describe('toGeminiTool', () => {
         message: /Nested tool schema resources cannot be converted/,
       }
     );
+
+    const draft2020 = toGeminiTool({
+      name: 'draft2020_child_id_annotation',
+      description: 'Draft 2020-12 tool with non-resource id keyword',
+      inputSchema: {
+        $schema: 'https://json-schema.org/draft/2020-12/schema',
+        type: 'object',
+        properties: {
+          address: {
+            id: 'address',
+            type: 'object',
+            properties: { street: { $ref: '#/$defs/Street' } },
+          },
+        },
+        $defs: { Street: { type: 'string' } },
+      },
+    });
+    assert.deepStrictEqual(draft2020.parameters?.properties?.address, {
+      type: SchemaType.OBJECT,
+      properties: { street: { type: SchemaType.STRING } },
+      required: undefined,
+    });
   });
 
   it('should reject pointers that cross nested schema resource boundaries', () => {
@@ -2182,6 +2204,22 @@ describe('toGeminiTool', () => {
   });
 
   it('should account for repeated enum values in the schema expansion budget', () => {
+    const inlineLargeEnum = Array.from({ length: 4095 }, (_, i) => `e${i}`);
+    const inlineGot = toGeminiTool({
+      name: 'inline_large_enum',
+      description: 'Tool with a large inline enum and no references',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          code: { type: 'string', enum: inlineLargeEnum },
+        },
+      },
+    });
+    assert.strictEqual(
+      inlineGot.parameters?.properties?.code?.enum?.length,
+      4095
+    );
+
     const smallEnum = toGeminiTool({
       name: 'small_enum_ref',
       description: 'Tool referencing a small enum twice',
