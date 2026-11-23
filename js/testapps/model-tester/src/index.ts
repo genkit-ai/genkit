@@ -20,7 +20,7 @@ import * as clc from 'colorette';
 import { genkit } from 'genkit';
 import { testModels } from 'genkit/testing';
 import { ollama } from 'genkitx-ollama';
-//import { openAI } from 'genkitx-openai';
+//import { openAI } from '@genkit-ai/compat-oai/openai';
 
 export const ai = genkit({
   plugins: [

@@ -40,9 +40,8 @@ export async function transportFrom(
   // Handle SSE config
   if ('url' in config && config.url) {
     const { url, ...httpConfig } = config;
-    const { StreamableHTTPClientTransport } = await import(
-      '@modelcontextprotocol/sdk/client/streamableHttp.js'
-    );
+    const { StreamableHTTPClientTransport } =
+      await import('@modelcontextprotocol/sdk/client/streamableHttp.js');
     return {
       transport: new StreamableHTTPClientTransport(new URL(url), {
         ...httpConfig,
@@ -55,9 +54,8 @@ export async function transportFrom(
   if ('command' in config && config.command) {
     // Create a copy and remove McpServerControls properties
     const stdioConfig = { ...config };
-    const { StdioClientTransport } = await import(
-      '@modelcontextprotocol/sdk/client/stdio.js'
-    );
+    const { StdioClientTransport } =
+      await import('@modelcontextprotocol/sdk/client/stdio.js');
     return {
       transport: new StdioClientTransport(stdioConfig as StdioServerParameters),
       type: 'stdio',

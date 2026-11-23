@@ -72,7 +72,7 @@ export async function collectUserEngagement(
 ) {
   // Collect user feedback, if provided
   if (userEngagement.feedback?.value) {
-    const metadata = {
+    const metadata: Record<string, any> = {
       feedbackValue: userEngagement.feedback.value,
       subtype: 'userFeedback',
     };

@@ -37,9 +37,9 @@ from genkit_amazon_bedrock._image import BedrockImageModel
 from genkit_amazon_bedrock._models import BedrockModel
 from genkit_amazon_bedrock._transport import BedrockTransport
 
-from genkit import ActionRunContext, Document, FinishReason, GenkitError, Message, ModelResponse, Part, Role
+from genkit import Document, FinishReason, GenkitError, Message, ModelResponse, Part, Role
 from genkit.embedder import EmbedRequest
-from genkit.model import ModelRequest, ToolDefinition
+from genkit.model import ModelContext, ModelRequest, ToolDefinition
 
 pytestmark = [
     pytest.mark.asyncio,
@@ -231,9 +231,9 @@ def cacheable_prefix() -> str:
     return 'Answer only from this handbook.\n\n' + '\n\n'.join(articles)
 
 
-def streaming_ctx() -> tuple[ActionRunContext, list]:
+def streaming_ctx() -> tuple[ModelContext, list]:
     chunks: list = []
-    return ActionRunContext(streaming_callback=chunks.append), chunks
+    return ModelContext(streaming_callback=chunks.append), chunks
 
 
 def undocumented_weather_tool() -> ToolDefinition:
@@ -351,7 +351,7 @@ async def test_claude_reasoning_signature_round_trip() -> None:
     # requests reject custom temperature, so none is set.
     config = BedrockConfig(
         max_output_tokens=4096,
-        additional_model_request_fields={'thinking': {'type': 'enabled', 'budget_tokens': 1024}},
+        extra={'thinking': {'type': 'enabled', 'budget_tokens': 1024}},
     )
     request = text_request('What is 17 * 23? Think it through.', config=config)
     response = await model.generate(request)
@@ -378,7 +378,7 @@ async def test_claude_reasoning_signature_round_trip() -> None:
 async def test_claude_thinking_stream() -> None:
     config = BedrockConfig(
         max_output_tokens=4096,
-        additional_model_request_fields={'thinking': {'type': 'enabled', 'budget_tokens': 1024}},
+        extra={'thinking': {'type': 'enabled', 'budget_tokens': 1024}},
     )
     ctx, chunks = streaming_ctx()
     response = await make_model(CLAUDE).generate(text_request('What is 17 * 23? Think it through.', config=config), ctx)

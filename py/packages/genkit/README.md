@@ -27,7 +27,7 @@ from pydantic import BaseModel, Field
 from genkit import Genkit, PublicError
 from genkit_google_genai import GoogleAI
 
-ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
 
 
 class Issue(BaseModel):

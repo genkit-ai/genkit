@@ -22,6 +22,7 @@ import {
   type EmbedderReference,
   type Genkit,
   type ModelReference,
+  type Role,
   type ToolRequest,
   type ToolRequestPart,
   type ToolResponse,
@@ -466,18 +467,18 @@ function toOllamaRequest(
   return request;
 }
 
-function toOllamaRole(role) {
+function toOllamaRole(role: string) {
   if (role === 'model') {
     return 'assistant';
   }
   return role; // everything else seems to match
 }
 
-function toGenkitRole(role) {
+function toGenkitRole(role: string): Role {
   if (role === 'assistant') {
     return 'model';
   }
-  return role; // everything else seems to match
+  return role as Role; // everything else seems to match
 }
 
 function toOllamaTool(tool: ToolDefinition): OllamaTool {
@@ -512,7 +513,7 @@ function toGenkitToolRequest(tool_calls: OllamaToolCall[]): ToolRequestPart[] {
   }));
 }
 
-function readChunks(reader) {
+function readChunks<T>(reader: ReadableStreamDefaultReader<T>) {
   return {
     async *[Symbol.asyncIterator]() {
       let readResult = await reader.read();

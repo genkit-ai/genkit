@@ -33,9 +33,10 @@ from __future__ import annotations
 
 from genkit_google_genai import GoogleAI
 
-from genkit import ActionRunContext, GenkitError, Message, Part
+from genkit import GenkitError, Message, Part
 from genkit.exp import Genkit
 from genkit.exp.agent import (
+    AgentContext,
     AgentFinishReason,
     AgentInput,
     AgentResult,
@@ -49,7 +50,7 @@ ai = Genkit(plugins=[GoogleAI()])
 store = InMemorySessionStore()
 
 
-async def flaky_fn(sess: SessionRunner, _: ActionRunContext) -> AgentResult:
+async def flaky_fn(sess: SessionRunner, _: AgentContext) -> AgentResult:
     async def handle_turn(inp: AgentInput, _: TurnContext) -> TurnResult | None:
         text = ''
         if inp.message:

@@ -10,15 +10,15 @@
     "logs": "firebase functions:log"
   },
   "engines": {
-    "node": "18"
+    "node": "24"
   },
   "main": "lib/index.js",
   "dependencies": {
-    "genkit": "^1.22.0",
-    "@genkit-ai/firebase": "^1.22.0",
-    "@genkit-ai/google-genai": "^1.22.0",
-    "firebase-admin": "^12.2",
-    "firebase-functions": "^6.3.1"
+    "genkit": "^1.43.0",
+    "@genkit-ai/firebase": "^1.43.0",
+    "@genkit-ai/google-genai": "^1.43.0",
+    "firebase-admin": "^13.8.0",
+    "firebase-functions": "^7.4.0"
   },
   "devDependencies": {
     "firebase-functions-test": "^3.1.0",

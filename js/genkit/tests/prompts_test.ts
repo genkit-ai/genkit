@@ -1106,6 +1106,7 @@ describe('prompt', () => {
       .prompt('v1.0/greet', { variant: 'fun' })
       .render({});
 
+    assert.ok(messages);
     assert.strictEqual(messages[0].content[0].text, 'Hello from v1.0', 'text');
 
     const action: PromptAction = await ai.registry.lookupAction(
@@ -1123,6 +1124,7 @@ describe('prompt', () => {
     // partial first, then to the first sub folder partial in walk order.
     const { messages } = await ai.prompt('partials').render({});
 
+    assert.ok(messages);
     assert.strictEqual(
       messages[0].content[0].text,
       'sub system|other system|other system|root greeting|sub greeting',

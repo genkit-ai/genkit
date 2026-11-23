@@ -14,5 +14,5 @@
  * limitations under the License.
  */
 
-export * from './config';
-export * from './plugins';
+export * from './config.js';
+export * from './plugins.js';

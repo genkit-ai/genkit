@@ -23,7 +23,7 @@ Example:
     from genkit import Genkit
     from genkit_google_genai import GoogleAI
 
-    ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
+    ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
 
     @ai.flow()
     async def my_flow(prompt: str) -> str:
@@ -35,37 +35,26 @@ Example:
 """
 
 from genkit._ai._aio import Genkit
-from genkit._ai._formats._types import FormatDef, FormatterConfig
 from genkit._ai._prompt import (
     ModelStreamResponse,
     Prompt,
 )
-from genkit._ai._tools import (
-    MultipartToolResponse,
-    ToolRunContext,
-    tool,
-)
-from genkit._core._action import ActionRunContext, StreamResponse
-from genkit._core._context import ContextProvider, RequestData
-from genkit._core._dap import DynamicActionProvider
-from genkit._core._error import GenkitError, GenkitRuntimeError, Interrupt, PublicError, RuntimeErrorReason
-from genkit._core._logger import get_logger
+from genkit._core._action import FlowContext, StreamResponse
+from genkit._core._error import ErrorReason, Failure, GenkitError, Interrupt, PublicError
+from genkit._core._flow import Flow
+from genkit._core._logger import GenkitLogger, get_logger
 from genkit._core._model import (
     Document,
     Message,
     ModelResponse,
     ModelResponseChunk,
+    MultipartToolResponse,
     Part,
     ToolChoice,
 )
-from genkit._core._tool import Tool
-from genkit._core._typing import (
-    Embedding,
-    FinishReason,
-    Media,
-    Operation,
-    Role,
-)
+from genkit._core._operation import Operation
+from genkit._core._tool import Tool, ToolContext
+from genkit._core._typing import Embedding, FinishReason, Media, Role
 
 __all__ = [
     'Genkit',
@@ -79,7 +68,7 @@ __all__ = [
     # What came back
     'ModelResponse',
     'ModelResponseChunk',
-    'GenkitRuntimeError',
+    'Failure',
     'ModelStreamResponse',
     'StreamResponse',
     'FinishReason',
@@ -87,23 +76,18 @@ __all__ = [
     'Embedding',
     'Operation',
     # Tools and HITL
-    'tool',
     'Tool',
-    'ToolRunContext',
+    'ToolContext',
     'Interrupt',
     'MultipartToolResponse',
     # Flows, prompts, errors
-    'ActionRunContext',
+    'Flow',
+    'FlowContext',
     'Prompt',
     'GenkitError',
     'PublicError',
-    'RuntimeErrorReason',
+    'ErrorReason',
+    # Log lines that reach the Dev UI trace panel
+    'GenkitLogger',
     'get_logger',
-    # HTTP request context for flow handlers
-    'ContextProvider',
-    'RequestData',
-    # Custom output formats and dynamic providers
-    'FormatDef',
-    'FormatterConfig',
-    'DynamicActionProvider',
 ]
