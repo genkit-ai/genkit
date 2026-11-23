@@ -57,6 +57,28 @@ type Endpoint struct {
 	// none: the server answered with a success code, so neither the request
 	// nor the server is known to be at fault.
 	Unwrap func(body []byte) ([]byte, error)
+	// Transport, when set, sends every request in place of the native
+	// HTTP wire, such as on a vendor's SDK; the paths, Route, and Unwrap do
+	// not apply.
+	Transport Transport
+	// MediaResolution reports whether the endpoint takes a media
+	// resolution.
+	MediaResolution bool
+}
+
+// Transport sends one request on a server's own client and reads its
+// answers. A response that names a block is returned with Blocked set and
+// no answers: a refused input is a response, not an error, so the caller
+// can tell it from a broken request.
+type Transport interface {
+	Decide(ctx context.Context, model string, r *Request) (*Response, error)
+}
+
+// Block is why a server refused to answer for the input: a reason code,
+// such as safety, and the server's message, when it sent one.
+type Block struct {
+	Reason  string
+	Message string
 }
 
 // Request is the native request body, before the endpoint's envelope.
@@ -72,6 +94,9 @@ type Request struct {
 	// the request builds itself: model, state, questions, images, audio, or
 	// videos.
 	Extra map[string]any
+	// MediaResolution is the resolution images and video are read at, for
+	// a wire that takes one.
+	MediaResolution string
 }
 
 // Body builds the native JSON body.
@@ -96,11 +121,20 @@ func (r *Request) Body(model string) map[string]any {
 // gateway additions, absent from a model vendor's own responses.
 type Response struct {
 	Info
-	Usage struct {
-		InputTokens  int      `json:"input_tokens"`
-		OutputTokens int      `json:"output_tokens"`
-		Cost         *float64 `json:"cost,omitempty"`
-	} `json:"usage"`
+	Usage Usage `json:"usage"`
+	// Blocked is set, and the answers absent, when the server refused to
+	// answer for the input.
+	Blocked *Block `json:"-"`
+}
+
+// Usage is what a response reports it used.
+type Usage struct {
+	InputTokens  int      `json:"input_tokens"`
+	OutputTokens int      `json:"output_tokens"`
+	Cost         *float64 `json:"cost,omitempty"`
+	// InputByModality is the input tokens per modality, such as image,
+	// for a server that reports them.
+	InputByModality map[string]int `json:"-"`
 }
 
 // ModelInfo is one entry of the models listing. A listing names a model
@@ -148,6 +182,9 @@ const RequestTimeout = 30 * time.Second
 
 // Decide posts one request and decodes the answers.
 func (c *Client) Decide(ctx context.Context, model string, req *Request) (*Response, error) {
+	if t := c.Endpoint.Transport; t != nil {
+		return t.Decide(ctx, model, req)
+	}
 	var suffix string
 	native := req.Body(model)
 	var body any = native

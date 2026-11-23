@@ -61,8 +61,19 @@ func TestMedia(t *testing.T) {
 		Audio:  []string{wav},
 		Videos: []string{mp4},
 	}
-	if !reflect.DeepEqual(media, want) {
-		t.Errorf("media = %+v, want %+v", media, want)
+	if got := (Media{Images: media.Images, Audio: media.Audio, Videos: media.Videos}); !reflect.DeepEqual(got, want) {
+		t.Errorf("media = %+v, want %+v", got, want)
+	}
+	// Parts keeps the order across kinds, for a wire of typed blocks.
+	wantParts := []MediaPart{
+		{Kind: MediaImage, ContentType: "image/png", Data: "iVBORw0KGgo="},
+		{Kind: MediaAudio, ContentType: "audio/wav", Data: "UklGRg=="},
+		{Kind: MediaImage, ContentType: "image/jpeg", Data: "/9j/4AAQ"},
+		{Kind: MediaVideo, ContentType: "video/mp4", Data: "AAAAIGZ0eXA="},
+		{Kind: MediaImage, ContentType: "image/webp", Data: "UklGRg=="},
+	}
+	if !reflect.DeepEqual(media.Parts, wantParts) {
+		t.Errorf("parts = %+v, want %+v", media.Parts, wantParts)
 	}
 	wantState := map[string]any{
 		"messages": []map[string]any{
@@ -129,6 +140,27 @@ func TestNoStateRefused(t *testing.T) {
 	}
 }
 
+func TestDocumentsAndURLs(t *testing.T) {
+	// A model that reads documents and URLs takes a PDF and a fetched
+	// image as parts, and neither as a native field.
+	req := &ai.ModelRequest{Messages: []*ai.Message{ai.NewUserMessage(
+		ai.NewTextPart("The contract and the signature."),
+		ai.NewMediaPart("application/pdf", "data:application/pdf;base64,JVBERi0="),
+		ai.NewMediaPart("Image/PNG", "https://example.com/sig.png"),
+	)}}
+	_, media, err := BuildState(req, false, Reads{Images: true, Documents: true, URLs: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []MediaPart{
+		{Kind: MediaDocument, ContentType: "application/pdf", Data: "JVBERi0="},
+		{Kind: MediaImage, ContentType: "image/png", URI: "https://example.com/sig.png"},
+	}
+	if !reflect.DeepEqual(media.Parts, want) || len(media.Images) != 0 {
+		t.Errorf("media = %+v, want parts %+v and no native images", media, want)
+	}
+}
+
 func TestMediaRefused(t *testing.T) {
 	images := Reads{Images: true}
 	for _, tt := range []struct {
@@ -143,6 +175,10 @@ func TestMediaRefused(t *testing.T) {
 		{"remote URL", ai.NewMediaPart("image/png", "https://example.com/cat.png"), images, "DownloadRequestMedia"},
 		{"upper-case remote URL", ai.NewMediaPart("image/png", "HTTPS://example.com/cat.png"), images, "DownloadRequestMedia"},
 		{"not an image, audio, or video", ai.NewMediaPart("application/pdf", "data:application/pdf;base64,JVBERi0="), Reads{Images: true, Audio: true, Video: true}, "not an image, audio, or video"},
+		{"not a PDF", ai.NewMediaPart("text/csv", "data:text/csv;base64,YQ=="), Reads{Documents: true}, "not an image, audio, video, or PDF"},
+		{"plain HTTP to a URL reader", ai.NewMediaPart("image/png", "http://example.com/cat.png"), Reads{Images: true, URLs: true}, "not an HTTPS URL"},
+		{"Cloud Storage to a URL reader", ai.NewMediaPart("image/png", "gs://bucket/cat.png"), Reads{Images: true, URLs: true}, "not an HTTPS URL"},
+		{"URL without a content type", ai.NewMediaPart("", "https://example.com/cat.png"), Reads{Images: true, URLs: true}, "no content type"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			_, _, err := BuildState(&ai.ModelRequest{Messages: []*ai.Message{ai.NewUserMessage(ai.NewTextPart("hi"), tt.part)}}, false, tt.reads)

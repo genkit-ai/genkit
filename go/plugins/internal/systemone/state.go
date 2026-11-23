@@ -55,21 +55,46 @@ func SystemPreamble(messages []*ai.Message) (string, error) {
 	return strings.Join(texts, "\n\n"), nil
 }
 
-// Reads says which kinds of media a model reads besides text and JSON.
+// Reads says which kinds of media a model reads besides text and JSON,
+// and whether it takes media by URL.
 type Reads struct {
 	Images, Audio, Video bool
+	// Documents is PDF files, which only a transport carries.
+	Documents bool
+	// URLs takes media given as an HTTPS URL, which the server fetches,
+	// rather than refusing it. Only a transport carries one.
+	URLs bool
 }
 
 // Media is the media a request carries, as base64 data URLs by kind, each
 // in the order its parts appear, messages first and documents after.
 // Media is an extension some servers make to the protocol, in the images,
-// audio, and videos fields.
+// audio, and videos fields. Parts is every media part in that order, of
+// every kind, which a transport sends as typed blocks.
 type Media struct {
 	Images, Audio, Videos []string
+	Parts                 []MediaPart
+}
+
+// The kinds of media, as the Gemini API names its content blocks.
+const (
+	MediaImage    = "image"
+	MediaAudio    = "audio"
+	MediaVideo    = "video"
+	MediaDocument = "document"
+)
+
+// MediaPart is one media part: its kind, its media type, and either its
+// base64 content or the URL the server fetches it from.
+type MediaPart struct {
+	Kind        string
+	ContentType string
+	Data        string
+	URI         string
 }
 
 // len is how many media parts there are, of every kind.
-func (m Media) len() int { return len(m.Images) + len(m.Audio) + len(m.Videos) }
+func (m Media) len() int { return len(m.Parts) }
 
 // BuildState turns the request into the state and the media: one message
 // as its value, several as {role, content} records, and with documents
@@ -187,27 +212,89 @@ func (b *stateBuilder) partValue(part *ai.Part, stateJSON bool) (any, error) {
 // collect adds a media part to the request's media, or refuses it when the
 // model does not read its kind.
 func (b *stateBuilder) collect(part *ai.Part) error {
-	dataURL, contentType, err := mediaURL(part)
+	media, err := b.mediaPart(part)
 	if err != nil {
 		return err
 	}
 	var reads bool
-	var media *[]string
-	switch {
-	case ai.IsImageContentType(contentType):
-		reads, media = b.reads.Images, &b.media.Images
-	case ai.IsAudioContentType(contentType):
-		reads, media = b.reads.Audio, &b.media.Audio
-	case ai.IsVideoContentType(contentType):
-		reads, media = b.reads.Video, &b.media.Videos
-	default:
-		return status.Errorf(status.ErrInvalidArgument, "systemone: a %s part is not an image, audio, or video; the models take no other media", cmp.Or(contentType, "media"))
+	var urls *[]string
+	switch media.Kind {
+	case MediaImage:
+		reads, urls = b.reads.Images, &b.media.Images
+	case MediaAudio:
+		reads, urls = b.reads.Audio, &b.media.Audio
+	case MediaVideo:
+		reads, urls = b.reads.Video, &b.media.Videos
+	case MediaDocument:
+		reads = b.reads.Documents
 	}
 	if !reads {
-		return status.Errorf(status.ErrInvalidArgument, "systemone: the model reads no %s media", contentType)
+		return status.Errorf(status.ErrInvalidArgument, "systemone: the model reads no %s media", media.ContentType)
 	}
-	*media = append(*media, dataURL)
+	if urls != nil && media.Data != "" {
+		*urls = append(*urls, "data:"+media.ContentType+";base64,"+media.Data)
+	}
+	b.media.Parts = append(b.media.Parts, media)
 	return nil
+}
+
+// mediaPart reads a media part: its kind, its media type, and its content
+// or URL. A PDF is a document only for a model that reads documents, so
+// the error for any other model names the kinds it can take.
+func (b *stateBuilder) mediaPart(part *ai.Part) (MediaPart, error) {
+	var media MediaPart
+	var err error
+	if remote(part.Text) && b.reads.URLs {
+		media, err = mediaURI(part)
+	} else {
+		var dataURL string
+		dataURL, media.ContentType, err = mediaURL(part)
+		_, media.Data, _ = strings.Cut(dataURL, ";base64,")
+	}
+	if err != nil {
+		return MediaPart{}, err
+	}
+	switch ct := media.ContentType; {
+	case ai.IsImageContentType(ct):
+		media.Kind = MediaImage
+	case ai.IsAudioContentType(ct):
+		media.Kind = MediaAudio
+	case ai.IsVideoContentType(ct):
+		media.Kind = MediaVideo
+	case ct == "application/pdf" && b.reads.Documents:
+		media.Kind = MediaDocument
+	case b.reads.Documents:
+		return MediaPart{}, status.Errorf(status.ErrInvalidArgument, "systemone: a %s part is not an image, audio, video, or PDF; the model takes no other media", cmp.Or(ct, "media"))
+	default:
+		return MediaPart{}, status.Errorf(status.ErrInvalidArgument, "systemone: a %s part is not an image, audio, or video; the models take no other media", cmp.Or(ct, "media"))
+	}
+	return media, nil
+}
+
+// remote reports whether a media part's content is a URL rather than a
+// data URL.
+func remote(text string) bool {
+	scheme, _, _ := strings.Cut(text, ":")
+	switch strings.ToLower(scheme) {
+	case "http", "https", "gs":
+		return true
+	}
+	return false
+}
+
+// mediaURI reads a media part given by URL, for a server that fetches it.
+// Only HTTPS is taken, which covers the Gemini Files API and public or
+// signed URLs; the media type must be on the part, since the server is
+// told it rather than reading it off the response.
+func mediaURI(part *ai.Part) (MediaPart, error) {
+	u, err := url.Parse(part.Text)
+	if err != nil || !strings.EqualFold(u.Scheme, "https") || u.Host == "" {
+		return MediaPart{}, status.Errorf(status.ErrInvalidArgument, "systemone: the media %q is not an HTTPS URL; the server fetches HTTPS URLs and Files API URIs only, so download any other first, for example with the ai.DownloadRequestMedia middleware", part.Text)
+	}
+	if part.ContentType == "" {
+		return MediaPart{}, status.Errorf(status.ErrInvalidArgument, "systemone: the media %q has no content type; a media part given by URL needs one, as ai.NewMediaPart takes", part.Text)
+	}
+	return MediaPart{ContentType: strings.ToLower(part.ContentType), URI: part.Text}, nil
 }
 
 // documentValue is a document's contribution to the context: its content,

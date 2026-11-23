@@ -55,7 +55,7 @@ func WorkersAI(accountID string) *SystemOne {
 		},
 		preset: preset{
 			label:      "Workers AI",
-			apiKeyEnv:  "CLOUDFLARE_API_TOKEN",
+			apiKeyEnvs: []string{"CLOUDFLARE_API_TOKEN"},
 			baseURL:    "https://api.cloudflare.com/client/v4/accounts/{account}",
 			account:    accountID,
 			accountEnv: "CLOUDFLARE_ACCOUNT_ID",
