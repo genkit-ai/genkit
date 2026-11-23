@@ -19,7 +19,9 @@ import { FormsModule } from '@angular/forms';
 import { MatButtonModule } from '@angular/material/button';
 import { streamFlow } from 'genkit/beta/client';
 
-const url = 'http://127.0.0.1:3400/streamCharacters';
+// This sample uses an Angular dev-server proxy to connect to the flow
+// see the config in genkit-app/proxy.conf.json
+const url = '/streamCharacters';
 
 @Component({
   selector: 'app-streaming-json',

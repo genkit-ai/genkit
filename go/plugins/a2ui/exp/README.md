@@ -21,10 +21,11 @@ renders incrementally.
 ## Design principle: one representation
 
 A2UI rides on its own part channel: a Genkit **data part** carrying the mime type
-`application/a2ui+json` whose `data` is an object `{ "envelopes": [...] }`
-wrapping an array of A2UI envelope messages. This maps 1:1 onto the A2A binding
-of the A2UI spec, so the same envelopes are byte-compatible with the JS plugin
-and the `@a2ui/*` renderers.
+`application/a2ui+json` whose `data` is the spec's `{ "messages": [...] }`
+payload wrapper around an array of A2UI envelope messages. This maps 1:1 onto
+the A2A binding of the A2UI spec, so the same envelopes are byte-compatible with
+the JS and Dart plugins and the `@a2ui/*` renderers. Parts written by earlier
+versions use `{ "envelopes": [...] }`; they are still read.
 
 ## Usage
 

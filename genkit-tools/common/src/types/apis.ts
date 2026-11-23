@@ -20,15 +20,15 @@ import {
   DatasetTypeSchema,
   EvalRunKeySchema,
   InferenceDatasetSchema,
-} from './eval';
-import { LogRecordSchema } from './log';
-import { MiddlewareRefSchema } from './middleware';
+} from './eval.js';
+import { LogRecordSchema } from './log.js';
+import { MiddlewareRefSchema } from './middleware.js';
 import {
   GenerationCommonConfigSchema,
   MessageSchema,
   ToolDefinitionSchema,
-} from './model';
-import { TraceDataSchema } from './trace';
+} from './model.js';
+import { TraceDataSchema } from './trace.js';
 
 /**
  * This file contains API schemas that are shared between Tools API and Reflection API.

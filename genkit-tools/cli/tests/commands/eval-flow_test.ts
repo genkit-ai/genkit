@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-import { describe, expect, it } from '@jest/globals';
-import { evalFlow } from '../../src/commands/eval-flow';
+import { describe, expect, it } from 'vitest';
+import { evalFlow } from '../../src/commands/eval-flow.js';
 
 describe('eval:flow', () => {
   const command = evalFlow.exitOverride().configureOutput({
@@ -26,7 +26,7 @@ describe('eval:flow', () => {
   it("fails if flow isn't passed", () => {
     expect(() => {
       command.parse(['node', 'eval:flow']);
-    }).toThrowError(new Error("error: missing required argument 'flowName'"));
+    }).toThrowError("error: missing required argument 'flowName'");
   });
 
   it('fails if invalid output-format is passed', () => {

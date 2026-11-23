@@ -14,11 +14,10 @@
  * limitations under the License.
  */
 
-import type { SpanData, TraceData } from '../../src/types/trace';
+import type { SpanData, TraceData } from '../../src/types/trace.js';
 
 export const TRACE_ID = '7c273c22b219d077c6731a10d46b7d40';
 export const BASE_FLOW_SPAN_ID = '22b219d077c67';
-export const WRAPPER_ACTION_SPAN_ID = 'eec307f9311c5617';
 
 /** Helper class to manage traces in tests */
 export class MockTrace {
@@ -31,47 +30,10 @@ export class MockTrace {
       'genkit:type': 'flow',
       'genkit:name': 'multiSteps',
       'genkit:isRoot': true,
-      'genkit:path': '/dev-run-action-wrapper/multiSteps/multiSteps',
-      'genkit:metadata:flow:execution': '0',
+      'genkit:path': '/multiSteps',
       'genkit:metadata:flow:name': 'multiSteps',
-      'genkit:metadata:flow:id': 'c68dd3b2-6bb4-44ef-907d-cef5720d6b6b',
-      'genkit:metadata:flow:dispatchType': 'start',
-      'genkit:metadata:flow:state': 'done',
       'genkit:input': '"Douglas Adams"',
       'genkit:output': '42',
-      'genkit:state': 'success',
-    },
-    displayName: 'multiSteps',
-    links: [],
-    instrumentationLibrary: {
-      name: 'genkit-tracer',
-      version: 'v1',
-    },
-    spanKind: 'INTERNAL',
-    sameProcessAsParentSpan: {
-      value: true,
-    },
-    status: {
-      code: 0,
-    },
-    timeEvents: {
-      timeEvent: [],
-    },
-  };
-  private WRAPPER_ACTION_SPAN: SpanData = {
-    spanId: WRAPPER_ACTION_SPAN_ID,
-    traceId: '7c273c22b219d077c6731a10d46b7d40',
-    parentSpanId: BASE_FLOW_SPAN_ID,
-    startTime: 1714059149480,
-    endTime: 1714059149485.578,
-    attributes: {
-      'genkit:type': 'action',
-      'genkit:name': 'multiSteps',
-      'genkit:path': '/dev-run-action-wrapper/multiSteps',
-      'genkit:input': '{"start":{"input":"Douglas Adams"}}',
-      'genkit:metadata:flow:wrapperAction': 'true',
-      'genkit:output':
-        '{"flowId":"c68dd3b2-6bb4-44ef-907d-cef5720d6b6b","name":"multiSteps","startTime":1714059149480,"input":"Douglas Adams","cache":{"step1":{"value":"Hello, Douglas Adams! step 1"},"step2":{"value":"Hello, Douglas Adams! step 1 Faf "},"step3-array":{"value":["Hello, Douglas Adams! step 1 Faf ","Hello, Douglas Adams! step 1 Faf "]},"step4-num":{"value":"Hello, Douglas Adams! step 1 Faf -()-Hello, Douglas Adams! step 1 Faf "}},"eventsTriggered":{},"blockedOnStep":null,"executions":[{"startTime":1714059149481,"traceIds":["7c273c22b219d077c6731a10d46b7d40"]}],"operation":{"name":"c68dd3b2-6bb4-44ef-907d-cef5720d6b6b","done":true,"result":{"response":42}},"traceContext":"{\\"traceId\\":\\"7c273c22b219d077c6731a10d46b7d40\\",\\"spanId\\":\\"30506fdf0beccc15\\",\\"traceFlags\\":1}"}',
       'genkit:state': 'success',
     },
     displayName: 'multiSteps',
@@ -95,7 +57,7 @@ export class MockTrace {
   private BASE_SPAN: SpanData = {
     spanId: 'dfe3b782071ea308',
     traceId: '7c273c22b219d077c6731a10d46b7d40',
-    parentSpanId: WRAPPER_ACTION_SPAN_ID,
+    parentSpanId: BASE_FLOW_SPAN_ID,
     startTime: 1714059149481,
     endTime: 1714059149481.1533,
     attributes: {},
@@ -119,40 +81,10 @@ export class MockTrace {
 
   private BASE_MOCK_TRACE: TraceData = {
     traceId: '7c273c22b219d077c6731a10d46b7d40',
-    displayName: 'dev-run-action-wrapper',
+    displayName: 'multiSteps',
     startTime: 1714059149480,
     endTime: 1714059149486.6926,
-    spans: {
-      '30506fdf0beccc15': {
-        spanId: '30506fdf0beccc15',
-        traceId: '7c273c22b219d077c6731a10d46b7d40',
-        startTime: 1714059149480,
-        endTime: 1714059149486.6926,
-        attributes: {
-          'genkit:name': 'dev-run-action-wrapper',
-          'genkit:isRoot': true,
-          'genkit:path': '/dev-run-action-wrapper',
-          'genkit:metadata:genkit-dev-internal': 'true',
-          'genkit:state': 'success',
-        },
-        displayName: 'dev-run-action-wrapper',
-        links: [],
-        instrumentationLibrary: {
-          name: 'genkit-tracer',
-          version: 'v1',
-        },
-        spanKind: 'INTERNAL',
-        sameProcessAsParentSpan: {
-          value: true,
-        },
-        status: {
-          code: 0,
-        },
-        timeEvents: {
-          timeEvent: [],
-        },
-      },
-    },
+    spans: {},
   };
 
   private trace: TraceData;
@@ -178,32 +110,38 @@ export class MockTrace {
     const flowOutput = output ?? 42;
 
     if (spanType === 'flowStep') {
-      const flowStep = { ...this.BASE_SPAN };
-      flowStep.displayName = stepName;
-      flowStep.attributes = {
-        'genkit:type': 'flowStep',
-        'genkit:name': stepName,
-        'genkit:path': `/dev-run-action-wrapper/multiSteps/multiSteps/${stepName}`,
-        'genkit:metadata:flow:stepType': 'run',
-        'genkit:metadata:flow:stepName': stepName,
-        'genkit:metadata:flow:resolvedStepName': stepName,
-        'genkit:metadata:flow:state': 'run',
-        'genkit:input': JSON.stringify(flowInput),
-        'genkit:output': JSON.stringify(flowOutput),
-        'genkit:state': 'success',
+      const flowStep = {
+        ...this.BASE_SPAN,
+        spanId: `flowStep-${stepName}`,
+        displayName: stepName,
+        attributes: {
+          'genkit:type': 'flowStep',
+          'genkit:name': stepName,
+          'genkit:path': `/multiSteps/${stepName}`,
+          'genkit:metadata:flow:stepType': 'run',
+          'genkit:metadata:flow:stepName': stepName,
+          'genkit:metadata:flow:resolvedStepName': stepName,
+          'genkit:metadata:flow:state': 'run',
+          'genkit:input': JSON.stringify(flowInput),
+          'genkit:output': JSON.stringify(flowOutput),
+          'genkit:state': 'success',
+        },
       };
-      this.trace.spans[`flowStep-${stepName}`] = flowStep;
+      this.trace.spans[flowStep.spanId] = flowStep;
     } else {
       // spanType === "action"
-      const actionStep = { ...this.BASE_SPAN };
-      actionStep.displayName = stepName;
-      actionStep.attributes = {
-        'genkit:type': 'action',
-        'genkit:name': `${stepName}`,
-        'genkit:path': `/dev-run-action-wrapper/multiSteps/multiSteps/${stepName}`,
-        'genkit:input': JSON.stringify(flowInput),
-        'genkit:output': JSON.stringify(flowOutput),
-        'genkit:state': 'success',
+      const actionStep = {
+        ...this.BASE_SPAN,
+        spanId: `action-${stepName}`,
+        displayName: stepName,
+        attributes: {
+          'genkit:type': 'action',
+          'genkit:name': `${stepName}`,
+          'genkit:path': `/multiSteps/${stepName}`,
+          'genkit:input': JSON.stringify(flowInput),
+          'genkit:output': JSON.stringify(flowOutput),
+          'genkit:state': 'success',
+        } as Record<string, unknown>,
       };
       if (!!retrieverConfig) {
         const retrieverInput = {
@@ -220,7 +158,7 @@ export class MockTrace {
         actionStep.attributes['genkit:output'] =
           JSON.stringify(retrieverResponse);
       }
-      this.trace.spans[`action-${stepName}`] = actionStep;
+      this.trace.spans[actionStep.spanId] = actionStep;
     }
     return this;
   }
@@ -232,45 +170,75 @@ export class MockTrace {
   ) {
     const flowInput = traceInput ?? 'Douglas Adams';
     const flowOutput = traceOutput ?? 42;
-    const baseFlowSpan = { ...this.BASE_FLOW_SPAN };
-    baseFlowSpan.attributes['genkit:input'] = JSON.stringify(flowInput);
-    baseFlowSpan.attributes['genkit:output'] = JSON.stringify(flowOutput);
-
-    const wrapperActionSpan = { ...this.WRAPPER_ACTION_SPAN };
-    wrapperActionSpan.attributes['genkit:input'] = JSON.stringify({
-      start: { input: flowInput },
-    });
-    wrapperActionSpan.attributes['genkit:output'] = JSON.stringify({
-      flowId: 'c68dd3b2-6bb4-44ef-907d-cef5720d6b6b',
-      name: 'multiSteps',
-      startTime: 1714059149480,
-      input: JSON.stringify(flowInput),
-      eventsTriggered: {},
-      blockedOnStep: null,
-      executions: [
-        {
-          startTime: 1714059149481,
-          traceIds: ['7c273c22b219d077c6731a10d46b7d40'],
-        },
-      ],
-      operation: {
-        name: 'c68dd3b2-6bb4-44ef-907d-cef5720d6b6b',
-        done: true,
-        result: {
-          response: JSON.stringify(flowOutput),
-        },
+    const baseFlowSpan = {
+      ...this.BASE_FLOW_SPAN,
+      status: {
+        code: baseFlowState === 'error' ? 2 : 0,
       },
-      traceContext: JSON.stringify({
-        traceId: '7c273c22b219d077c6731a10d46b7d40',
-        spanId: '30506fdf0beccc15',
-        traceFlags: 1,
-      }),
-    });
+      attributes: {
+        ...this.BASE_FLOW_SPAN.attributes,
+        'genkit:input': JSON.stringify(flowInput),
+        'genkit:output': JSON.stringify(flowOutput),
+        'genkit:state': baseFlowState === 'error' ? 'error' : 'success',
+      },
+    };
 
-    this.trace = { ...this.BASE_MOCK_TRACE };
-    this.trace.spans['baseFlowSpan'] = baseFlowSpan;
-    this.trace.spans['wrapperActionSpan'] = wrapperActionSpan;
+    this.trace = {
+      ...this.BASE_MOCK_TRACE,
+      spans: { [baseFlowSpan.spanId]: baseFlowSpan },
+    };
 
     return this;
   }
+}
+
+/** Builds a minimal valid SpanData for unit tests with optional field overrides. */
+export function makeSpan(overrides: Partial<SpanData> = {}): SpanData {
+  const spanId = overrides.spanId ?? 'span-1';
+  return {
+    traceId: 'trace-1',
+    spanId,
+    startTime: 100,
+    endTime: 200,
+    attributes: {},
+    instrumentationLibrary: { name: 'genkit-tracer', version: 'v1' },
+    spanKind: 'INTERNAL',
+    status: { code: 0 },
+    ...overrides,
+    displayName: overrides.displayName ?? spanId,
+  };
+}
+
+/**
+ * Builds a TraceData record auto-keyed by each span's `spanId`.
+ * Infers `startTime` and `endTime` bounds from `spans` when not explicitly overridden.
+ */
+export function makeTrace(
+  spans: SpanData[],
+  overrides: Partial<TraceData> = {}
+): TraceData {
+  const traceId = overrides.traceId ?? spans[0]?.traceId ?? 'trace-1';
+  const keyedSpans: Record<string, SpanData> = {};
+  let minStart = Number.POSITIVE_INFINITY;
+  let maxEnd = 0;
+
+  for (const span of spans) {
+    keyedSpans[span.spanId] = overrides.traceId
+      ? { ...span, traceId }
+      : { ...span };
+    if (span.startTime < minStart) minStart = span.startTime;
+    if (span.endTime > maxEnd) maxEnd = span.endTime;
+  }
+
+  return {
+    traceId,
+    ...(spans.length > 0
+      ? {
+          startTime: Number.isFinite(minStart) ? minStart : 0,
+          endTime: maxEnd,
+        }
+      : {}),
+    ...overrides,
+    spans: overrides.spans ? { ...keyedSpans, ...overrides.spans } : keyedSpans,
+  };
 }

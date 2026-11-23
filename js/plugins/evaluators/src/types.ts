@@ -72,10 +72,7 @@ export interface AnswerRelevancyGenkitMetricConfig<
   embedder: EmbedderReference<EmbedderCustomOptions>;
   embedderOptions?: z.infer<EmbedderCustomOptions>;
 }
-export type GenkitMetricConfig<
-  M extends z.ZodTypeAny,
-  E extends z.ZodTypeAny,
-> =
+export type GenkitMetricConfig<M extends z.ZodTypeAny, E extends z.ZodTypeAny> =
   | GenkitMetric
   | FaithfulnessGenkitMetricConfig<M>
   | MaliciousnessGenkitMetricConfig<M>

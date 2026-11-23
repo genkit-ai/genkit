@@ -25,17 +25,17 @@ from collections.abc import Callable
 
 import pytest
 
-from genkit import ActionRunContext, Genkit, GenkitError, Message, ModelResponse, Operation, Part, Role
-from genkit.embedder import EmbedRequest, EmbedResponse, embedder
-from genkit.model import ModelRequest, background_model, model
-from genkit.plugin_api import Action, ActionKind, ActionMetadata, Plugin
+from genkit import Genkit, GenkitError, Message, ModelResponse, Operation, Part, Role
+from genkit.embedder import Embedder, EmbedRequest, EmbedResponse
+from genkit.model import BackgroundModel, Model, ModelContext, ModelRequest
+from genkit.plugin_api import Action, ActionKind, Plugin
 
 
 def _answering_model(name: str, text: str) -> Action:
-    async def fn(request: ModelRequest) -> ModelResponse:
+    async def fn(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text(text)]))
 
-    return model(name, fn)
+    return Model(name, fn)
 
 
 class RecordingPlugin(Plugin):
@@ -64,7 +64,7 @@ class RecordingPlugin(Plugin):
             return None
         return _answering_model(self.build(name), f'resolved {name}')
 
-    async def list_actions(self) -> list[ActionMetadata]:
+    async def list_actions(self) -> list[Action]:
         return []
 
 
@@ -76,17 +76,17 @@ class VideoPlugin(Plugin):
     def __init__(self) -> None:
         self.seen: list[tuple[ActionKind, str]] = []
 
-    def _video(self, model_id: str):  # noqa: ANN202
-        async def start(request: ModelRequest, ctx: ActionRunContext) -> Operation:
+    def _video(self, model_id: str) -> BackgroundModel:
+        async def start(request: ModelRequest, ctx: ModelContext) -> Operation:
             return Operation(id='job-1', done=False)
 
-        async def check(op: Operation, ctx: ActionRunContext) -> Operation:
+        async def check(op: Operation, ctx: ModelContext) -> Operation:
             return Operation(id=op.id, done=True)
 
-        async def cancel(op: Operation, ctx: ActionRunContext) -> Operation:
+        async def cancel(op: Operation, ctx: ModelContext) -> Operation:
             return Operation(id=op.id, done=True, metadata={'cancelled': True})
 
-        return background_model(model_id, start=start, check=check, cancel=cancel)
+        return BackgroundModel(model_id, start=start, check=check, cancel=cancel)
 
     async def init(self) -> list[Action]:
         return []
@@ -101,7 +101,7 @@ class VideoPlugin(Plugin):
             return self._video('veo-x').cancel_action
         return None
 
-    async def list_actions(self) -> list[ActionMetadata]:
+    async def list_actions(self) -> list[Action]:
         return []
 
 
@@ -247,19 +247,10 @@ async def test_plugin_init_slash_names_keep_full_path() -> None:
 
 
 @pytest.mark.asyncio
-async def test_plugin_model_helper_returns_action_named_with_plugin_prefix() -> None:
-    """`await plugin.model('fast-model')` is named `myplug/fast-model`."""
-    plugin = RecordingPlugin(serves={'fast-model'})
-
-    action = await plugin.model('fast-model')
-
-    assert action is not None
-    assert action.name == 'myplug/fast-model'
-
-
-@pytest.mark.asyncio
-async def test_plugin_embedder_helper_returns_action_named_with_plugin_prefix() -> None:
-    """`await plugin.embedder('embed-1')` is named `myplug/embed-1`."""
+async def test_embed_plugin_resolve_strips_one_plugin_prefix_and_names_action() -> None:
+    """`ai.embed` strips one leading `{plugin.name}/` before `resolve` and registers under `{plugin.name}/{rest}`."""
+    seen: list[tuple[ActionKind, str]] = []
+    created: list[Embedder] = []
 
     class EmbedPlugin(Plugin):
         name = 'myplug'
@@ -268,44 +259,32 @@ async def test_plugin_embedder_helper_returns_action_named_with_plugin_prefix() 
             return []
 
         async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
-            if action_type != ActionKind.EMBEDDER or name != 'embed-1':
+            seen.append((action_type, name))
+            if action_type != ActionKind.EMBEDDER or name not in {'embed-1', 'myplug/embed-1'}:
                 return None
 
             async def fn(request: EmbedRequest) -> EmbedResponse:
                 return EmbedResponse(embeddings=[])
 
-            return embedder(name, fn)
+            embedder = Embedder(name, fn)
+            created.append(embedder)
+            return embedder
 
-        async def list_actions(self) -> list[ActionMetadata]:
+        async def list_actions(self) -> list[Action]:
             return []
 
-    action = await EmbedPlugin().embedder('embed-1')
+    ai = Genkit(plugins=[EmbedPlugin()])
+    await ai.embed(embedder='myplug/embed-1', content='hi')
+    await ai.embed(embedder='myplug/myplug/embed-1', content='hi')
 
-    assert action is not None
-    assert action.name == 'myplug/embed-1'
-
-
-@pytest.mark.asyncio
-async def test_plugin_model_helper_passes_bare_id() -> None:
-    """`await plugin.model('myplug/fast-model')` calls `resolve` with `fast-model`."""
-    plugin = RecordingPlugin(serves={'fast-model'})
-
-    with_prefix = await plugin.model('myplug/fast-model')
-    without_prefix = await plugin.model('fast-model')
-
-    assert with_prefix is not None
-    assert without_prefix is not None
-    assert plugin.seen == [(ActionKind.MODEL, 'fast-model'), (ActionKind.MODEL, 'fast-model')]
+    assert seen == [(ActionKind.EMBEDDER, 'embed-1'), (ActionKind.EMBEDDER, 'myplug/embed-1')]
+    assert [e.name for e in created] == ['myplug/embed-1', 'myplug/myplug/embed-1']
 
 
-@pytest.mark.asyncio
-async def test_plugin_embedder_helper_passes_bare_id() -> None:
-    """`await plugin.embedder('myplug/embed-1')` calls `resolve` with `embed-1`."""
-    plugin = RecordingPlugin(serves=set())
-
-    await plugin.embedder('myplug/embed-1')
-
-    assert plugin.seen == [(ActionKind.EMBEDDER, 'embed-1')]
+def test_plugin_base_class_leaves_model_and_embedder_names_free_for_ref_constructors() -> None:
+    """`Plugin` has no `.model` or `.embedder` methods that collide with `@classmethod` ref constructors."""
+    assert not hasattr(Plugin, 'model')
+    assert not hasattr(Plugin, 'embedder')
 
 
 @pytest.mark.asyncio

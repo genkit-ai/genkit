@@ -33,6 +33,7 @@ from genkit._core._registry import Registry
 from genkit._core._telemetry._http import (
     ActiveSpan,
     DevUIInstrumentation,
+    DirectHttpInstrumentation,
     _parent_span,
     maybe_inject_dev_instrumentation,
 )
@@ -43,7 +44,6 @@ from genkit._core._telemetry._instrumentation import (
 )
 from genkit.plugin_api import ActionKind
 from genkit.telemetry import (
-    DirectHttpInstrumentation,
     SpanContext,
     SpanMetadata,
     configure_instrumentation,

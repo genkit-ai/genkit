@@ -20,33 +20,37 @@ import asyncio
 import inspect
 import os
 import time
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from typing import Any, cast
 from urllib.parse import urlsplit
 
 import httpx
 import ollama as ollama_api
-import structlog
 
-from genkit import ActionRunContext, ModelResponse
+from genkit import GenkitError, ModelResponse, get_logger
 from genkit.embedder import (
+    Embedder,
     EmbedderInfo,
     EmbedderSupports,
     EmbedRequest,
     EmbedResponse,
-    embedder as create_embedder,
-    embedder_action_metadata,
 )
-from genkit.model import Constrained, ModelInfo, ModelRequest, Supports, model as create_model, model_action_metadata
+from genkit.model import (
+    ConstrainedSupport,
+    Model,
+    ModelContext,
+    ModelInfo,
+    ModelRequest,
+    ModelSupports,
+)
 from genkit.plugin_api import (
     Action,
     ActionKind,
-    ActionMetadata,
     Plugin,
     loop_local_client,
     provider_error,
-    to_json_schema,
 )
 from genkit_ollama._constants import DEFAULT_OLLAMA_SERVER_URL
 from genkit_ollama._embedders import OllamaEmbedder
@@ -56,9 +60,10 @@ from genkit_ollama._models import (
     OllamaModel,
     _ResolvedModel,
 )
+from genkit_ollama._secrets import context_api_key
 
 OLLAMA_PLUGIN_NAME = 'ollama'
-logger = structlog.get_logger(__name__)
+logger = get_logger(__name__)
 
 # Capability probing (POST /api/show), bounded the way the Go plugin bounds it:
 # a probe never waits longer than this, or the plugin timeout if that is
@@ -107,7 +112,7 @@ def ollama_name(name: str) -> str:
     return f'{OLLAMA_PLUGIN_NAME}/{name}'
 
 
-def ollama_model_info(model_ref: _ResolvedModel, label: str) -> dict[str, object]:
+def ollama_model_info(model_ref: _ResolvedModel, label: str) -> ModelInfo:
     """Build Dev UI capability metadata for an Ollama model.
 
     Every model goes through ``/api/chat``, as in Go; the probe only decides
@@ -118,21 +123,20 @@ def ollama_model_info(model_ref: _ResolvedModel, label: str) -> dict[str, object
         label: The human-readable label to show in the Dev UI.
 
     Returns:
-        The serialized :class:`ModelInfo` metadata (camelCase aliases, no
-        ``None`` values) ready to embed under ``metadata['model']``.
+        The :class:`ModelInfo` for the model.
     """
     return ModelInfo(
         label=label,
-        supports=Supports(
+        supports=ModelSupports(
             multiturn=True,
             media=model_ref.media,
             tools=model_ref.tools,
             system_role=True,
             # Deliberate JS/Go deviation. we match other Python plugins for Dev UI consistency.
             output=['text', 'json'],
-            constrained=Constrained.ALL,
+            constrained=ConstrainedSupport.ALL,
         ),
-    ).model_dump(by_alias=True, exclude_none=True)
+    )
 
 
 # A request_headers callable takes no arguments and returns the headers to
@@ -164,16 +168,38 @@ class _CallableHeaders(httpx.Auth):
     token refresh on every call.
     """
 
-    def __init__(self, source: _HeaderSource) -> None:
+    def __init__(self, source: _HeaderSource, *, api_key: str | None = None) -> None:
         self._source = source
+        self._api_key = api_key
 
     async def async_auth_flow(self, request: httpx.Request) -> AsyncGenerator[httpx.Request, httpx.Response]:
         result = self._source()
         if inspect.isawaitable(result):
             result = await result
         if result:
+            if self._api_key is not None and _pins_authorization(result):
+                raise _pinned_authorization_error('returned')
             request.headers.update(result)
         yield request
+
+
+def _pins_authorization(headers: Mapping[str, str]) -> bool:
+    return any(k.lower() == 'authorization' for k in headers)
+
+
+def _pinned_authorization_error(verb: str) -> GenkitError:
+    """A ``context.secrets`` key would replace proxy auth the plugin was given.
+
+    Sending a tenant's key to a proxy that expects the plugin's token either
+    fails at the proxy or hands that proxy a key meant for someone else.
+    """
+    return GenkitError(
+        status='FAILED_PRECONDITION',
+        message=(
+            f'Ollama(request_headers=...) {verb} an Authorization header, which the context.secrets key '
+            'would replace. Drop that header to serve per-request keys.'
+        ),
+    )
 
 
 def _reject_api_path_suffix(base_url: str, *, source: str) -> None:
@@ -231,17 +257,23 @@ class Ollama(Plugin):
 
         # A dict is baked into the cached client; a callable runs per request via httpx auth.
         self.request_headers: dict[str, str] = {}
+        self._header_source: _HeaderSource | None = None
         self._auth: _CallableHeaders | None = None
         if isinstance(request_headers, dict):
             self.request_headers = dict(request_headers)
         elif request_headers is not None:
             _require_no_arg_callable(request_headers)
+            self._header_source = request_headers
             self._auth = _CallableHeaders(request_headers)
         self.timeout = timeout
-        self.client = loop_local_client(self._make_client)
         self._probes: dict[str, _ProbeResult] = {}
         # One probe per model at a time; concurrent first uses await the same task.
         self._inflight: dict[str, asyncio.Task[_ResolvedModel]] = {}
+
+    @loop_local_client
+    def client(self) -> ollama_api.AsyncClient:
+        """The per-event-loop client built with the static headers and timeout."""
+        return self._make_client()
 
     def _make_client(self) -> ollama_api.AsyncClient:
         """Build the Ollama AsyncClient for the current event loop.
@@ -256,6 +288,39 @@ class Ollama(Plugin):
         if self.timeout is not None:
             kwargs['timeout'] = self.timeout
         return ollama_api.AsyncClient(**kwargs)
+
+    @asynccontextmanager
+    async def _client_for_request(self, *, api_key: str | None = None) -> AsyncIterator[ollama_api.AsyncClient]:
+        """Yield the Ollama client to use for a single request.
+
+        When no per-request api_key is given, the shared per-event-loop client
+        is yielded. A per-request key forces a fresh client: hosted Ollama
+        bills whoever's bearer token is on the request. An ``Authorization``
+        header from ``request_headers`` is proxy auth, so a per-request key
+        raises ``FAILED_PRECONDITION`` instead of replacing it. The fresh
+        client owns its own httpx connection pool and is closed on exit.
+        """
+        if api_key is None:
+            yield self.client()
+            return
+
+        if _pins_authorization(self.request_headers):
+            raise _pinned_authorization_error('pins')
+        headers = {**self.request_headers, 'Authorization': f'Bearer {api_key}'}
+        auth: httpx.Auth | None = None
+        if self._header_source is not None:
+            auth = _CallableHeaders(self._header_source, api_key=api_key)
+        kwargs: dict[str, Any] = {'host': self.base_url, 'headers': headers}
+        if auth is not None:
+            kwargs['auth'] = auth
+        if self.timeout is not None:
+            kwargs['timeout'] = self.timeout
+
+        client = ollama_api.AsyncClient(**kwargs)
+        try:
+            yield client
+        finally:
+            await client._client.aclose()
 
     async def init(self) -> list:
         """Initialize the Ollama plugin.
@@ -378,29 +443,21 @@ class Ollama(Plugin):
             base_url=self.base_url,
         )
 
-        action_metadata = model_action_metadata(
-            name=ollama_name(name),
-            config_schema=OllamaConfig,
-            info=ollama_model_info(model_ref, f'Ollama - {name}'),
-        )
+        async def _run(request: ModelRequest, ctx: ModelContext | None = None) -> ModelResponse:
+            # Core rejects a key on config before this runs. A context.secrets
+            # key authenticates this call only. OllamaModel wraps connection
+            # errors at the SDK boundary, so a failed media-URL fetch isn't
+            # misreported as an Ollama server outage.
+            api_key = context_api_key(ctx.context) if ctx is not None else None
+            async with self._client_for_request(api_key=api_key) as client:
+                return await model.generate(request, ctx, client=client)
 
-        async def _run(request: ModelRequest, ctx: ActionRunContext | None = None) -> ModelResponse:
-            # OllamaModel wraps connection errors at the SDK boundary, so a failed
-            # media-URL fetch isn't misreported as an Ollama server outage.
-            return await model.generate(request, ctx)
-
-        action = create_model(
+        return Model(
             ollama_name(name),
             _run,
             config_schema=OllamaConfig,
-            metadata=action_metadata.metadata,
+            info=ollama_model_info(model_ref, f'Ollama - {name}'),
         )
-
-        # Explicitly set schemas (always present in the action metadata).
-        action.input_schema = action_metadata.input_schema  # type: ignore[invalid-assignment]
-        action.output_schema = action_metadata.output_schema  # type: ignore[invalid-assignment]
-
-        return action
 
     def _create_embedder_action(self, name: str) -> Action:
         """Create an Action object for an Ollama embedder.
@@ -420,17 +477,17 @@ class Ollama(Plugin):
             async with wrap_connection_errors(base_url):
                 return await embedder.embed(request)
 
-        return create_embedder(
+        return Embedder(
             ollama_name(name),
             _run,
+            config_schema=ollama_api.Options,
             info=EmbedderInfo(
                 label=f'Ollama Embedding - {name}',
                 supports=EmbedderSupports(input=['text']),
-                config_schema=to_json_schema(ollama_api.Options),
             ),
         )
 
-    async def list_actions(self) -> list[ActionMetadata]:
+    async def list_actions(self) -> list[Action]:
         """List the models and embedders the server has pulled.
 
         Reads ``/api/tags``, then probes each model's ``/api/show``
@@ -440,7 +497,7 @@ class Ollama(Plugin):
         Names containing ``embed`` are listed as embedders, as in JS and Go.
 
         Returns:
-            ActionMetadata for each model and embedder.
+            Action for each model and embedder.
         """
         async with wrap_connection_errors(self.base_url):
             try:
@@ -468,23 +525,6 @@ class Ollama(Plugin):
 
         definitions = await asyncio.gather(*(describe(name, digest) for name, digest in model_rows))
 
-        actions: list[ActionMetadata] = [
-            model_action_metadata(
-                name=ollama_name(definition.name),
-                config_schema=OllamaConfig,
-                info=ollama_model_info(definition, f'Ollama - {definition.name}'),
-            )
-            for definition in definitions
-        ]
-        actions.extend(
-            embedder_action_metadata(
-                name=ollama_name(name),
-                info=EmbedderInfo(
-                    config_schema=to_json_schema(ollama_api.Options),
-                    label=f'Ollama Embedding - {name}',
-                    supports=EmbedderSupports(input=['text']),
-                ),
-            )
-            for name in embedder_names
-        )
+        actions: list[Action] = [self._create_model_action(definition) for definition in definitions]
+        actions.extend(self._create_embedder_action(name) for name in embedder_names)
         return actions

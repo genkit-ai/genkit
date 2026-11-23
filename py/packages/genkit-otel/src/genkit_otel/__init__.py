@@ -43,9 +43,10 @@ to separate pipelines).
 """
 
 from genkit_otel._gen_ai_attributes import ContentCapturingMode
-from genkit_otel._genai_instrumentation import GenAiInstrumentation
+from genkit_otel._genai_instrumentation import GenAiInstrumentation, OtelEventLogger
 
 __all__ = [
     'ContentCapturingMode',
     'GenAiInstrumentation',
+    'OtelEventLogger',
 ]

@@ -213,8 +213,7 @@ export type ImagenTryOnConfigSchemaType = typeof ImagenTryOnConfigSchema;
 export type ImagenTryOnConfig = z.infer<ImagenTryOnConfigSchemaType>;
 
 export type ConfigSchemaType =
-  | ImagenConfigSchemaType
-  | ImagenTryOnConfigSchemaType;
+  ImagenConfigSchemaType | ImagenTryOnConfigSchemaType;
 
 function commonRef(
   name: string,
@@ -281,9 +280,7 @@ const ALL_MODELS = {
 };
 
 export type ImagenModelName =
-  | KnownModels
-  | `imagen-${string}`
-  | `virtual-try-on-${string}`;
+  KnownModels | `imagen-${string}` | `virtual-try-on-${string}`;
 export function isImagenModelName(value?: string): value is ImagenModelName {
   return (
     !!value &&
