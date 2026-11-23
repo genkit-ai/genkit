@@ -83,12 +83,26 @@ const SCHEMA_MAP_KEYWORDS = new Set([
   'dependencies',
 ]);
 
-function isDraft4Schema(schema: unknown): boolean {
+const DRAFT_4_SCHEMA_URI = /^https?:\/\/json-schema\.org\/draft-04\/schema#?$/;
+const DRAFT_4_TO_7_SCHEMA_URI =
+  /^https?:\/\/json-schema\.org\/draft-0[467]\/schema#?$/;
+
+function getSchemaDialect(schema: unknown): string | undefined {
   if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
-    return false;
+    return undefined;
   }
   const dialect = (schema as Record<string, unknown>).$schema;
-  return typeof dialect === 'string' && /\/draft-0?4\b/i.test(dialect);
+  return typeof dialect === 'string' ? dialect : undefined;
+}
+
+function isDraft4Schema(schema: unknown): boolean {
+  const dialect = getSchemaDialect(schema);
+  return dialect !== undefined && DRAFT_4_SCHEMA_URI.test(dialect);
+}
+
+function ignoresRefSiblings(schema: unknown): boolean {
+  const dialect = getSchemaDialect(schema);
+  return dialect !== undefined && DRAFT_4_TO_7_SCHEMA_URI.test(dialect);
 }
 
 function hasSchemaResourceMarker(value: unknown, isDraft4 = false): boolean {
@@ -130,8 +144,11 @@ function toGeminiSchemaProperty(
         'Tool schema is too deep to convert to a Gemini function declaration',
     });
   }
-  consumeSchemaBudget(budget);
+  if (resolvingRefs.size > 0) {
+    consumeSchemaBudget(budget);
+  }
   const isDraft4 = isDraft4Schema(root);
+  const refSiblingsIgnored = ignoresRefSiblings(root);
   const currentNestedResource =
     nestedResourceReason ??
     (property !== root && hasSchemaResourceMarker(property, isDraft4)
@@ -192,14 +209,16 @@ function toGeminiSchemaProperty(
         message: `Recursive tool schema reference ${ref} cannot be converted to a Gemini function declaration`,
       });
     }
-    const unsupportedSibling = Object.keys(property).find(
-      (key) => !REF_ANNOTATION_KEYS.has(key) && !key.startsWith('x-')
-    );
-    if (unsupportedSibling !== undefined) {
-      throw new GenkitError({
-        status: 'INVALID_ARGUMENT',
-        message: `Unsupported sibling keyword ${unsupportedSibling || '""'} alongside tool schema reference ${ref}`,
-      });
+    if (!refSiblingsIgnored) {
+      const unsupportedSibling = Object.keys(property).find(
+        (key) => !REF_ANNOTATION_KEYS.has(key) && !key.startsWith('x-')
+      );
+      if (unsupportedSibling !== undefined) {
+        throw new GenkitError({
+          status: 'INVALID_ARGUMENT',
+          message: `Unsupported sibling keyword ${unsupportedSibling || '""'} alongside tool schema reference ${ref}`,
+        });
+      }
     }
     let referenced: any = root;
     let crossedNestedResource = false;
@@ -238,15 +257,19 @@ function toGeminiSchemaProperty(
         message: `Unresolved tool schema reference ${ref}`,
       });
     }
-    const {
-      $ref: _,
-      $id: _id,
-      id: _draft4Id,
-      $schema: _schema,
-      ...overrides
-    } = property;
+    let nextProperty = referenced;
+    if (!refSiblingsIgnored) {
+      const {
+        $ref: _,
+        $id: _id,
+        id: _draft4Id,
+        $schema: _schema,
+        ...overrides
+      } = property;
+      nextProperty = { ...referenced, ...overrides };
+    }
     return toGeminiSchemaProperty(
-      { ...referenced, ...overrides },
+      nextProperty,
       root,
       new Set([...resolvingRefs, canonicalRef]),
       budget,

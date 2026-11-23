@@ -1868,6 +1868,85 @@ describe('toGeminiTool', () => {
       properties: { street: { type: SchemaType.STRING } },
       required: undefined,
     });
+
+    const customDialect = toGeminiTool({
+      name: 'custom_dialect_child_id_annotation',
+      description: 'Custom dialect URI containing draft-04 substring',
+      inputSchema: {
+        $schema: 'https://schemas.example/draft-04-compat/schema',
+        type: 'object',
+        properties: {
+          address: {
+            id: 'address',
+            type: 'object',
+            properties: { street: { $ref: '#/$defs/Street' } },
+          },
+        },
+        $defs: { Street: { type: 'string' } },
+      },
+    });
+    assert.deepStrictEqual(customDialect.parameters?.properties?.address, {
+      type: SchemaType.OBJECT,
+      properties: { street: { type: SchemaType.STRING } },
+      required: undefined,
+    });
+  });
+
+  it('should ignore $ref sibling keywords for Draft 4-7 schemas', () => {
+    const draft7 = toGeminiTool({
+      name: 'draft7_ref_siblings',
+      description: 'Draft 7 tool with sibling keywords alongside $ref',
+      inputSchema: {
+        $schema: 'http://json-schema.org/draft-07/schema#',
+        type: 'object',
+        properties: {
+          names: {
+            type: 'array',
+            items: { $ref: '#/definitions/Name', type: 'string' },
+          },
+          alias: {
+            $ref: '#/definitions/Name',
+            type: 'integer',
+            description: 'ignored sibling description',
+          },
+        },
+        definitions: {
+          Name: { type: 'string', description: 'canonical name' },
+        },
+      },
+    });
+    assert.deepStrictEqual(draft7.parameters?.properties, {
+      names: {
+        type: SchemaType.ARRAY,
+        items: { type: SchemaType.STRING, description: 'canonical name' },
+      },
+      alias: { type: SchemaType.STRING, description: 'canonical name' },
+    });
+
+    assert.throws(
+      () =>
+        toGeminiTool({
+          name: 'draft2020_ref_sibling_type',
+          description: 'Draft 2020-12 tool with sibling type alongside $ref',
+          inputSchema: {
+            $schema: 'https://json-schema.org/draft/2020-12/schema',
+            type: 'object',
+            properties: {
+              names: {
+                type: 'array',
+                items: { $ref: '#/$defs/Name', type: 'string' },
+              },
+            },
+            $defs: { Name: { type: 'string' } },
+          },
+        }),
+      {
+        name: 'GenkitError',
+        status: 'INVALID_ARGUMENT',
+        message:
+          /Unsupported sibling keyword type alongside tool schema reference/,
+      }
+    );
   });
 
   it('should reject pointers that cross nested schema resource boundaries', () => {
@@ -2174,25 +2253,66 @@ describe('toGeminiTool', () => {
     assert.deepStrictEqual(innerProps?.p1399, { type: SchemaType.STRING });
   });
 
-  it('should bound wide schemas under nested IDs without overflowing the stack', () => {
-    const properties: Record<string, any> = {};
-    for (let i = 0; i < 150000; i++) {
-      properties[`p${i}`] = { type: 'string' };
+  it('should convert wide inline schemas without hitting the reference expansion budget', () => {
+    const flatProperties: Record<string, any> = {};
+    for (let i = 0; i < 4096; i++) {
+      flatProperties[`p${i}`] = { type: 'string' };
+    }
+    const flatGot = toGeminiTool({
+      name: 'wide_inline_schema',
+      description: 'Flat tool with 4096 inline properties and no references',
+      inputSchema: {
+        type: 'object',
+        properties: flatProperties,
+      },
+    });
+    assert.strictEqual(
+      Object.keys(flatGot.parameters?.properties ?? {}).length,
+      4096
+    );
+    assert.deepStrictEqual(flatGot.parameters?.properties?.p4095, {
+      type: SchemaType.STRING,
+    });
+
+    const nestedGot = toGeminiTool({
+      name: 'wide_nested_id',
+      description: 'Tool with a wide inline schema under a nested $id',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          wide: {
+            $id: 'https://example.test/wide',
+            type: 'object',
+            properties: flatProperties,
+          },
+        },
+      },
+    });
+    assert.strictEqual(
+      Object.keys(nestedGot.parameters?.properties?.wide?.properties ?? {})
+        .length,
+      4096
+    );
+    assert.deepStrictEqual(
+      nestedGot.parameters?.properties?.wide?.properties?.p4095,
+      { type: SchemaType.STRING }
+    );
+  });
+
+  it('should reject $ref-expanded schemas exceeding the node expansion budget', () => {
+    const refProperties: Record<string, any> = {};
+    for (let i = 0; i < 4097; i++) {
+      refProperties[`p${i}`] = { $ref: '#/$defs/Leaf' };
     }
     assert.throws(
       () =>
         toGeminiTool({
-          name: 'wide_nested_id',
-          description: 'Tool with a wide schema under a nested $id',
+          name: 'wide_ref_expansion',
+          description: 'Tool expanding more than 4096 referenced nodes',
           inputSchema: {
             type: 'object',
-            properties: {
-              wide: {
-                $id: 'https://example.test/wide',
-                type: 'object',
-                properties,
-              },
-            },
+            properties: refProperties,
+            $defs: { Leaf: { type: 'string' } },
           },
         }),
       {
