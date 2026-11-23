@@ -24,6 +24,7 @@ import {
   runWithManager,
 } from '../utils/manager-utils.js';
 import { parseJson } from '../utils/option-parsers.js';
+import { writeStdout } from '../utils/output.js';
 
 interface FlowRunOptions {
   /** --experimental-auth. */
@@ -100,7 +101,7 @@ export const flowRun = new Command('flow:run')
           context: options.context,
         },
         options.stream
-          ? (chunk) => console.log(JSON.stringify(chunk, undefined, '  '))
+          ? (chunk) => writeStdout(JSON.stringify(chunk, undefined, '  '))
           : undefined,
         (tid) => {
           traceId = tid;
