@@ -176,7 +176,19 @@ export async function generateWithMcpToken(
 }
 ```
 
-This reuses `ai` while making the MCP connection for the current token. Keep a client for longer only when its connection and credentials belong to the same user, and close it when that user's session ends. For stateful MCP servers that retain sessions until explicitly deleted, pass your own `StreamableHTTPClientTransport` via `mcpServer: { transport }`, call `await transport.terminateSession()` before `await client.disable()`, and keep `await client.disable()` in `finally` so the local transport always closes.
+This reuses `ai` while making the MCP connection for the current token. Keep a client for longer only when its connection and credentials belong to the same user, and close it when that user's session ends. For stateful MCP servers that retain sessions until explicitly deleted, pass your own `StreamableHTTPClientTransport` via `mcpServer: { transport }` and use a nested `try`/`finally` inside the outer `finally` block so session deletion is attempted on failure and the local transport still closes if deletion fails:
+
+```ts
+try {
+  // await client.ready(), check client.isEnabled(), and call ai.generate(...)
+} finally {
+  try {
+    await transport.terminateSession();
+  } finally {
+    await client.disable();
+  }
+}
+```
 
 ### Using MCP Actions (Tools, Prompts)
 
