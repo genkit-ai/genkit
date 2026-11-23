@@ -404,8 +404,7 @@ function sanitizeUntrustedUserMessages(messages: MessageData[]): {
 
     const hasLegacyKey = 'compressedHistory' in meta;
     const ccMeta = meta.contextCompression as
-      | Record<string, unknown>
-      | undefined;
+      Record<string, unknown> | undefined;
     const hasBoundaryField =
       ccMeta !== undefined && COMPACTION_BOUNDARY_KEYS.some((k) => k in ccMeta);
 
@@ -441,8 +440,7 @@ function withoutRawOutputFlag(target: {
 }): Record<string, unknown> | undefined {
   if (!target.metadata) return undefined;
   const ccMeta = target.metadata.contextCompression as
-    | Record<string, unknown>
-    | undefined;
+    Record<string, unknown> | undefined;
   if (!ccMeta || !('rawOutput' in ccMeta)) return target.metadata;
   const { rawOutput: _raw, ...restCc } = ccMeta;
   return {
@@ -454,8 +452,7 @@ function withoutRawOutputFlag(target: {
 function materializeToolPart(part: Part): Part {
   if (!part.toolResponse) return part;
   const ccMeta = part.metadata?.contextCompression as
-    | Record<string, unknown>
-    | undefined;
+    Record<string, unknown> | undefined;
   if (!ccMeta || !ccMeta.rawOutput) return part;
 
   if (ccMeta.deduplicated) {
@@ -522,8 +519,7 @@ function resolveCompressedHistoryWithIndices(messages: MessageData[]): {
       continue;
     }
     const ccMeta = messages[i]?.metadata?.contextCompression as
-      | Record<string, unknown>
-      | undefined;
+      Record<string, unknown> | undefined;
     if (ccMeta && typeof ccMeta.summary === 'string') {
       boundaryIndex = i;
       break;
@@ -942,8 +938,7 @@ function hasCompressionFlag(
     | 'summaryMessage'
 ): boolean {
   const ccMeta = target.metadata?.contextCompression as
-    | Record<string, unknown>
-    | undefined;
+    Record<string, unknown> | undefined;
   return Boolean(ccMeta?.[flag]);
 }
 
@@ -1122,8 +1117,7 @@ function lastReportedInputTokens(messages: MessageData[]): number | undefined {
     const msg = messages[i];
     if (!msg || msg.role !== 'model') continue;
     const ccMeta = msg.metadata?.contextCompression as
-      | Record<string, unknown>
-      | undefined;
+      Record<string, unknown> | undefined;
     if (typeof ccMeta?.inputTokens === 'number' && ccMeta.inputTokens > 0) {
       return ccMeta.inputTokens;
     }
@@ -2331,8 +2325,7 @@ export const contextCompression: GenerateMiddleware<
             prevBoundary >= 0
               ? ((
                   rawMessages[prevBoundary]?.metadata?.contextCompression as
-                    | Record<string, unknown>
-                    | undefined
+                    Record<string, unknown> | undefined
                 )?.summary as string | undefined)
               : undefined;
           const activeSummary = hasSummaryMsg
@@ -2353,8 +2346,7 @@ export const contextCompression: GenerateMiddleware<
                   return rawPart;
                 }
                 const editedCc = editedPart.metadata?.contextCompression as
-                  | Record<string, unknown>
-                  | undefined;
+                  Record<string, unknown> | undefined;
                 if (!editedCc) return rawPart;
                 partChanged = true;
                 return {

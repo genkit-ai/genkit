@@ -487,6 +487,8 @@ export declare interface UsageMetadata {
   cachedContentTokenCount?: number;
   /** Optional. Number of tokens present in thoughts output. */
   thoughtsTokenCount?: number;
+  /** Optional. Number of tokens present in tool-use prompt(s). */
+  toolUsePromptTokenCount?: number;
   /** Optional. The traffic type for the request (e.g. ON_DEMAND_FLEX or ON_DEMAND_PRIORITY). */
   trafficType?: string;
 }
@@ -1267,6 +1269,12 @@ export declare interface GenerateContentRequest {
   toolConfig?: ToolConfig;
   /** Optional. Service tier (e.g. 'standard', 'flex', or 'priority'). */
   serviceTier?: string;
+  /**
+   * Optional. googleAI only. Whether the server logs this request for the
+   * API key's project (viewable in AI Studio); overrides the project's
+   * logging setting.
+   */
+  store?: boolean;
 }
 
 /**

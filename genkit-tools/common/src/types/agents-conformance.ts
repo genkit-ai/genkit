@@ -33,13 +33,13 @@ import {
   AgentStreamChunkSchema,
   ArtifactSchema,
   SessionStateSchema,
-} from './agent';
+} from './agent.js';
 
 import {
   GenerateResponseChunkSchema,
   GenerateResponseSchema,
   MessageSchema,
-} from './model';
+} from './model.js';
 
 // ---------------------------------------------------------------------------
 // Conformance spec — output assertions

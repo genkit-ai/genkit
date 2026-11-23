@@ -17,7 +17,7 @@
 import type { SpanData } from '@genkit-ai/tools-common';
 import * as assert from 'assert';
 import { describe, it } from 'node:test';
-import { spanBroadcastEvents } from '../src/index';
+import { spanBroadcastEvents } from '../src/index.js';
 
 function span(spanId: string, startTime: number, endTime: number): SpanData {
   return {

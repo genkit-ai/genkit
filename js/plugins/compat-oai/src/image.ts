@@ -81,8 +81,8 @@ function toImageGenerateParams(
     options = { ...options, ...restOfConfig };
   }
   for (const k in options) {
-    if (options[k] === undefined) {
-      delete options[k];
+    if ((options as unknown as Record<string, unknown>)[k] === undefined) {
+      delete (options as unknown as Record<string, unknown>)[k];
     }
   }
   return options;

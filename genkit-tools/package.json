@@ -1,13 +1,18 @@
 {
   "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20.19.0"
+  },
   "scripts": {
     "preinstall": "npx only-allow pnpm",
-    "build": "pnpm install && pnpm build:common && pnpm build:telemetry-server && pnpm build:cli",
-    "build:cli": "pnpm build:md-context && cd cli && pnpm build",
+    "build": "pnpm build:common-pkg && pnpm run \"/^(export:schemas|build:telemetry-server)$/\" && pnpm build:cli-pkg",
+    "build:cli": "pnpm build:cli-pkg",
+    "build:cli-pkg": "cd cli && pnpm build",
     "build:telemetry-server": "cd telemetry-server && pnpm build",
-    "build:common": "cd common && pnpm build && cd .. && pnpm export:schemas",
-    "build:md-context": "node scripts/build-md.js",
-    "export:schemas": "npx tsx scripts/schema-exporter.ts .",
+    "build:common": "pnpm build:common-pkg && pnpm export:schemas",
+    "build:common-pkg": "cd common && pnpm build",
+    "export:schemas": "tsx scripts/schema-exporter.ts .",
     "pack:all": "pnpm run pack:cli && pnpm run pack:telemetry-server && pnpm run pack:common",
     "pack:common": "cd common && pnpm pack --pack-destination ../../dist",
     "pack:cli": "cd cli && pnpm pack --pack-destination ../../dist",
@@ -15,19 +20,17 @@
   },
   "devDependencies": {
     "json-schema": "^0.4.0",
-    "only-allow": "^1.2.1",
-    "rimraf": "^6.0.1",
-    "tsx": "^4.20.3",
-    "zod": "^3.25.67",
-    "zod-to-json-schema": "^3.24.5"
+    "only-allow": "^1.2.2",
+    "tsx": "^4.23.15",
+    "zod": "3.25.76",
+    "zod-to-json-schema": "~3.25.2"
   },
   "pnpm": {
     "overrides": {
       "cross-spawn": "^7.0.5"
     },
     "onlyBuiltDependencies": [
-      "esbuild",
-      "protobufjs"
+      "esbuild"
     ]
   },
   "packageManager": "pnpm@10.26.0+sha512.3b3f6c725ebe712506c0ab1ad4133cf86b1f4b687effce62a9b38b4d72e3954242e643190fc51fa1642949c735f403debd44f5cb0edd657abe63a8b6a7e1e402"
