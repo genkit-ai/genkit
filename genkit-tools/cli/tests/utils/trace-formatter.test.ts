@@ -20,6 +20,11 @@ import {
   cleanTraceJson,
   formatTraceTree,
 } from '../../src/utils/trace-formatter.js';
+import {
+  buildOrderTrace,
+  buildSpan,
+  buildTrace,
+} from '../testing/mock_data.js';
 
 describe('trace-formatter', () => {
   describe('cleanTraceJson', () => {
@@ -82,6 +87,40 @@ describe('trace-formatter', () => {
       expect((preserved.spans!.s1.attributes!['genkit:input'] as any).img).toBe(
         rawImage
       );
+    });
+
+    it('preserves full uncompacted tool schemas, echoed requests, and custom fields', () => {
+      const cleaned = cleanTraceJson(buildOrderTrace(), false);
+
+      expect(cleaned).toMatchObject({
+        spans: {
+          gen1: {
+            attributes: {
+              'genkit:output': {
+                request: {
+                  tools: [
+                    { name: 'lookupOrder' },
+                    { name: 'getShippingQuote' },
+                  ],
+                },
+                custom: { service_tier: 'standard' },
+              },
+            },
+          },
+          model1: {
+            attributes: {
+              'genkit:input': {
+                tools: [
+                  {
+                    description: expect.stringContaining('Verbose description'),
+                  },
+                  { name: 'getShippingQuote' },
+                ],
+              },
+            },
+          },
+        },
+      });
     });
   });
 
@@ -153,6 +192,178 @@ describe('trace-formatter', () => {
       };
       const output = formatTraceTree(trace as any);
       expect(output).toContain('User: (empty)');
+    });
+
+    it('summarizes generate and model tool definitions and omits empty noise fields', () => {
+      const output = formatTraceTree(cleanTraceJson(buildOrderTrace(), false));
+
+      expect(output).toContain('tools: [lookupOrder, getShippingQuote]');
+      expect(output).toContain('temperature: 0.2');
+      expect(output).not.toContain('Verbose description');
+      expect(output).not.toContain('http://json-schema.org/draft-07/schema#');
+      expect(output).not.toContain('config: {}');
+      expect(output).not.toContain('output: {}');
+      expect(output).not.toContain('use: []');
+    });
+
+    it('omits echoed request, custom, and raw blobs from model and generate outputs', () => {
+      const output = formatTraceTree(cleanTraceJson(buildOrderTrace(), false));
+
+      expect(output).not.toContain('model_invocation_token_counts');
+      expect(output).not.toContain('verboseProviderPayload');
+      expect(output).not.toContain('duplicateVerbosePayload');
+    });
+
+    it('condenses usage to non-zero token counters', () => {
+      const output = formatTraceTree(cleanTraceJson(buildOrderTrace(), false));
+
+      expect(output).toContain(
+        'usage: inputTokens: 120, outputTokens: 15, totalTokens: 145, thoughtsTokens: 10'
+      );
+      expect(output).toContain(
+        'usage: inputTokens: 80, outputTokens: 12, totalTokens: 92, cachedContentTokens: 25'
+      );
+      expect(output).not.toContain('inputImages');
+    });
+
+    it('deduplicates cumulative message prefixes across nested generate and model spans', () => {
+      const output = formatTraceTree(cleanTraceJson(buildOrderTrace(), false));
+
+      expect(output).toContain('User: "Quote order ORD-123"');
+      expect(output).toContain('messages: [same 1 message as parent]');
+      expect(output).toContain('... (1 earlier message)');
+      expect(output).toContain('Tool Call: lookupOrder({"orderId":"ORD-123"})');
+    });
+
+    it('preserves full payloads including custom fields on flow and tool spans', () => {
+      const output = formatTraceTree(cleanTraceJson(buildOrderTrace(), false));
+
+      expect(output).toContain('orderSupportFlow (flow) [1500ms] ✔');
+      expect(output).toContain('lookupOrder (tool) [40ms] ✔');
+      expect(output).toContain('weight: 2500');
+      expect(output).toContain('weightUnit: g');
+      expect(output).toContain('warehouseNote: keep-tool-custom-fields');
+    });
+
+    it('preserves parallel toolRequest and toolResponse parts in a single message', () => {
+      const trace = buildTrace({
+        m1: buildSpan({
+          spanId: 'm1',
+          displayName: 'googleai/gemini-2.5-flash',
+          attributes: {
+            'genkit:type': 'action',
+            'genkit:metadata:subtype': 'model',
+            'genkit:input': JSON.stringify({
+              messages: [
+                {
+                  role: 'tool',
+                  content: [
+                    {
+                      toolResponse: {
+                        name: 'lookupOrder',
+                        output: { ok: true },
+                      },
+                    },
+                    {
+                      toolResponse: {
+                        name: 'getShippingQuote',
+                        output: { price: 12.5 },
+                      },
+                    },
+                  ],
+                },
+              ],
+            }),
+            'genkit:output': JSON.stringify({
+              finishReason: 'stop',
+              message: {
+                role: 'model',
+                content: [
+                  {
+                    toolRequest: {
+                      name: 'lookupOrder',
+                      input: { orderId: 'ORD-1' },
+                    },
+                  },
+                  {
+                    toolRequest: {
+                      name: 'getShippingQuote',
+                      input: { weight: 500 },
+                    },
+                  },
+                ],
+              },
+            }),
+          },
+        }),
+      });
+
+      const output = formatTraceTree(trace);
+
+      expect(output).toContain('Tool Output [lookupOrder]: {"ok":true}');
+      expect(output).toContain(
+        'Tool Output [getShippingQuote]: {"price":12.5}'
+      );
+      expect(output).toContain('Tool Call: lookupOrder({"orderId":"ORD-1"})');
+      expect(output).toContain('Tool Call: getShippingQuote({"weight":500})');
+    });
+
+    it('preserves provider custom details when model output has no message or candidates', () => {
+      const trace = buildTrace(
+        {
+          m1: buildSpan({
+            spanId: 'm1',
+            traceId: 'blocked-trace',
+            displayName: 'googleai/gemini-2.5-flash',
+            attributes: {
+              'genkit:type': 'action',
+              'genkit:metadata:subtype': 'model',
+              'genkit:output': JSON.stringify({
+                finishReason: 'blocked',
+                finishMessage: 'Safety filter triggered',
+                custom: { safetyCategory: 'HARM_CATEGORY_DANGEROUS' },
+              }),
+            },
+          }),
+        },
+        { traceId: 'blocked-trace' }
+      );
+
+      const output = formatTraceTree(trace);
+
+      expect(output).toContain('finishReason: blocked');
+      expect(output).toContain('Safety filter triggered');
+      expect(output).toContain('safetyCategory: HARM_CATEGORY_DANGEROUS');
+    });
+
+    it('renders span status error messages on failed spans', () => {
+      const trace = buildTrace(
+        {
+          t1: buildSpan({
+            spanId: 't1',
+            traceId: 'err-trace',
+            displayName: 'failingTool',
+            startTime: 100,
+            endTime: 150,
+            status: {
+              code: 2,
+              message: 'Invalid weight: must be in kilograms',
+            },
+            attributes: {
+              'genkit:type': 'action',
+              'genkit:metadata:subtype': 'tool',
+              'genkit:state': 'error',
+              'genkit:input': JSON.stringify({ weight: 2500 }),
+            },
+          }),
+        },
+        { traceId: 'err-trace' }
+      );
+
+      const output = formatTraceTree(trace);
+
+      expect(output).toContain('failingTool (tool) [50ms] ✖');
+      expect(output).toContain('Error: Invalid weight: must be in kilograms');
     });
   });
 });
