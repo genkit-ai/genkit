@@ -130,9 +130,65 @@ const ai = genkit({
 ### `createMcpClient()` Options
 
 The `createMcpClient` function takes an `McpClientOptions` object:
--   **`name`**: (required, string) A unique name for this client instance. This name will be used as the namespace for its tools and prompts.
+-   **`name`**: (required, string) The client identity advertised to the MCP server.
+-   **`serverName`**: (optional, string) Overrides the namespace prefix used for this server's tools and resources. Defaults to the server's advertised name.
 -   **`version`**: (optional, string) Version for this client instance. Defaults to "1.0.0".
--   Additionally, it supports all options from `McpServerConfig` (e.g., `disabled`, `rawToolResponses`, and transport configurations), as detailed in the `createMcpHost` options section.
+-   **`mcpServer`**: (required, object) The server connection configuration. For HTTP, provide `url` and optionally `requestInit` for headers. It also accepts the stdio and custom transport configurations described under `createMcpHost`.
+-   **`rawToolResponses`**: (optional, boolean) Return raw MCP tool responses instead of Genkit's processed result.
+
+### HTTP authorization per request
+
+If each application request has a different access token, create an MCP client with that token and pass its tools to a shared Genkit instance. The HTTP transport sends `requestInit.headers` during connection and tool calls, so the token must be available when the client is created. Do not share one connected client across users with different credentials.
+
+```ts
+import { googleAI } from '@genkit-ai/google-genai';
+import { createMcpClient } from '@genkit-ai/mcp';
+import { genkit } from 'genkit';
+
+const ai = genkit({ plugins: [googleAI()] });
+
+export async function generateWithMcpToken(
+  accessToken: string,
+  prompt: string
+) {
+  const client = createMcpClient({
+    name: 'slides',
+    mcpServer: {
+      url: 'https://example.com/mcp',
+      requestInit: {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      },
+    },
+  });
+
+  try {
+    await client.ready();
+    if (!client.isEnabled()) throw new Error('MCP connection failed');
+
+    return await ai.generate({
+      model: googleAI.model('gemini-flash-latest'),
+      prompt,
+      tools: await client.getActiveTools(ai),
+    });
+  } finally {
+    await client.disable();
+  }
+}
+```
+
+This reuses `ai` while making the MCP connection for the current token. Keep a client for longer only when its connection and credentials belong to the same user, and close it when that user's session ends. For stateful MCP servers that retain sessions until explicitly deleted, pass your own `StreamableHTTPClientTransport` via `mcpServer: { transport }` and use a nested `try`/`finally` inside the outer `finally` block so session deletion is attempted on failure and the local transport still closes if deletion fails:
+
+```ts
+try {
+  // await client.ready(), check client.isEnabled(), and call ai.generate(...)
+} finally {
+  try {
+    await transport.terminateSession();
+  } finally {
+    await client.disable();
+  }
+}
+```
 
 ### Using MCP Actions (Tools, Prompts)
 
@@ -140,9 +196,9 @@ Both `GenkitMcpHost` (via `getActiveTools()`) and `GenkitMcpClient` (via `getAct
 
 MCP prompts can be fetched using `McpHost.getPrompt(serverName, promptName)` or `mcpClient.getPrompt(promptName)`. These return an `ExecutablePrompt`.
 
-All MCP actions (tools, prompts, resources) are namespaced.
+MCP tools and resources are namespaced (fetched prompts keep the server's original prompt name):
 - For `createMcpHost`, the namespace is the key you provide for that server in the `mcpServers` configuration (e.g., `localFs/read_file`).
-- For `createMcpClient`, the namespace is the `name` you provide in its options (e.g., `myFileSystemClient/list_resources`).
+- For `createMcpClient`, the namespace is `serverName` if provided, or the server's advertised name (e.g., `filesystem/read_file`).
 
 ### Tool Responses
 
