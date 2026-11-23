@@ -32,12 +32,15 @@ func TestPluginLive(t *testing.T) {
 	oailive.Run(t, g, oailive.Suite{
 		Suite: livetest.Suite{
 			Model: zai.ModelRef("glm-5.1", &zai.ChatConfig{Thinking: noThinking}),
+			// GLM 5.1 rather than a later model: GLM 5.3 at times skips
+			// thinking before a simple tool call, which the reasoning cases
+			// need to see.
 			ReasoningModel: zai.ModelRef("glm-5.1", &zai.ChatConfig{
 				Thinking: &zai.ThinkingConfig{Type: zai.ThinkingTypeEnabled},
 			}),
 			ReasoningContent: true,
-			VisionModel:      zai.ModelRef("glm-5v-turbo", nil),
-			DocumentModel:    zai.ModelRef("glm-4.6v", nil),
+			VisionModel:      zai.ModelRef("glm-5.3-flashx", nil),
+			DocumentModel:    zai.ModelRef("glm-5.3-flashx", nil),
 			LimitConfig:      &zai.ChatConfig{MaxOutputTokens: 16, Thinking: noThinking},
 			BadKeyPlugin:     &zai.ZAI{APIKey: "invalid"},
 			Skip:             map[string]string{},
