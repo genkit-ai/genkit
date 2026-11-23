@@ -415,6 +415,20 @@ describe('references', () => {
     ...extra,
   });
 
+  it('refuses a $ref that does not point into the schema', () => {
+    assert.throws(
+      () =>
+        compileQuestions(
+          {
+            type: 'object',
+            properties: { x: { $ref: 'other.json#/x', description: 'x' } },
+          },
+          ''
+        ),
+      /a \$ref that is not a pointer into itself/
+    );
+  });
+
   it('refuses a $ref that loops, is malformed, or dangles', () => {
     assert.throws(
       () =>
@@ -556,6 +570,55 @@ describe('answers', () => {
     );
     assert.strictEqual(answerKind({ noul: 0 }), 'noul');
     assert.strictEqual(answerKind({ score: 0, confidence: 0 }), 'score');
+  });
+
+  it('drop probabilities for undeclared options and levels unchecked', () => {
+    const q = compileQuestions(
+      toJsonSchema({
+        schema: z.object({
+          pick: choice({ a: 'A', b: 'B' }).describe('Which?'),
+          rate: score(['Low', 'High']).describe('How much?'),
+        }),
+      }),
+      ''
+    );
+    for (const extra of [1.5, null, 'x']) {
+      const text = answersText(
+        {
+          pick: { choice: 'a', probabilities: { a: 0.7, b: 0.3, c: extra } },
+          rate: {
+            score: 0.3,
+            probabilities: { '0': 0.7, '1': 0.3, '2': extra },
+          },
+        },
+        q,
+        false
+      );
+      const out = JSON.parse(text);
+      assert.deepStrictEqual(
+        out.pick.probabilities,
+        { a: 0.7, b: 0.3 },
+        String(extra)
+      );
+      assert.deepStrictEqual(
+        out.rate.probabilities,
+        { '0': 0.7, '1': 0.3 },
+        String(extra)
+      );
+    }
+  });
+
+  it('copies the answers of the info', () => {
+    const response = {
+      raw: {
+        model: 'jev',
+        answers: { u: { noul: 0.5 } },
+        systemOneInfo: true,
+      },
+    };
+    const info = responseInfo(response);
+    (info.answers!.u as any).noul = 1;
+    assert.strictEqual(response.raw.answers.u.noul, 0.5);
   });
 
   it('carry the response info', () => {

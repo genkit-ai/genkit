@@ -626,6 +626,96 @@ describe('systemOne', () => {
     );
   });
 
+  it('keeps only whole, non-negative token counts', async () => {
+    const ai = genkit({ plugins: [typeSafe()] });
+    const urgent = z.object({ u: noul().describe('Urgent?') });
+    const reply = (usage: string) =>
+      `{"model": "jev", "answers": {"u": {"noul": 0.5}}, "usage": ${usage}}`;
+    server.failures = [
+      {
+        status: 200,
+        body: reply('{"input_tokens": 1e400, "output_tokens": 3.5}'),
+      },
+    ];
+    const odd = await ai.generate({
+      model: 'typesafe/jev-1.13.0',
+      prompt: ticket,
+      output: { schema: urgent },
+    });
+    assert.strictEqual(odd.usage.inputTokens, undefined);
+    assert.strictEqual(odd.usage.outputTokens, undefined);
+    server.failures = [
+      {
+        status: 200,
+        body: reply('{"input_tokens": 3.0, "output_tokens": -1}'),
+      },
+    ];
+    const whole = await ai.generate({
+      model: 'typesafe/jev-1.13.0',
+      prompt: ticket,
+      output: { schema: urgent },
+    });
+    assert.strictEqual(whole.usage.inputTokens, 3);
+    assert.strictEqual(whole.usage.outputTokens, undefined);
+  });
+
+  it('refuses an extra number JSON cannot carry', async () => {
+    const ai = genkit({ plugins: [typeSafe()] });
+    const before = server.requests.length;
+    await assert.rejects(
+      ai.generate({
+        model: 'typesafe/jev-1.13.0',
+        prompt: ticket,
+        config: { extra: { trace: { sample: Number.POSITIVE_INFINITY } } },
+        output: { schema: z.object({ u: noul().describe('Urgent?') }) },
+      }),
+      (e: GenkitError) =>
+        e.status === 'INVALID_ARGUMENT' && /request is not JSON/.test(e.message)
+    );
+    assert.strictEqual(server.requests.length, before);
+  });
+
+  it('drops undeclared probabilities, typed and at run time', async () => {
+    const ai = genkit({ plugins: [typeSafe()] });
+    const Pick = z.object({
+      pick: choice({ a: 'A', b: 'B' }).describe('Which?'),
+    });
+    const jsonSchema = systemOne.schema({
+      pick: {
+        type: 'choice',
+        instructions: 'Which?',
+        options: [{ name: 'a' }, { name: 'b' }],
+      },
+    });
+    for (const c of [1.5, null, 'x']) {
+      server.answers = {
+        pick: { choice: 'a', probabilities: { a: 0.7, b: 0.3, c } },
+      };
+      const typed = await ai.generate({
+        model: 'typesafe/jev-1.13.0',
+        prompt: ticket,
+        output: { schema: Pick },
+      });
+      assert.deepStrictEqual(typed.output!.pick.probabilities, {
+        a: 0.7,
+        b: 0.3,
+      });
+      const runtime = await ai.generate({
+        model: 'typesafe/jev-1.13.0',
+        prompt: ticket,
+        output: { jsonSchema },
+      });
+      assert.deepStrictEqual((runtime.output as any).pick.probabilities, {
+        a: 0.7,
+        b: 0.3,
+      });
+      assert.strictEqual(
+        (responseInfo(runtime).answers!.pick as any).probabilities.c,
+        c
+      );
+    }
+  });
+
   it('omits usage the server does not report', async () => {
     server.usage = undefined as any;
     const ai = genkit({ plugins: [typeSafe()] });

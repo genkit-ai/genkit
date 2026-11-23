@@ -191,7 +191,12 @@ function resolveRef(
   seen: Set<string> = new Set()
 ): JsonObject {
   const ref = prop.$ref;
-  if (typeof ref !== 'string' || !ref.startsWith('#')) return prop;
+  if (ref === undefined) return prop;
+  if (typeof ref !== 'string' || !ref.startsWith('#')) {
+    throw invalidSchema(
+      'the output schema has a $ref that is not a pointer into itself (one that starts with #)'
+    );
+  }
   if (seen.has(ref)) {
     throw invalidSchema(`the output schema's $ref "${ref}" refers to itself`);
   }

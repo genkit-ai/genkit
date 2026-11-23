@@ -58,6 +58,10 @@ export function stringifyBody(body: unknown): string {
   const raws: string[] = [];
   const token = `systemone-raw-${Math.random().toString(36).slice(2)}-`;
   const text = JSON.stringify(body, (_key, value) => {
+    // JSON would write NaN and Infinity as null, which is not what was meant.
+    if (typeof value === 'number' && !Number.isFinite(value)) {
+      throw new Error('a number is NaN or infinite, which JSON cannot carry');
+    }
     if (value instanceof RawJson) {
       raws.push(value.text);
       return `${token}${raws.length - 1}`;
@@ -213,10 +217,9 @@ class StateBuilder {
       if (!stateJSON) return part.text;
       try {
         JSON.parse(part.text);
-      } catch (e) {
-        throw invalidArgument(
-          `stateJSON is set but the text is not JSON: ${(e as Error).message}`
-        );
+      } catch {
+        // The parser's message quotes the text, which is the state.
+        throw invalidArgument('stateJSON is set but the text is not JSON');
       }
       return new RawJson(part.text);
     }

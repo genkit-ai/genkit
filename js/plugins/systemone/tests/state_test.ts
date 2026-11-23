@@ -273,7 +273,13 @@ describe('state', () => {
           true,
           none
         ),
-      /stateJSON is set but the text is not JSON/
+      (e: Error) =>
+        /stateJSON is set but the text is not JSON/.test(e.message) &&
+        !e.message.includes('prose')
+    );
+    assert.throws(
+      () => stringifyBody({ extra: { score: Number.NaN } }),
+      /NaN or infinite/
     );
   });
 

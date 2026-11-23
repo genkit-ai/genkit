@@ -547,7 +547,8 @@ export function responseInfo(
     typeof raw.answers === 'object' &&
     !Array.isArray(raw.answers)
   ) {
-    info.answers = raw.answers;
+    // A copy, so a change to the info does not change the response.
+    info.answers = structuredClone(raw.answers);
   }
   return info;
 }

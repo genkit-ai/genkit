@@ -200,8 +200,10 @@ async function generate(
     { signal: abortSignal, apiKey: apiKey || undefined }
   );
   // A count the server leaves out stays out, rather than reading as zero.
+  // A count is a whole number from 0 (JSON's 3.0 is 3); anything else,
+  // such as 3.5, -1, or 1e400, which parses as Infinity, is left out.
   const count = (n: unknown) =>
-    typeof n === 'number' && Number.isFinite(n) ? n : undefined;
+    typeof n === 'number' && Number.isSafeInteger(n) && n >= 0 ? n : undefined;
   const inputTokens = count(resp.usage?.input_tokens);
   const outputTokens = count(resp.usage?.output_tokens);
   logger.debug(
