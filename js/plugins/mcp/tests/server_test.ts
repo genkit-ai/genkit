@@ -265,9 +265,10 @@ describe('createMcpServer', async () => {
     it('should still start when two tools share a short name', async () => {
       const server = await isolatedServer((ai) => {
         ai.defineTool({ name: 'a/x', description: 'a' }, async () => 'a');
-        ai.defineTool({ name: 'b/x', description: 'b' }, async () => 'b');
+        ai.defineTool({ name: 'x', description: 'x' }, async () => 'x');
       });
-      assert.strictEqual(await call(server, 'b/x'), 'b');
+      assert.strictEqual(await call(server, 'x'), 'x');
+      assert.strictEqual(await call(server, 'a/x'), 'a');
     });
 
     async function isolatedServer(define: (ai: GenkitBeta) => void) {
@@ -339,6 +340,8 @@ describe('createMcpServer', async () => {
       );
       const schema = await toolSchema(server, 'flow_greet');
       assert.deepStrictEqual(schema?.required, ['input']);
+      // Core rejects undefined for an optional root schema.
+      await assert.rejects(call(server, 'flow_greet', {}));
     });
 
     it('should rebase $ref pointers in a wrapped flow input schema', async () => {

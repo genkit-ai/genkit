@@ -244,8 +244,8 @@ export class GenkitMcpServer {
   async callTool(req: CallToolRequest): Promise<CallToolResult> {
     await this.setup();
     const tool =
-      this.mcpTools().find(([name]) => name === req.params.name)?.[1] ??
-      this.toolActions.find((t) => t.__action.name === req.params.name);
+      this.toolActions.find((t) => t.__action.name === req.params.name) ??
+      this.mcpTools().find(([name]) => name === req.params.name)?.[1];
     if (!tool)
       throw new GenkitError({
         status: 'NOT_FOUND',
