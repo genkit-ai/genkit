@@ -82,11 +82,14 @@ g := genkit.Init(ctx, genkit.WithPlugins(client))
 tool := genkit.LookupTool(g, "filesystem/read_file")
 ```
 
-Dynamic tool names use `client-name/tool-name`. The existing `GetActiveTools`
-method still returns detached tools with underscore-prefixed names for callers
-that want to choose when to register them. Genkit treats the first `/` in an
-action name as the end of the provider name, so a client whose name contains
+Dynamic tool names use `client-name/tool-name`. Genkit treats the first `/` in
+an action name as the end of the provider name, so a client whose name contains
 `/` cannot resolve its tools dynamically.
+
+Dynamic tools are for the Dev UI and for running a tool directly. Model plugins
+that validate tool names, such as Google GenAI and Anthropic, reject a name
+containing `/`. To pass MCP tools to `genkit.Generate`, use `GetActiveTools`,
+which returns detached tools with underscore-prefixed names.
 
 Genkit caches a tool after its first lookup. If the MCP server changes its tool
 names or schemas, create a new Genkit instance to refresh those cached actions.

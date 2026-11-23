@@ -86,6 +86,9 @@ func TestMCPClientDynamicActions(t *testing.T) {
 	if action := client.ResolveAction(api.ActionTypeToolV2, "echo"); action == nil || action.Name() != "remote/echo" {
 		t.Fatalf("ResolveAction(tool.v2, echo) = %v, want remote/echo", action)
 	}
+	if action := client.ResolveAction(api.ActionTypeTool, "echo"); action == nil || action.Name() != "remote/echo" {
+		t.Fatalf("ResolveAction(tool, echo) = %v, want remote/echo", action)
+	}
 
 	assertEcho(t, lookupEcho(t, client), "hello")
 }
