@@ -119,18 +119,16 @@ function commonRef(
   return modelRef({
     name: `${DEFAULT_NAMESPACE}/${name}`,
     configSchema,
-    info:
-      info ??
-      ({
-        supports: {
-          multiturn: true,
-          media: true,
-          tools: true,
-          toolChoice: false,
-          systemRole: false,
-          output: ['text'],
-        },
-      } as ModelInfo),
+    info: info ?? {
+      supports: {
+        multiturn: true,
+        media: true,
+        tools: true,
+        toolChoice: false,
+        systemRole: false,
+        output: ['text'],
+      },
+    },
   });
 }
 

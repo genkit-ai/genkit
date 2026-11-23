@@ -198,15 +198,16 @@ export function defineEmbedder(
 
       const embeddings = await Promise.all(
         request.input.map(async (doc) => {
+          const embedRequest: EmbedContentRequest = {
+            taskType: request.options?.taskType,
+            title: request.options?.title,
+            content: toGeminiMessage({ role: 'user', content: doc.content }),
+            outputDimensionality: request.options?.outputDimensionality,
+          };
           const response = await embedContent(
             embedApiKey,
             embedVersion,
-            {
-              taskType: request.options?.taskType,
-              title: request.options?.title,
-              content: toGeminiMessage({ role: 'user', content: doc.content }),
-              outputDimensionality: request.options?.outputDimensionality,
-            } as EmbedContentRequest,
+            embedRequest,
             clientOptions
           );
           const values = response.embedding.values;

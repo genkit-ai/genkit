@@ -731,9 +731,8 @@ function fromCodeExecutionResult(part: GeminiPart): Part {
 }
 
 function fromGeminiText(part: GeminiPart): Part {
-  return maybeAddThoughtSignatureAndMetadata(part, {
-    text: part.text,
-  } as TextPart);
+  const textPart: TextPart = { text: part.text ?? '' };
+  return maybeAddThoughtSignatureAndMetadata(part, textPart);
 }
 
 function fromGeminiToolCall(part: GeminiPart): Part {

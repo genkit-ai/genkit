@@ -145,58 +145,42 @@ function vertexAIPlugin(options?: VertexPluginOptions): GenkitPluginV2 {
   });
 }
 
-export type VertexAIPlugin = {
-  (pluginOptions?: VertexPluginOptions): GenkitPluginV2;
-  model(
-    name: gemini.KnownTtsModels | (gemini.TTSModelName & {}),
-    config?: gemini.GeminiTtsConfig
-  ): ModelReference<gemini.GeminiTtsConfigSchemaType>;
-  model(
-    name: gemini.KnownImageModels | (gemini.ImageModelName & {}),
-    config?: gemini.GeminiImageConfig
-  ): ModelReference<gemini.GeminiImageConfigSchemaType>;
-  model(
-    name: gemini.KnownVideoModels | (gemini.VideoModelName & {}),
-    config?: gemini.GeminiVideoConfig
-  ): ModelReference<gemini.GeminiVideoConfigSchemaType>;
-  model(
-    name: gemini.KnownGeminiModels | (gemini.GeminiModelName & {}),
-    config?: gemini.GeminiConfig
-  ): ModelReference<gemini.GeminiConfigSchemaType>;
-  model(
-    name: imagen.KnownModels | (imagen.ImagenModelName & {}),
-    config?: imagen.ImagenConfig
-  ): ModelReference<imagen.ConfigSchemaType>;
-  model(
-    name: lyria.KnownModels | (lyria.LyriaModelName & {}),
-    config: lyria.LyriaConfig
-  ): ModelReference<lyria.LyriaConfigSchemaType>;
-  model(
-    name: veo.KnownModels | (veo.VeoModelName & {}),
-    config: veo.VeoConfig
-  ): ModelReference<veo.VeoConfigSchemaType>;
-  model(
-    name: deepResearch.KnownModels | (deepResearch.DeepResearchModelName & {}),
-    config?: deepResearch.DeepResearchConfig
-  ): ModelReference<deepResearch.DeepResearchConfigSchemaType>;
-  model(name: string, config?: any): ModelReference<GenkitSchema>;
-
-  embedder(
-    name: embedder.KnownModels | (embedder.EmbedderModelName & {}),
-    config?: embedder.EmbeddingConfig
-  ): EmbedderReference<embedder.EmbeddingConfigSchemaType>;
-};
-
-/**
- * Google Cloud Vertex AI plugin for Genkit.
- * Includes Gemini and Imagen models and text embedder.
- */
-export const vertexAI = vertexAIPlugin as VertexAIPlugin;
-// provide generic implementation for the model function overloads.
-(vertexAI as any).model = (
-  name: string,
-  config?: any
-): ModelReference<GenkitSchema> => {
+// Overloads give each model family its own config type. The implementation
+// signature is general, so the overloads (not a cast) carry the types.
+function model(
+  name: gemini.KnownTtsModels | (gemini.TTSModelName & {}),
+  config?: gemini.GeminiTtsConfig
+): ModelReference<gemini.GeminiTtsConfigSchemaType>;
+function model(
+  name: gemini.KnownImageModels | (gemini.ImageModelName & {}),
+  config?: gemini.GeminiImageConfig
+): ModelReference<gemini.GeminiImageConfigSchemaType>;
+function model(
+  name: gemini.KnownVideoModels | (gemini.VideoModelName & {}),
+  config?: gemini.GeminiVideoConfig
+): ModelReference<gemini.GeminiVideoConfigSchemaType>;
+function model(
+  name: gemini.KnownGeminiModels | (gemini.GeminiModelName & {}),
+  config?: gemini.GeminiConfig
+): ModelReference<gemini.GeminiConfigSchemaType>;
+function model(
+  name: imagen.KnownModels | (imagen.ImagenModelName & {}),
+  config?: imagen.ImagenConfig
+): ModelReference<imagen.ConfigSchemaType>;
+function model(
+  name: lyria.KnownModels | (lyria.LyriaModelName & {}),
+  config: lyria.LyriaConfig
+): ModelReference<lyria.LyriaConfigSchemaType>;
+function model(
+  name: veo.KnownModels | (veo.VeoModelName & {}),
+  config: veo.VeoConfig
+): ModelReference<veo.VeoConfigSchemaType>;
+function model(
+  name: deepResearch.KnownModels | (deepResearch.DeepResearchModelName & {}),
+  config?: deepResearch.DeepResearchConfig
+): ModelReference<deepResearch.DeepResearchConfigSchemaType>;
+function model(name: string, config?: any): ModelReference<GenkitSchema>;
+function model(name: string, config?: any): ModelReference<GenkitSchema> {
   if (imagen.isImagenModelName(name)) {
     return imagen.model(name, config);
   }
@@ -211,12 +195,24 @@ export const vertexAI = vertexAIPlugin as VertexAIPlugin;
   }
   // gemini, image, TTS and unknown model families
   return gemini.model(name, config);
-};
-vertexAI.embedder = (
-  name: string,
+}
+
+function embedderRef(
+  name: embedder.KnownModels | (embedder.EmbedderModelName & {}),
   config?: embedder.EmbeddingConfig
-): EmbedderReference<embedder.EmbeddingConfigSchemaType> => {
+): EmbedderReference<embedder.EmbeddingConfigSchemaType> {
   return embedder.model(name, config);
-};
+}
+
+/**
+ * Google Cloud Vertex AI plugin for Genkit.
+ * Includes Gemini and Imagen models and text embedder.
+ */
+export const vertexAI = Object.assign(vertexAIPlugin, {
+  model,
+  embedder: embedderRef,
+});
+
+export type VertexAIPlugin = typeof vertexAI;
 
 export default vertexAI;

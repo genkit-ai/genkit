@@ -79,12 +79,10 @@ import {
   GenerateContentResponse,
   GenerationConfig,
   GoogleAIPluginOptions,
-  GoogleSearchRetrievalTool,
   Model,
   SafetySetting,
   Tool,
   ToolConfig,
-  UrlContextTool,
 } from './types.js';
 import {
   DEFAULT_NAMESPACE,
@@ -1142,13 +1140,13 @@ export function defineModel(
         tools.push({
           googleSearch:
             googleSearchRetrieval === true ? {} : googleSearchRetrieval,
-        } as GoogleSearchRetrievalTool);
+        });
       }
 
       if (googleSearch || google_search) {
         tools.push({
           google_search: google_search || googleSearch,
-        }) as GoogleSearchRetrievalTool;
+        });
       }
 
       if (fileSearch) {
@@ -1160,7 +1158,7 @@ export function defineModel(
       if (urlContext) {
         tools.push({
           urlContext: urlContext === true ? {} : urlContext,
-        } as UrlContextTool);
+        });
       }
 
       if (useInteractions) {
@@ -1267,22 +1265,21 @@ export function defineModel(
         };
       }
 
-      if (toolConfigConfig) {
+      if (isObject(toolConfigConfig)) {
         // We need it in snake case or it doesn't work
-        const toolConfigRecord = toolConfigConfig as Record<string, unknown>;
         if (
           Object.hasOwnProperty.call(
-            toolConfigRecord,
+            toolConfigConfig,
             'includeServerSideToolInvocations'
           )
         ) {
-          toolConfigRecord['include_server_side_tool_invocations'] =
-            toolConfigRecord['includeServerSideToolInvocations'];
-          delete toolConfigRecord['includeServerSideToolInvocations'];
+          toolConfigConfig['include_server_side_tool_invocations'] =
+            toolConfigConfig['includeServerSideToolInvocations'];
+          delete toolConfigConfig['includeServerSideToolInvocations'];
         }
         toolConfig = {
           ...toolConfig,
-          ...toolConfigRecord,
+          ...toolConfigConfig,
         };
       }
 

@@ -174,10 +174,11 @@ export async function cancelInteraction(
     });
   } catch (e: any) {
     if (e instanceof GenkitError && e.status === 'CANCELLED') {
-      return {
+      const cancelled: GeminiInteraction = {
         id: interactionId,
         status: 'cancelled',
-      } as GeminiInteraction;
+      };
+      return cancelled;
     }
     throw e;
   }
