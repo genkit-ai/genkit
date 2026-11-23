@@ -206,6 +206,89 @@ func TestJSONFormatter(t *testing.T) {
 		}
 	})
 
+	t.Run("ParseOutput parses a scalar root", func(t *testing.T) {
+		tests := []struct {
+			desc   string
+			schema map[string]any
+			text   string
+			want   any
+		}{
+			{"integer", map[string]any{"type": "integer"}, "42", float64(42)},
+			{"number in markdown", map[string]any{"type": "number"}, "```json\n3.5\n```", 3.5},
+			{"boolean", map[string]any{"type": "boolean"}, " false\n", false},
+			{"string", map[string]any{"type": "string"}, `"hello"`, "hello"},
+			{"string enum", map[string]any{"type": "string", "enum": []any{"red", "green"}}, `"green"`, "green"},
+			{"string holding braces", map[string]any{"type": "string"}, `"a {b} [c]"`, "a {b} [c]"},
+		}
+		for _, tt := range tests {
+			t.Run(tt.desc, func(t *testing.T) {
+				handler, _ := jsonFormatter{}.Handler(tt.schema)
+				sfh := handler.(StreamingFormatHandler)
+
+				got, err := sfh.ParseOutput(&Message{
+					Role:    RoleModel,
+					Content: []*Part{NewTextPart(tt.text)},
+				})
+				if err != nil {
+					t.Fatalf("ParseOutput() error = %v", err)
+				}
+				if got != tt.want {
+					t.Errorf("ParseOutput() = %#v, want %#v", got, tt.want)
+				}
+			})
+		}
+	})
+
+	t.Run("ParseOutput rejects a scalar that breaks the schema", func(t *testing.T) {
+		handler, _ := jsonFormatter{}.Handler(map[string]any{"type": "string", "enum": []any{"red", "green"}})
+		sfh := handler.(StreamingFormatHandler)
+
+		_, err := sfh.ParseOutput(&Message{
+			Role:    RoleModel,
+			Content: []*Part{NewTextPart(`"blue"`)},
+		})
+		if err == nil {
+			t.Error("ParseOutput() should fail validation for a value outside the enum")
+		}
+	})
+
+	t.Run("ParseOutput leaves prose unparsed", func(t *testing.T) {
+		handler, _ := jsonFormatter{}.Handler(nil)
+		sfh := handler.(StreamingFormatHandler)
+
+		got, err := sfh.ParseOutput(&Message{
+			Role:    RoleModel,
+			Content: []*Part{NewTextPart("The answer is 42.")},
+		})
+		if err != nil {
+			t.Fatalf("ParseOutput() error = %v", err)
+		}
+		if got != nil {
+			t.Errorf("ParseOutput() = %#v, want nil", got)
+		}
+	})
+
+	t.Run("ParseChunk parses a scalar once it is complete", func(t *testing.T) {
+		handler, _ := jsonFormatter{}.Handler(map[string]any{"type": "string"})
+		sfh := handler.(StreamingFormatHandler)
+
+		got, err := sfh.ParseChunk(&ModelResponseChunk{Content: []*Part{NewTextPart(`"hel`)}})
+		if err != nil {
+			t.Fatalf("ParseChunk() error = %v", err)
+		}
+		if got != nil {
+			t.Errorf("ParseChunk() partial = %#v, want nil", got)
+		}
+
+		got, err = sfh.ParseChunk(&ModelResponseChunk{Content: []*Part{NewTextPart(`lo"`)}})
+		if err != nil {
+			t.Fatalf("ParseChunk() error = %v", err)
+		}
+		if got != "hello" {
+			t.Errorf("ParseChunk() = %#v, want %q", got, "hello")
+		}
+	})
+
 	t.Run("ParseChunk handles partial JSON", func(t *testing.T) {
 		handler, _ := jsonFormatter{}.Handler(nil)
 		sfh := handler.(StreamingFormatHandler)

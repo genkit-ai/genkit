@@ -2459,6 +2459,30 @@ func TestGenerateData(t *testing.T) {
 			t.Errorf("output.Value = %d, want 42", output.Value)
 		}
 	})
+
+	t.Run("returns a scalar root", func(t *testing.T) {
+		scalarModel := defineModel(r, "test/scalarDataModel", &ModelOptions{
+			Supports: &ModelSupports{
+				Constrained: ConstrainedSupportAll,
+			},
+		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+			return &ModelResponse{
+				Request: req,
+				Message: NewModelTextMessage(`42`),
+			}, nil
+		})
+
+		output, _, err := GenerateData[int](context.Background(), r,
+			WithModel(scalarModel),
+			WithPrompt("get value"),
+		)
+		if err != nil {
+			t.Fatalf("GenerateData error: %v", err)
+		}
+		if *output != 42 {
+			t.Errorf("output = %d, want 42", *output)
+		}
+	})
 }
 
 // TestGenerateDataCallerSchemaOverride verifies that GenerateData injects the

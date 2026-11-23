@@ -381,6 +381,16 @@ func (j *jsonHandler) parseJSON(text string) (any, error) {
 	if err != nil {
 		return nil, nil
 	}
+	if result == nil {
+		// No object or array in the text. A schema with a scalar root (a
+		// number, a boolean, a string or an enum of them) is answered with
+		// that value alone, so the whole text is tried as one JSON value. A
+		// streamed scalar parses once it is complete.
+		var scalar any
+		if json.Unmarshal([]byte(strings.TrimSpace(extracted)), &scalar) == nil {
+			return scalar, nil
+		}
+	}
 
 	return result, nil
 }
