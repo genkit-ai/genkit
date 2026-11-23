@@ -26,6 +26,7 @@ const {
   mockStartMcpServer,
   mockWarnIfLegacyGenkitContext,
   mockLoadDocs,
+  mockServerHarnessAction,
 } = vi.hoisted(() => ({
   mockNotifyAnalyticsIfFirstRun: vi.fn(() => Promise.resolve()),
   mockRecord: vi.fn(() => Promise.resolve()),
@@ -36,6 +37,7 @@ const {
   mockStartMcpServer: vi.fn(() => Promise.resolve()),
   mockWarnIfLegacyGenkitContext: vi.fn(() => Promise.resolve()),
   mockLoadDocs: vi.fn(() => Promise.resolve({})),
+  mockServerHarnessAction: vi.fn(),
 }));
 
 vi.mock('@genkit-ai/tools-common/utils', async (importOriginal) => {
@@ -81,6 +83,19 @@ vi.mock('../src/commands/plugins.js', () => ({
   getPluginCommands: vi.fn(() => Promise.resolve([])),
   getPluginSubCommand: vi.fn(() => Promise.resolve(undefined)),
 }));
+
+vi.mock('../src/commands/server-harness.js', async () => {
+  const { Command } = await import('commander');
+  return {
+    SERVER_HARNESS_COMMAND: '__server-harness',
+    serverHarness: new Command('__server-harness')
+      .argument('<port>')
+      .argument('<logFile>')
+      .action((port: string, logFile: string) => {
+        mockServerHarnessAction(port, logFile);
+      }),
+  };
+});
 
 describe('startCLI', () => {
   const originalArgv = process.argv;
@@ -131,5 +146,41 @@ describe('startCLI', () => {
     expect(mockNotifyAnalyticsIfFirstRun).toHaveBeenCalledOnce();
     expect(mockShowUpdateNotification).toHaveBeenCalledOnce();
     expect(mockLoadDocs).toHaveBeenCalledOnce();
+  });
+
+  it('passes the detected projectRuntime to notifyAnalyticsIfFirstRun', async () => {
+    mockDetectRuntime.mockResolvedValueOnce('go');
+    process.argv = ['node', 'genkit', 'docs:list', 'js'];
+
+    await startCLI();
+
+    expect(mockNotifyAnalyticsIfFirstRun).toHaveBeenCalledExactlyOnceWith('go');
+  });
+
+  it('skips first-run analytics prompt when --non-interactive is set', async () => {
+    process.argv = ['node', 'genkit', '--non-interactive', 'docs:list', 'js'];
+
+    await startCLI();
+
+    expect(mockNotifyAnalyticsIfFirstRun).not.toHaveBeenCalled();
+    expect(mockLoadDocs).toHaveBeenCalledOnce();
+  });
+
+  it('skips first-run analytics prompt for __server-harness daemon process', async () => {
+    process.argv = [
+      'node',
+      'genkit',
+      '__server-harness',
+      '4000',
+      '/tmp/devui.log',
+    ];
+
+    await startCLI();
+
+    expect(mockNotifyAnalyticsIfFirstRun).not.toHaveBeenCalled();
+    expect(mockServerHarnessAction).toHaveBeenCalledExactlyOnceWith(
+      '4000',
+      '/tmp/devui.log'
+    );
   });
 });
