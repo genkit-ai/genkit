@@ -54,7 +54,7 @@ func rejectBackgroundModel(provider, id string) error {
 // GoogleAI is a Genkit plugin for interacting with the Google AI service.
 type GoogleAI struct {
 	APIKey     string // API key to access the service. If empty, the values of the environment variables GEMINI_API_KEY or GOOGLE_API_KEY will be consulted, in that order.
-	APIVersion string // API version to use ("v1", "v1beta", or "v1alpha"). If empty, the genai SDK default (v1beta) is used. Can be overridden per-request via config.HTTPOptions.APIVersion.
+	APIVersion string // API version to use ("v1", "v1beta", or "v1alpha"). If empty, the GOOGLE_GENAI_API_VERSION environment variable is consulted, then v1beta, which serves context caching. Can be overridden per-request via config.HTTPOptions.APIVersion.
 
 	// BaseURL overrides the default API endpoint
 	// (https://generativelanguage.googleapis.com), e.g. to point at a proxy
@@ -268,6 +268,12 @@ func (ga *GoogleAI) Init(ctx context.Context) []api.Action {
 		}
 	}
 
+	// The SDK defaults the Gemini API to v1, which does not serve context
+	// caching, so the plugin keeps v1beta unless told otherwise.
+	apiVersion := ga.APIVersion
+	if apiVersion == "" && os.Getenv("GOOGLE_GENAI_API_VERSION") == "" {
+		apiVersion = "v1beta"
+	}
 	gc := genai.ClientConfig{
 		Backend:    genai.BackendGeminiAPI,
 		APIKey:     apiKey,
@@ -275,7 +281,7 @@ func (ga *GoogleAI) Init(ctx context.Context) []api.Action {
 		HTTPOptions: genai.HTTPOptions{
 			BaseURL:    ga.BaseURL,
 			Headers:    mergedHeaders(ga.Headers),
-			APIVersion: ga.APIVersion,
+			APIVersion: apiVersion,
 		},
 	}
 
