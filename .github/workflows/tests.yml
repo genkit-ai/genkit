@@ -54,6 +54,8 @@ jobs:
         cache: pnpm
     - name: Install dependencies and build
       run: cd genkit-tools && pnpm install && pnpm build
+    - name: Lint and typecheck
+      run: cd genkit-tools && pnpm lint && pnpm typecheck
     - name: Run tests
       run: pnpm test:genkit-tools
     - name: Validate working directory is clean

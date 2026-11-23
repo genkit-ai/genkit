@@ -23,6 +23,7 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "pnpm genversion && tsc",
+    "typecheck": "pnpm genversion && tsc --noEmit -p tsconfig.test.json",
     "build:watch": "tsc --watch",
     "compile:bun": "bun build src/bin/genkit.ts --compile --outfile dist/bin/genkit --minify",
     "test": "vitest run",
