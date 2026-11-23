@@ -73,6 +73,9 @@ func (g *Gemini) Decide(ctx context.Context, model string, r *Request) (*Respons
 	if res.HTTPMeta.Response == nil {
 		return nil, status.Errorf(status.ErrInternal, "%s: the SDK returned no response", g.Name)
 	}
+	// The SDK has closed the network body and left a copy in memory, so
+	// this close only guards against an SDK that streams it.
+	defer res.HTTPMeta.Response.Body.Close()
 	raw, err := io.ReadAll(res.HTTPMeta.Response.Body)
 	if err != nil {
 		return nil, status.Errorf(status.ErrUnavailable, "%s: reading response: %w", g.Name, err)
