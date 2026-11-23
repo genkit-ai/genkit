@@ -36,6 +36,11 @@ type MCPServerOptions struct {
 	Name string
 	// Version number for this server (defaults to "1.0.0" if empty)
 	Version string
+	// ToolFilter selects which Genkit tools this MCP server exposes.
+	// If nil, all tools are exposed. Excluded tools cannot be listed or called
+	// through this server. The filter runs once during initial server setup
+	// (triggered by the first call to ServeStdio, Serve, or GetServer).
+	ToolFilter func(ai.Tool) bool
 }
 
 // GenkitMCPServer represents an MCP server that exposes Genkit tools and resources
@@ -83,6 +88,15 @@ func (s *GenkitMCPServer) setup() error {
 	toolActions, resourceActions, err := s.discoverAndCategorizeActions()
 	if err != nil {
 		return fmt.Errorf("failed to discover actions: %w", err)
+	}
+	if s.options.ToolFilter != nil {
+		filtered := make([]ai.Tool, 0, len(toolActions))
+		for _, tool := range toolActions {
+			if s.options.ToolFilter(tool) {
+				filtered = append(filtered, tool)
+			}
+		}
+		toolActions = filtered
 	}
 
 	// Store discovered actions
@@ -349,7 +363,7 @@ func (s *GenkitMCPServer) GetServer() *server.MCPServer {
 	return s.mcpServer
 }
 
-// ListRegisteredTools returns the names of all discovered tools
+// ListRegisteredTools returns the names of the tools registered on this MCP server.
 func (s *GenkitMCPServer) ListRegisteredTools() []string {
 	var toolNames []string
 	for _, tool := range s.toolActions {

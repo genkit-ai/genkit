@@ -205,6 +205,25 @@ func main() {
 
 ```
 
+### Limit exposed tools
+
+Use `ToolFilter` to choose which registered Genkit tools an MCP server exposes:
+
+```go
+server := mcp.NewMCPServer(g, mcp.MCPServerOptions{
+    Name: "public-api",
+    ToolFilter: func(tool ai.Tool) bool {
+        return tool.Name() == "public_search" || tool.Name() == "public_lookup"
+    },
+})
+```
+
+Import `github.com/firebase/genkit/go/ai` for `ai.Tool`. The filter runs once
+when the MCP server is first set up (on the first call to `ServeStdio`, `Serve`,
+or `GetServer`). Excluded tools remain available inside Genkit, but MCP clients
+cannot list or call them through this server. Without a filter, all registered
+tools are exposed.
+
 ## Testing Your Server
 
 ```bash
