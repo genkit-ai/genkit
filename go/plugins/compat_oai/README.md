@@ -197,6 +197,17 @@ format, since OpenAI accepts only an object at the schema root and rejects the
 rest with a 400. List `"array"` and `"enum"` only where the provider takes
 those roots, as xAI, Kimi, and Anthropic's compatible endpoint do.
 
+The `json` format sends whatever schema it is given, and `ai.WithOutputType`
+of a slice gives it an array root. A provider that, like OpenAI, accepts only
+an object at the root sets `OpenAICompatible.ObjectSchemaRoot`. A schema with
+any other root (an array, enum, scalar, or `anyOf`) then goes out wrapped as
+the single property `value` of an object, and the plugin unwraps the reply,
+streamed or not, before the framework parses it:
+
+```go
+p.openAICompatible.ObjectSchemaRoot = true
+```
+
 A provider that answers with a misleading HTTP code, such as an unknown model
 answered with 400 rather than 404, sets `OpenAICompatible.ClassifyError` to
 read the real status out of the error body, so retry and fallback middleware

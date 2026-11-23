@@ -54,6 +54,11 @@ type ModelGenerator struct {
 	mediaTypes []string
 	// classify is the provider's [OpenAICompatible.ClassifyError].
 	classify func(*openai.Error) status.Name
+	// objectSchemaRoot is [OpenAICompatible.ObjectSchemaRoot].
+	objectSchemaRoot bool
+	// unwrapRoot records that the request's schema went out wrapped, so the
+	// reply's text is unwrapped before the framework parses it.
+	unwrapRoot bool
 	// Store any errors that occur during building
 	err error
 }
@@ -79,6 +84,13 @@ func NewModelGenerator(client *openai.Client, modelName string) *ModelGenerator 
 // apart from completion_tokens; see [OpenAICompatible.SeparateReasoningTokens].
 func (g *ModelGenerator) withSeparateReasoning(separate bool) *ModelGenerator {
 	g.separateReasoning = separate
+	return g
+}
+
+// withObjectSchemaRoot records that the provider takes only an object at the
+// schema root; see [OpenAICompatible.ObjectSchemaRoot].
+func (g *ModelGenerator) withObjectSchemaRoot(objectOnly bool) *ModelGenerator {
+	g.objectSchemaRoot = objectOnly
 	return g
 }
 
@@ -584,7 +596,27 @@ func (g *ModelGenerator) applyResponseFormat(output *ai.ModelOutputConfig) {
 			format = jsonSchemaFormat(output.Schema)
 		}
 	}
+	// A host that takes only an object at the schema root gets any other
+	// root wrapped in one, and the reply is unwrapped.
+	if g.objectSchemaRoot && format.OfJSONSchema != nil && output.Format == ai.OutputFormatJSON && !hasObjectRoot(output.Schema) {
+		format = jsonSchemaFormat(wrapSchemaRoot(output.Schema))
+		g.unwrapRoot = true
+	}
 	g.request.ResponseFormat = format
+}
+
+// unwrapMessage replaces a wrapped reply's text with the wrapped value. Text
+// that accompanies tool calls is a preamble, not the output, and is left
+// alone.
+func unwrapMessage(m *ai.Message) {
+	if m == nil || slices.ContainsFunc(m.Content, (*ai.Part).IsToolRequest) {
+		return
+	}
+	for _, p := range m.Content {
+		if p.IsText() {
+			p.Text = unwrapText(p.Text)
+		}
+	}
 }
 
 // jsonSchemaFormat is a strict json_schema response format for schema.
@@ -689,6 +721,12 @@ func (g *ModelGenerator) generateStream(ctx context.Context, req *ai.ModelReques
 	// instead, which ends the stream rather than reaching this loop. See
 	// [wrapStreamError].
 	var failure map[string]any
+	// A wrapped schema's reply streams as {"value": ...}; the unwrapper
+	// strips that so chunks read as the caller's value.
+	var unwrapper *streamUnwrapper
+	if g.unwrapRoot {
+		unwrapper = &streamUnwrapper{}
+	}
 
 	for stream.Next() {
 		chunk := stream.Current()
@@ -728,8 +766,22 @@ func (g *ModelGenerator) generateStream(ctx context.Context, req *ai.ModelReques
 		}
 
 		// Handle content delta
-		if chunk.Choices[0].Delta.Content != "" {
-			modelChunk.Content = append(modelChunk.Content, ai.NewTextPart(chunk.Choices[0].Delta.Content))
+		// Text beside a tool call is a preamble, not the output, so once a
+		// tool call arrives the rest of the text passes through as sent, as
+		// it does in the final message.
+		if unwrapper != nil && len(chunk.Choices[0].Delta.ToolCalls) > 0 {
+			if rest := unwrapper.passThrough(); rest != "" {
+				modelChunk.Content = append(modelChunk.Content, ai.NewTextPart(rest))
+			}
+			unwrapper = nil
+		}
+		if text := chunk.Choices[0].Delta.Content; text != "" {
+			if unwrapper != nil {
+				text = unwrapper.push(text)
+			}
+			if text != "" {
+				modelChunk.Content = append(modelChunk.Content, ai.NewTextPart(text))
+			}
 		}
 
 		// Handle tool call deltas
@@ -762,6 +814,14 @@ func (g *ModelGenerator) generateStream(ctx context.Context, req *ai.ModelReques
 		return nil, wrapStreamError(err, g.classify)
 	}
 
+	if unwrapper != nil {
+		if rest := unwrapper.flush(); rest != "" {
+			if err := handleChunk(ctx, &ai.ModelResponseChunk{Content: []*ai.Part{ai.NewTextPart(rest)}}); err != nil {
+				return nil, fmt.Errorf("callback error: %w", err)
+			}
+		}
+	}
+
 	if usageSeen {
 		acc.Usage = usage
 	}
@@ -770,6 +830,9 @@ func (g *ModelGenerator) generateStream(ctx context.Context, req *ai.ModelReques
 	resp, err := convertChatCompletionToModelResponse(&acc.ChatCompletion, g.separateReasoning)
 	if err != nil {
 		return nil, err
+	}
+	if g.unwrapRoot {
+		unwrapMessage(resp.Message)
 	}
 	if reasoningSeen && !slices.ContainsFunc(resp.Message.Content, (*ai.Part).IsReasoning) {
 		resp.Message.Content = append(
@@ -1126,6 +1189,9 @@ func (g *ModelGenerator) generateComplete(ctx context.Context, req *ai.ModelRequ
 	resp, err := convertChatCompletionToModelResponse(completion, g.separateReasoning)
 	if err != nil {
 		return nil, err
+	}
+	if g.unwrapRoot {
+		unwrapMessage(resp.Message)
 	}
 
 	// Set the original request

@@ -347,6 +347,7 @@ func (o *OpenAI) Init(ctx context.Context) []api.Action {
 
 	o.openAICompatible.Provider = provider
 	o.openAICompatible.MediaTypes = mediaTypes
+	o.openAICompatible.ObjectSchemaRoot = true
 	actions := o.openAICompatible.Init(ctx)
 
 	// define default models
