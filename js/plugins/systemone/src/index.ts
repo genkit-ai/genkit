@@ -294,6 +294,29 @@ const LISTING_TIMEOUT_MS = 5_000;
 const LISTING_TTL_MS = 5 * 60_000;
 const LISTING_RETRY_MS = 60_000;
 
+/** The longest timeout a timer takes: 2^31 - 1 milliseconds. */
+const MAX_TIMEOUT_MS = 2_147_483_647;
+
+/** Connection and framing headers, which only the transport sets. */
+const TRANSPORT_HEADERS = [
+  'connection',
+  'content-length',
+  'expect',
+  'host',
+  'keep-alive',
+  'transfer-encoding',
+  'upgrade',
+];
+
+/**
+ * An environment variable, trimmed, so a key read from a file that ends in a
+ * newline works. An explicit `apiKey` is not trimmed: it is checked as given.
+ * Unset or blank is undefined.
+ */
+function env(name: string): string | undefined {
+  return process.env[name]?.trim() || undefined;
+}
+
 function misconfigured(message: string): GenkitError {
   return new GenkitError({ status: 'FAILED_PRECONDITION', message });
 }
@@ -334,7 +357,7 @@ function newPlugin(
   let apiKey = options.apiKey === false ? undefined : options.apiKey;
   const keyDeferred = options.apiKey === false;
   if (preset.apiKeyEnv && !keyDeferred) {
-    apiKey = apiKey || process.env[preset.apiKeyEnv];
+    apiKey = apiKey || env(preset.apiKeyEnv);
     if (!apiKey) {
       throw misconfigured(
         `${provider}: set apiKey or the ${preset.apiKeyEnv} environment variable, or pass apiKey: false to give it per request`
@@ -343,7 +366,7 @@ function newPlugin(
   }
   let baseUrl =
     options.baseUrl ||
-    (preset.baseUrlEnv ? process.env[preset.baseUrlEnv] : undefined) ||
+    (preset.baseUrlEnv ? env(preset.baseUrlEnv) : undefined) ||
     preset.baseUrl ||
     '';
   if (!baseUrl) {
@@ -352,16 +375,26 @@ function newPlugin(
     );
   }
   if (preset.accountEnv && baseUrl.includes('{account}')) {
-    const account = preset.account || process.env[preset.accountEnv];
+    const account = preset.account || env(preset.accountEnv);
     if (!account) {
       throw misconfigured(
         `${provider}: pass an account ID or set the ${preset.accountEnv} environment variable`
       );
     }
-    baseUrl = baseUrl.replaceAll('{account}', pathEscape(account));
+    let segment: string;
+    try {
+      segment = pathEscape(account);
+    } catch {
+      throw misconfigured(
+        `${provider}: the account ID is not valid text (a lone UTF-16 surrogate)`
+      );
+    }
+    // A function, so that $& or $1 in an account ID stays literal.
+    baseUrl = baseUrl.replaceAll('{account}', () => segment);
   }
-  // Checked here rather than at the first request, as Go does, so a typo
-  // fails when the app starts.
+  // Go finds a bad base URL only at the first request; this port checks it
+  // here, so a typo fails when the app starts. The URL is never quoted: it
+  // can carry a password.
   let parsed: URL | undefined;
   try {
     parsed = new URL(baseUrl);
@@ -377,12 +410,29 @@ function newPlugin(
       `${provider}: baseUrl must be an http or https URL with a host`
     );
   }
+  // Paths are appended to the base URL as text, so a query or a fragment
+  // would swallow them, and credentials in it would end up in error messages
+  // of the transport; a key goes in apiKey or headers instead.
   if (
-    options.timeoutMs !== undefined &&
-    !(Number.isFinite(options.timeoutMs) && options.timeoutMs > 0)
+    parsed.username ||
+    parsed.password ||
+    baseUrl.includes('?') ||
+    baseUrl.includes('#')
   ) {
     throw misconfigured(
-      `${provider}: timeoutMs must be a positive number of milliseconds`
+      `${provider}: baseUrl cannot carry credentials, a query, or a fragment`
+    );
+  }
+  if (
+    options.timeoutMs !== undefined &&
+    !(
+      Number.isInteger(options.timeoutMs) &&
+      options.timeoutMs >= 1 &&
+      options.timeoutMs <= MAX_TIMEOUT_MS
+    )
+  ) {
+    throw misconfigured(
+      `${provider}: timeoutMs must be a whole number of milliseconds from 1 to ${MAX_TIMEOUT_MS}`
     );
   }
   let path = rooted(options.path || '/v1/systemone');
@@ -396,6 +446,15 @@ function newPlugin(
     throw misconfigured(
       `${provider}: ${e instanceof HeaderError ? e.message : 'a header cannot be sent'}`
     );
+  }
+  // Headers that describe the connection or the framing are the transport's
+  // to set: given here they would break every request, or be dropped.
+  for (const name of Object.keys(options.headers ?? {})) {
+    if (TRANSPORT_HEADERS.includes(name.toLowerCase())) {
+      throw misconfigured(
+        `${provider}: the ${name} header is the transport's to set, and cannot be given in headers`
+      );
+    }
   }
 
   const trim = (id: string) =>

@@ -817,6 +817,117 @@ describe('systemOne', () => {
     }
   });
 
+  it('refuses a base URL with credentials, a query, or a fragment, unquoted', () => {
+    for (const baseUrl of [
+      'https://user:secret-pass@decisions.example.com/root',
+      'https://decisions.example.com/root?tenant=secret-tenant',
+      'https://decisions.example.com/root#secret-fragment',
+    ]) {
+      assert.throws(
+        () => systemOne({ provider: 'x', baseUrl }),
+        (e: GenkitError) =>
+          e.status === 'FAILED_PRECONDITION' &&
+          /baseUrl cannot carry credentials, a query, or a fragment/.test(
+            e.message
+          ) &&
+          !e.message.includes('secret'),
+        baseUrl
+      );
+    }
+  });
+
+  it('refuses a timeoutMs a timer cannot take, and transport headers', () => {
+    for (const timeoutMs of [1.5, 2 ** 31]) {
+      assert.throws(
+        () => systemOne({ provider: 'x', baseUrl: server.url, timeoutMs }),
+        /timeoutMs must be a whole number of milliseconds from 1 to 2147483647/,
+        String(timeoutMs)
+      );
+    }
+    assert.ok(
+      systemOne({ provider: 'x', baseUrl: server.url, timeoutMs: 2 ** 31 - 1 })
+    );
+    for (const name of [
+      'Host',
+      'connection',
+      'Transfer-Encoding',
+      'keep-alive',
+      'upgrade',
+      'expect',
+      'content-length',
+    ]) {
+      assert.throws(
+        () =>
+          systemOne({
+            provider: 'x',
+            baseUrl: server.url,
+            headers: { [name]: 'x' },
+          }),
+        (e: GenkitError) =>
+          e.status === 'FAILED_PRECONDITION' &&
+          e.message.includes(`the ${name} header is the transport's to set`),
+        name
+      );
+    }
+  });
+
+  it('refuses a key that is not Latin-1, without quoting it', () => {
+    assert.throws(
+      () => systemOne({ provider: 'x', baseUrl: server.url, apiKey: 'ключ' }),
+      (e: GenkitError) =>
+        e.status === 'FAILED_PRECONDITION' &&
+        /the Authorization header cannot be sent/.test(e.message) &&
+        !e.message.includes('ключ')
+    );
+  });
+
+  it('trims keys and accounts read from the environment', async () => {
+    process.env.TYPESAFE_API_KEY = 'env-key\n';
+    await genkit({
+      plugins: [systemOne.typeSafe({ baseUrl: server.url })],
+    }).generate({
+      model: 'typesafe/jev-1.13.0',
+      prompt: ticket,
+      output: { schema: z.object({ u: noul().describe('Urgent?') }) },
+    });
+    assert.strictEqual(
+      server.requests.at(-1)!.headers.authorization,
+      'Bearer env-key'
+    );
+  });
+
+  it('keeps $& in an account ID literal, and refuses one that is not text', async () => {
+    const cf = systemOne.workersAI('team$&one', {
+      apiKey: 't',
+      baseUrl: `${server.url}/client/v4/accounts/{account}`,
+    });
+    await genkit({ plugins: [cf] }).generate({
+      model: 'cloudflare-decisions/typesafe/jev',
+      prompt: ticket,
+      output: { schema: z.object({ ok: noul().describe('Fine?') }) },
+    });
+    assert.strictEqual(
+      server.requests.at(-1)!.url,
+      '/client/v4/accounts/team$&one/ai/run'
+    );
+    assert.throws(
+      () => systemOne.workersAI('team\uD800', { apiKey: 't' }),
+      (e: GenkitError) =>
+        e.status === 'FAILED_PRECONDITION' &&
+        /the account ID is not valid text/.test(e.message)
+    );
+    await assert.rejects(
+      genkit({ plugins: [cf] }).generate({
+        model: 'cloudflare-decisions/@cf/cloudflare/clef\uD800',
+        prompt: ticket,
+        output: { schema: z.object({ ok: noul().describe('Fine?') }) },
+      }),
+      (e: GenkitError) =>
+        e.status === 'INVALID_ARGUMENT' &&
+        /the Workers AI model ID is not valid text/.test(e.message)
+    );
+  });
+
   it('refuses a baseUrl, a timeoutMs, or models it cannot use', () => {
     for (const baseUrl of ['api.example.com', 'ftp://example.com', 'http://']) {
       assert.throws(
@@ -830,7 +941,7 @@ describe('systemOne', () => {
     for (const timeoutMs of [0, -1, Number.NaN, Infinity]) {
       assert.throws(
         () => systemOne({ provider: 'x', baseUrl: server.url, timeoutMs }),
-        /timeoutMs must be a positive number/,
+        /timeoutMs must be a whole number of milliseconds/,
         String(timeoutMs)
       );
     }

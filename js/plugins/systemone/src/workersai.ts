@@ -43,11 +43,18 @@ export function workersAIRoute(
       });
     }
   }
+  let path: string;
+  try {
+    path = '/' + segments.map(pathEscape).join('/');
+  } catch {
+    // A lone UTF-16 surrogate cannot be escaped; the ID is not quoted.
+    throw new GenkitError({
+      status: 'INVALID_ARGUMENT',
+      message: 'systemone: the Workers AI model ID is not valid text',
+    });
+  }
   body.model = segments[segments.length - 1];
-  return {
-    path: '/' + segments.map(pathEscape).join('/'),
-    body,
-  };
+  return { path, body };
 }
 
 /**
@@ -73,8 +80,9 @@ export function unwrapWorkersAI(body: unknown): unknown {
 
 /**
  * Escapes one path segment as Go's url.PathEscape does, so a model ID goes
- * out as Genkit Go sends it, `@cf` and all: `@`, `:`, `$`, `&`, `+`, and `=` stay as they
- * are, and everything else outside the unreserved set is escaped.
+ * out as Genkit Go sends it, `@cf` and all: `@`, `:`, `$`, `&`, `+`, and `=`
+ * stay as they are, and everything else outside the unreserved set is
+ * escaped. It throws a URIError for a lone UTF-16 surrogate.
  */
 export function pathEscape(segment: string): string {
   return encodeURIComponent(segment)
