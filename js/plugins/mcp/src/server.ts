@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type {
   CallToolRequest,
@@ -52,9 +53,6 @@ import { toJsonSchema } from 'genkit/schema';
 import { toToolDefinition, type ToolAction } from 'genkit/tool';
 import type { McpServerOptions } from './index.js';
 
-const loadServer = () => import('@modelcontextprotocol/sdk/server/index.js');
-type Server = InstanceType<Awaited<ReturnType<typeof loadServer>>['Server']>;
-
 /**
  * Represents an MCP (Model Context Protocol) server that exposes Genkit tools
  * and prompts. This class wraps a Genkit instance and makes its registered
@@ -91,9 +89,10 @@ export class GenkitMcpServer {
    */
   async setup(): Promise<void> {
     if (this.actionsResolved) return;
-    const { Server } = await loadServer();
+    const { Server } =
+      await import('@modelcontextprotocol/sdk/server/index.js');
 
-    this.server = new Server(
+    const server = new Server(
       { name: this.options.name, version: this.options.version || '1.0.0' },
       {
         capabilities: {
@@ -114,34 +113,29 @@ export class GenkitMcpServer {
       ReadResourceRequestSchema,
     } = await import('@modelcontextprotocol/sdk/types.js');
 
-    this.server.setRequestHandler(
-      ListToolsRequestSchema,
-      this.listTools.bind(this)
-    );
-    this.server.setRequestHandler(
-      CallToolRequestSchema,
-      this.callTool.bind(this)
-    );
-    this.server.setRequestHandler(
+    server.setRequestHandler(ListToolsRequestSchema, this.listTools.bind(this));
+    server.setRequestHandler(CallToolRequestSchema, this.callTool.bind(this));
+    server.setRequestHandler(
       ListPromptsRequestSchema,
       this.listPrompts.bind(this)
     );
-    this.server.setRequestHandler(
+    server.setRequestHandler(
       ListResourcesRequestSchema,
       this.listResources.bind(this)
     );
-    this.server.setRequestHandler(
+    server.setRequestHandler(
       ListResourceTemplatesRequestSchema,
       this.listResourceTemplates.bind(this)
     );
-    this.server.setRequestHandler(
+    server.setRequestHandler(
       ReadResourceRequestSchema,
       this.readResource.bind(this)
     );
-    this.server.setRequestHandler(
-      GetPromptRequestSchema,
-      this.getPrompt.bind(this)
-    );
+    server.setRequestHandler(GetPromptRequestSchema, this.getPrompt.bind(this));
+    // Dynamic import resolves the ESM Server class declaration while the CJS
+    // type-only import resolves the identical CJS declaration; bridge nominal
+    // private-field incompatibility between the two emitted .d.ts files.
+    this.server = server as unknown as Server;
 
     // TODO -- use listResolvableActions.
     const allActions = await this.ai.registry.listActions();
