@@ -27,9 +27,7 @@ export interface Provider<T> {
 export interface PluginProvider {
   name: string;
   initializer: () =>
-    | InitializedPlugin
-    | void
-    | Promise<InitializedPlugin | void>;
+    InitializedPlugin | void | Promise<InitializedPlugin | void>;
   resolver?: (action: ActionType, target: string) => Promise<void>;
   listActions?: () => Promise<ActionMetadata[]>;
 }

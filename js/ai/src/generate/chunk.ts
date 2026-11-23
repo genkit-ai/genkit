@@ -31,9 +31,9 @@ export type ChunkParser<T = unknown> = (chunk: GenerateResponseChunk<T>) => T;
  * accessors for extracting text, media, tool requests, and accumulated output
  * from the chunk and all preceding chunks in the stream.
  */
-export class GenerateResponseChunk<T = unknown>
-  implements GenerateResponseChunkData
-{
+export class GenerateResponseChunk<
+  T = unknown,
+> implements GenerateResponseChunkData {
   /** The index of the message this chunk corresponds to, starting with `0` for the first model response of the generation. */
   index: number;
   /** The role of the message this chunk corresponds to. Will always be `model` or `tool`. */

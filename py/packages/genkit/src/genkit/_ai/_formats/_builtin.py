@@ -22,9 +22,9 @@ from genkit._ai._formats._enum import EnumFormat
 from genkit._ai._formats._json import JsonFormat
 from genkit._ai._formats._jsonl import JsonlFormat
 from genkit._ai._formats._text import TextFormat
-from genkit._ai._formats._types import FormatDef
+from genkit._ai._formats._types import Formatter
 
-built_in_formats: list[FormatDef] = [
+built_in_formats: list[Formatter] = [
     ArrayFormat(),
     EnumFormat(),
     JsonFormat(),

@@ -19,6 +19,7 @@ import {
   defineDynamicActionProvider,
   z,
   type PluginProvider,
+  type SpanFailureMarks,
 } from '@genkit-ai/core';
 import { initNodeFeatures } from '@genkit-ai/core/node';
 import { Registry } from '@genkit-ai/core/registry';
@@ -1966,7 +1967,7 @@ describe('generate failures', () => {
             'Exceeded maximum tool call iterations (1)'
           );
           // The loop's spans already marked the failure's source.
-          assert.strictEqual(e.ignoreFailedSpan, true);
+          assert.strictEqual((e as SpanFailureMarks).ignoreFailedSpan, true);
           // The round the limit refused, as the loop has always reported it.
           assert.strictEqual(
             e.detail.response.message?.content[0].toolRequest?.name,

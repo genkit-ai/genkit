@@ -575,8 +575,8 @@ export class Genkit extends GenkitAI implements HasRegistry {
    */
   defineEvaluator<
     DataPoint extends typeof BaseDataPointSchema = typeof BaseDataPointSchema,
-    EvalDataPoint extends
-      typeof BaseEvalDataPointSchema = typeof BaseEvalDataPointSchema,
+    EvalDataPoint extends typeof BaseEvalDataPointSchema =
+      typeof BaseEvalDataPointSchema,
     EvaluatorOptions extends z.ZodTypeAny = z.ZodTypeAny,
   >(
     options: {
@@ -787,6 +787,9 @@ function registerActionV2(
         message: 'Action type is missing for ' + resolvedAction.__action.name,
       });
     }
+    // tool()/resource() mark actions as dynamic so generate() registers them per call.
+    // Once a plugin registers them they're no longer dynamic (mirrors defineTool).
+    delete resolvedAction.__action.metadata?.dynamic;
     registry.registerAction(
       resolvedAction.__action.actionType,
       resolvedAction,

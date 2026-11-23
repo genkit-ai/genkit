@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from genkit import (
     Document,
+    FlowContext,
     Genkit,
     GenkitError,
     Interrupt,
@@ -22,19 +23,20 @@ from genkit import (
     ModelResponseChunk,
     Part,
 )
-from genkit._ai._formats._types import FormatDef, Formatter, FormatterConfig
 from genkit._ai._model import text_from_message
-from genkit._core._action import ActionKind, ActionRunContext
+from genkit._core._action import ActionKind
 from genkit._core._model import ModelRequest, OutputConfig
+from genkit._core._operation import Operation
 from genkit._core._typing import (
+    ConstrainedSupport,
     EvaluatorRequest,
     EvaluatorResponse,
     FinishReason,
+    MiddlewareRef,
     ModelInfo,
-    Operation,
+    ModelSupports,
     Role,
     Score,
-    Supports,
     ToolDefinition,
     ToolRequest,
     ToolResponse,
@@ -45,7 +47,9 @@ from genkit.evaluator import (
     ScoreDetails,
     ScoreStatus,
 )
-from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, MiddlewareRef, ModelHookParams
+from genkit.formats import FormatHandler, Formatter, FormatterConfig
+from genkit.middleware import Middleware, MiddlewareContext, ModelHookParams
+from genkit.model import ModelContext
 from genkit.testing import (
     EchoModel,
     ScriptedModel,
@@ -65,12 +69,40 @@ def _ok_schema_response() -> ModelResponse:
     )
 
 
+# What the json format adds to the prompt for the foo/bar TestSchema.
+_FOO_BAR_JSON_INSTRUCTIONS = (
+    'Output should be in JSON format and conform to the '
+    'following schema:\n\n```\n{\n  "properties": {\n    '
+    '"foo": {\n      "anyOf": [\n        {\n          '
+    '"type": "integer"\n        },\n        {\n          '
+    '"type": "null"\n        }\n      ],\n      '
+    '"default": null,\n      "description": "foo field",\n      '
+    '"title": "Foo"\n    },\n    "bar": {\n      '
+    '"anyOf": [\n        {\n          "type": "string"\n        },\n        '
+    '{\n          "type": "null"\n        }\n      ],\n      '
+    '"default": null,\n      "description": "bar field",\n      '
+    '"title": "Bar"\n    }\n  },\n  "title": "TestSchema",\n  '
+    '"type": "object"\n}\n```\n'
+)
+
+
 @pytest.fixture
 def setup_test() -> SetupFixture:
     """Setup a test fixture for the veneer tests."""
     ai = Genkit(model='echoModel')
 
-    pm, _ = define_scripted_model(ai)
+    # The scripted model declares native JSON mode, like Gemini, Claude, and gpt-4o.
+    # The echo model declares nothing, so JSON requests to it carry the schema text.
+    pm = ScriptedModel()
+
+    async def scripted_fn(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
+        return await pm.model_fn(request, ctx)
+
+    ai.define_model(
+        name='scriptedModel',
+        fn=scripted_fn,
+        info=ModelInfo(supports=ModelSupports(constrained=ConstrainedSupport.ALL)),
+    )
     echo, _ = define_echo_model(ai)
 
     return (ai, echo, pm)
@@ -960,7 +992,7 @@ async def test_generate_defaults_to_json_format(
 async def test_generate_json_format_unconstrained(
     setup_test: SetupFixture,
 ) -> None:
-    """When Output is provided, format will default to json."""
+    """Unconstrained json puts the schema in the prompt, since nothing else enforces it."""
     ai, _, pm, *_ = setup_test
     pm.responses = [_ok_schema_response(), _ok_schema_response()]
 
@@ -970,7 +1002,13 @@ async def test_generate_json_format_unconstrained(
 
     want = ModelRequest(
         messages=[
-            Message(role=Role.USER, content=[Part.from_text('hi')]),
+            Message(
+                role=Role.USER,
+                content=[
+                    Part.from_text('hi'),
+                    Part.from_text(_FOO_BAR_JSON_INSTRUCTIONS, metadata={'purpose': 'output'}),
+                ],
+            ),
         ],
         config={},  # type: ignore[arg-type]
         tools=[],
@@ -1026,12 +1064,12 @@ async def test_generate_with_middleware() -> None:
     define_echo_model(ai)
 
     @ai.middleware(name='pre_mw')
-    class PreMiddleware(BaseMiddleware):
+    class PreMiddleware(Middleware):
         async def wrap_model(
             self,
             params: ModelHookParams,
-            ctx: GenerateMiddlewareContext,
-            next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+            ctx: MiddlewareContext,
+            next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
         ) -> ModelResponse:
             txt = ''.join(text_from_message(m) for m in params.request.messages)
             return await next_fn(
@@ -1046,12 +1084,12 @@ async def test_generate_with_middleware() -> None:
             )
 
     @ai.middleware(name='post_mw')
-    class PostMiddleware(BaseMiddleware):
+    class PostMiddleware(Middleware):
         async def wrap_model(
             self,
             params: ModelHookParams,
-            ctx: GenerateMiddlewareContext,
-            next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+            ctx: MiddlewareContext,
+            next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
         ) -> ModelResponse:
             resp: ModelResponse = await next_fn(params, ctx)
             assert resp.message is not None
@@ -1066,7 +1104,7 @@ async def test_generate_with_middleware() -> None:
     response = await ai.generate(
         model='echoModel',
         prompt='hi',
-        use=[MiddlewareRef(name='pre_mw'), MiddlewareRef(name='post_mw')],
+        use=cast(Any, [MiddlewareRef(name='pre_mw'), MiddlewareRef(name='post_mw')]),
     )
 
     assert response.text == want
@@ -1074,7 +1112,7 @@ async def test_generate_with_middleware() -> None:
     stream_result = ai.generate_stream(
         model='echoModel',
         prompt='hi',
-        use=[MiddlewareRef(name='pre_mw'), MiddlewareRef(name='post_mw')],
+        use=cast(Any, [MiddlewareRef(name='pre_mw'), MiddlewareRef(name='post_mw')]),
     )
 
     assert (await stream_result.response).text == want
@@ -1088,12 +1126,12 @@ async def test_generate_passes_through_current_action_context() -> None:
     define_echo_model(ai)
 
     @ai.middleware(name='inject_ctx')
-    class InjectContextMiddleware(BaseMiddleware):
+    class InjectContextMiddleware(Middleware):
         async def wrap_model(
             self,
             params: ModelHookParams,
-            ctx: GenerateMiddlewareContext,
-            next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+            ctx: MiddlewareContext,
+            next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
         ) -> ModelResponse:
             txt = ''.join(text_from_message(m) for m in params.request.messages)
             return await next_fn(
@@ -1102,7 +1140,7 @@ async def test_generate_passes_through_current_action_context() -> None:
                         messages=[
                             Message(
                                 role=Role.USER,
-                                content=[Part.from_text(f'{txt} {ctx.custom_context}')],
+                                content=[Part.from_text(f'{txt} {ctx.context}')],
                             ),
                         ],
                     ),
@@ -1114,7 +1152,7 @@ async def test_generate_passes_through_current_action_context() -> None:
         return await ai.generate(
             model='echoModel',
             prompt='hi',
-            use=[MiddlewareRef(name='inject_ctx')],
+            use=cast(Any, [MiddlewareRef(name='inject_ctx')]),
         )
 
     action = ai._registry.register_action(name='test_action', kind=ActionKind.CUSTOM, fn=action_fn)
@@ -1131,12 +1169,12 @@ async def test_generate_uses_explicitly_passed_in_context() -> None:
     define_echo_model(ai)
 
     @ai.middleware(name='inject_ctx')
-    class InjectContextMiddleware(BaseMiddleware):
+    class InjectContextMiddleware(Middleware):
         async def wrap_model(
             self,
             params: ModelHookParams,
-            ctx: GenerateMiddlewareContext,
-            next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+            ctx: MiddlewareContext,
+            next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
         ) -> ModelResponse:
             txt = ''.join(text_from_message(m) for m in params.request.messages)
             return await next_fn(
@@ -1145,7 +1183,7 @@ async def test_generate_uses_explicitly_passed_in_context() -> None:
                         messages=[
                             Message(
                                 role=Role.USER,
-                                content=[Part.from_text(f'{txt} {ctx.custom_context}')],
+                                content=[Part.from_text(f'{txt} {ctx.context}')],
                             ),
                         ],
                     ),
@@ -1157,7 +1195,7 @@ async def test_generate_uses_explicitly_passed_in_context() -> None:
         return await ai.generate(
             model='echoModel',
             prompt='hi',
-            use=[MiddlewareRef(name='inject_ctx')],
+            use=cast(Any, [MiddlewareRef(name='inject_ctx')]),
             context={'bar': 'baz'},
         )
 
@@ -1174,12 +1212,12 @@ async def test_generate_uses_inline_middleware_instance_with_context() -> None:
     define_scripted_model(ai)
     define_echo_model(ai)
 
-    class InjectContextMiddleware(BaseMiddleware):
+    class InjectContextMiddleware(Middleware):
         async def wrap_model(
             self,
             params: ModelHookParams,
-            ctx: GenerateMiddlewareContext,
-            next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+            ctx: MiddlewareContext,
+            next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
         ) -> ModelResponse:
             txt = ''.join(text_from_message(m) for m in params.request.messages)
             return await next_fn(
@@ -1188,7 +1226,7 @@ async def test_generate_uses_inline_middleware_instance_with_context() -> None:
                         messages=[
                             Message(
                                 role=Role.USER,
-                                content=[Part.from_text(f'{txt} {ctx.custom_context}')],
+                                content=[Part.from_text(f'{txt} {ctx.context}')],
                             ),
                         ],
                     ),
@@ -1223,20 +1261,7 @@ async def test_generate_json_format_unconstrained_with_instructions(
         bar: str | None = Field(None, description='bar field')
 
     # Explicit instructions text to inject (matches formatter output for this schema)
-    instructions_text = (
-        'Output should be in JSON format and conform to the '
-        'following schema:\n\n```\n{\n  "properties": {\n    '
-        '"foo": {\n      "anyOf": [\n        {\n          '
-        '"type": "integer"\n        },\n        {\n          '
-        '"type": "null"\n        }\n      ],\n      '
-        '"default": null,\n      "description": "foo field",\n      '
-        '"title": "Foo"\n    },\n    "bar": {\n      '
-        '"anyOf": [\n        {\n          "type": "string"\n        },\n        '
-        '{\n          "type": "null"\n        }\n      ],\n      '
-        '"default": null,\n      "description": "bar field",\n      '
-        '"title": "Bar"\n    }\n  },\n  "title": "TestSchema",\n  '
-        '"type": "object"\n}\n```\n'
-    )
+    instructions_text = _FOO_BAR_JSON_INSTRUCTIONS
 
     want = ModelRequest(
         messages=[
@@ -1302,9 +1327,8 @@ async def test_generate_output_instructions_true_injects_standard(
 ) -> None:
     """``output_instructions=True`` injects the format's standard instructions.
 
-    ``json`` defaults to not injecting (it leans on native constrained output), so
-    passing ``True`` is how a caller opts back into the schema instructions -- e.g.
-    when running unconstrained against a model without native structured output.
+    Natively constrained ``json`` leaves them out by default, so ``True`` is how a
+    caller puts the schema text back in alongside native mode.
     """
     ai, _, pm, *_ = setup_test
     pm.responses = [_ok_schema_response(), _ok_schema_response()]
@@ -1316,25 +1340,25 @@ async def test_generate_output_instructions_true_injects_standard(
         msg = resp.request.messages[0]
         return [p for p in msg.content if (p.metadata or {}).get('purpose') == 'output']
 
-    # True -> the standard schema preamble is injected.
+    # 1. True -> the standard schema preamble is injected, even under native mode.
     on = await ai.generate(
         model='scriptedModel',
         prompt='hi',
         output_schema=TestSchema,
-        output_constrained=False,
         output_instructions=True,
     )
+    assert on.request is not None and on.request.output is not None
+    assert on.request.output.constrained is True
     injected = output_parts(on)
     assert len(injected) == 1
     injected_text = injected[0].text or ''
     assert 'Output should be in JSON format and conform to the following schema' in injected_text
 
-    # Unset -> json's default (False) means nothing is injected.
+    # 2. Unset -> native mode enforces the schema, so nothing is injected.
     off = await ai.generate(
         model='scriptedModel',
         prompt='hi',
         output_schema=TestSchema,
-        output_constrained=False,
     )
     assert output_parts(off) == []
 
@@ -1385,7 +1409,7 @@ async def test_generate_simulates_doc_grounding(
     assert resp.request.messages[0] == clean_msg
 
 
-class MockBananaFormat(FormatDef):
+class MockBananaFormat(Formatter):
     """Mock format for testing the format."""
 
     def __init__(self) -> None:
@@ -1399,7 +1423,7 @@ class MockBananaFormat(FormatDef):
             ),
         )
 
-    def handle(self, schema: dict[str, Any] | None) -> Formatter:
+    def handle(self, schema: dict[str, Any] | None) -> FormatHandler:
         """Handle the format."""
 
         def message_parser(msg: Message) -> Any:  # noqa: ANN401
@@ -1419,7 +1443,7 @@ class MockBananaFormat(FormatDef):
         if schema:
             instructions = f'schema: {json.dumps(schema)}'
 
-        return Formatter(
+        return FormatHandler(
             chunk_parser=chunk_parser,
             message_parser=message_parser,
             instructions=instructions,
@@ -1470,25 +1494,10 @@ async def test_define_format(setup_test: SetupFixture) -> None:
     assert response.output == TestSchema(foo=1, bar='banana model says')
     assert chunks == ['banana chunk 1', 'banana chunk 2', 'banana chunk 3']
 
+    # banana sends format='json' with constrained=True, and the scripted model has native
+    # JSON mode, so the format's instructions stay out of the prompt, same as built-in json.
     assert response.request == ModelRequest(
-        messages=[
-            Message(
-                role=Role.USER,
-                content=[
-                    Part.from_text('hi'),
-                    Part.from_text(
-                        (
-                            'schema: {"properties": {"foo": {"anyOf": [{"type": "integer"}, '
-                            '{"type": "null"}], "default": null, "description": "foo field", '
-                            '"title": "Foo"}, "bar": {"anyOf": [{"type": "string"}, '
-                            '{"type": "null"}], "default": null, "description": "bar field", '
-                            '"title": "Bar"}}, "title": "TestSchema", "type": "object"}'
-                        ),
-                        metadata={'purpose': 'output'},
-                    ),
-                ],
-            ),
-        ],
+        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
         config={},  # type: ignore[arg-type]
         tools=[],
         output=OutputConfig(
@@ -1521,7 +1530,7 @@ def test_define_model_default_metadata(setup_test: SetupFixture) -> None:
     """Test that the define model function works."""
     ai, _, _, *_ = setup_test
 
-    async def foo_model_fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def foo_model_fn(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('banana!')]))
 
     action = ai.define_model(
@@ -1542,7 +1551,7 @@ def test_define_model_with_schema(setup_test: SetupFixture) -> None:
         field_a: str = Field(description='a field')
         field_b: str = Field(description='b field')
 
-    async def foo_model_fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def foo_model_fn(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('banana!')]))
 
     action = ai.define_model(
@@ -1579,7 +1588,7 @@ def test_define_model_with_info(setup_test: SetupFixture) -> None:
     """Test that the define model function with info works."""
     ai, _, _, *_ = setup_test
 
-    async def foo_model_fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def foo_model_fn(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('banana!')]))
 
     action = ai.define_model(
@@ -1587,7 +1596,7 @@ def test_define_model_with_info(setup_test: SetupFixture) -> None:
         fn=foo_model_fn,
         info=ModelInfo(
             label='Foo Bar',
-            supports=Supports(multiturn=True, tools=True, system_role=True),
+            supports=ModelSupports(multiturn=True, tools=True, system_role=True),
         ),
     )
     assert action.metadata['model'] == {
@@ -1785,7 +1794,7 @@ async def test_define_sync_flow(setup_test: SetupFixture) -> None:
     ai, _, _, *_ = setup_test
 
     @ai.flow()
-    async def my_flow(input: str, ctx: ActionRunContext) -> str:
+    async def my_flow(input: str, ctx: FlowContext[int]) -> str:
         # Use ctx.send_chunk() for streaming
         ctx.send_chunk(1)
         ctx.send_chunk(2)
@@ -1810,7 +1819,7 @@ async def test_define_async_flow(setup_test: SetupFixture) -> None:
     ai, _, _, *_ = setup_test
 
     @ai.flow()
-    async def my_flow(input: str, ctx: ActionRunContext) -> str:
+    async def my_flow(input: str, ctx: FlowContext[int]) -> str:
         # Use ctx.send_chunk() for streaming
         ctx.send_chunk(1)
         ctx.send_chunk(2)
@@ -2164,10 +2173,10 @@ def test_define_background_model_with_info(setup_test: SetupFixture) -> None:
     """Test that define_background_model correctly serializes info by alias and excludes None."""
     ai, _, _, *_ = setup_test
 
-    async def start_fn(request: ModelRequest, ctx: ActionRunContext) -> Operation:
+    async def start_fn(request: ModelRequest, ctx: ModelContext) -> Operation:
         return Operation(id='123', done=False)
 
-    async def check_fn(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check_fn(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     action = ai.define_background_model(
@@ -2176,7 +2185,7 @@ def test_define_background_model_with_info(setup_test: SetupFixture) -> None:
         check=check_fn,
         info=ModelInfo(
             label='Background Model',
-            supports=Supports(multiturn=True, system_role=True),
+            supports=ModelSupports(multiturn=True, system_role=True),
         ),
     )
     assert action.start_action.metadata['model'] == {
@@ -2190,21 +2199,22 @@ def test_define_background_model_with_info(setup_test: SetupFixture) -> None:
 
 
 def test_background_model_factory_stashes_class_without_registering(setup_test: SetupFixture) -> None:
-    """background_model() keeps the config class on the start action."""
-    from genkit.model import background_model
+    """BackgroundModel() keeps the config class on the start action."""
+    from genkit.model import BackgroundModel
 
     ai, _, _, *_ = setup_test
 
     class BgConfig(BaseModel):
         duration: int | None = None
 
-    async def start_fn(request: ModelRequest, ctx: ActionRunContext) -> Operation:
+    async def start_fn(request: ModelRequest, ctx: ModelContext) -> Operation:
         return Operation(id='123', done=False)
 
-    async def check_fn(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check_fn(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
-    action = background_model('veo-style', start=start_fn, check=check_fn, config_schema=BgConfig)
+    action = BackgroundModel('veo-style', start=start_fn, check=check_fn, config_schema=BgConfig)
+    assert isinstance(action, BackgroundModel)
     assert action.start_action._config_schema is BgConfig
     registered = ai._registry._entries.get(ActionKind.BACKGROUND_MODEL, {})
     assert 'veo-style' not in registered
@@ -2217,10 +2227,10 @@ async def test_generate_operation_with_model_info_long_running(
     """Verify generate_operation succeeds for a define_background_model."""
     ai, _, _, *_ = setup_test
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         return Operation(id='op123', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     ai.define_background_model(name='lr_model', start=start, check=check)
@@ -2306,12 +2316,12 @@ async def test_generate_echoes_full_request_when_hook_raises(setup_test: SetupFi
     _define_echo_request_tool(ai)
 
     @ai.middleware(name='raising_mw')
-    class RaisingMiddleware(BaseMiddleware):
+    class RaisingMiddleware(Middleware):
         async def wrap_generate(
             self,
             params: Any,
-            ctx: GenerateMiddlewareContext,
-            next_fn: Callable[[Any, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+            ctx: MiddlewareContext,
+            next_fn: Callable[[Any, MiddlewareContext], Awaitable[ModelResponse]],
         ) -> ModelResponse:
             raise ValueError('hook exploded')
 
@@ -2319,7 +2329,7 @@ async def test_generate_echoes_full_request_when_hook_raises(setup_test: SetupFi
         model='scriptedModel',
         prompt='hi',
         tools=['test_tool'],
-        use=[MiddlewareRef(name='raising_mw')],
+        use=cast(Any, [MiddlewareRef(name='raising_mw')]),
         **_echo_request_kwargs(),
     )
 
