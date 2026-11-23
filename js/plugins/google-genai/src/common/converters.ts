@@ -63,6 +63,7 @@ const REF_ANNOTATION_KEYS = new Set([
   '$defs',
   '$id',
   '$schema',
+  'id',
   'description',
   'definitions',
   'title',
@@ -89,8 +90,20 @@ function hasSchemaResourceMarker(value: unknown): boolean {
   const record = value as Record<string, unknown>;
   return (
     (typeof record.$id === 'string' && record.$id.length > 0) ||
-    (typeof record.$schema === 'string' && record.$schema.length > 0)
+    (typeof record.$schema === 'string' && record.$schema.length > 0) ||
+    (typeof record.id === 'string' && record.id.length > 0)
   );
+}
+
+function consumeSchemaBudget(budget: { remaining: number }, amount = 1): void {
+  budget.remaining -= amount;
+  if (budget.remaining < 0) {
+    throw new GenkitError({
+      status: 'INVALID_ARGUMENT',
+      message:
+        'Tool schema is too large to convert to a Gemini function declaration',
+    });
+  }
 }
 
 function toGeminiSchemaProperty(
@@ -109,13 +122,7 @@ function toGeminiSchemaProperty(
         'Tool schema is too deep to convert to a Gemini function declaration',
     });
   }
-  if (--budget.remaining < 0) {
-    throw new GenkitError({
-      status: 'INVALID_ARGUMENT',
-      message:
-        'Tool schema is too large to convert to a Gemini function declaration',
-    });
-  }
+  consumeSchemaBudget(budget);
   const currentNestedResource =
     nestedResourceReason ??
     (property !== root && hasSchemaResourceMarker(property)
@@ -222,7 +229,13 @@ function toGeminiSchemaProperty(
         message: `Unresolved tool schema reference ${ref}`,
       });
     }
-    const { $ref: _, $id: _id, $schema: _schema, ...overrides } = property;
+    const {
+      $ref: _,
+      $id: _id,
+      id: _draft4Id,
+      $schema: _schema,
+      ...overrides
+    } = property;
     return toGeminiSchemaProperty(
       { ...referenced, ...overrides },
       root,
@@ -247,6 +260,9 @@ function toGeminiSchemaProperty(
     baseSchema.description = property.description;
   }
   if (property.enum) {
+    if (Array.isArray(property.enum)) {
+      consumeSchemaBudget(budget, property.enum.length);
+    }
     baseSchema.enum = property.enum;
   }
   if (property.nullable) {
@@ -273,6 +289,9 @@ function toGeminiSchemaProperty(
     });
   }
   if (propertyType === 'object') {
+    if (Array.isArray(property.required)) {
+      consumeSchemaBudget(budget, property.required.length);
+    }
     const nestedProperties: Record<string, Schema> = {};
     if (
       property.properties &&

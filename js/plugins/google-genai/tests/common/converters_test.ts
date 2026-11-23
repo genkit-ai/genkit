@@ -1821,6 +1821,31 @@ describe('toGeminiTool', () => {
         }),
       /Nested tool schema resources cannot be converted/
     );
+    assert.throws(
+      () =>
+        toGeminiTool({
+          name: 'draft4_nested_resource',
+          description: 'Draft 4 tool with a nested id schema resource',
+          inputSchema: {
+            $schema: 'http://json-schema.org/draft-04/schema#',
+            type: 'object',
+            properties: {
+              child: {
+                id: 'child.json',
+                type: 'object',
+                properties: { val: { $ref: '#/definitions/Value' } },
+                definitions: { Value: { type: 'string' } },
+              },
+            },
+            definitions: { Value: { type: 'integer' } },
+          },
+        }),
+      {
+        name: 'GenkitError',
+        status: 'INVALID_ARGUMENT',
+        message: /Nested tool schema resources cannot be converted/,
+      }
+    );
   });
 
   it('should reject pointers that cross nested schema resource boundaries', () => {
@@ -2146,6 +2171,48 @@ describe('toGeminiTool', () => {
                 properties,
               },
             },
+          },
+        }),
+      {
+        name: 'GenkitError',
+        status: 'INVALID_ARGUMENT',
+        message: /Tool schema is too large to convert/,
+      }
+    );
+  });
+
+  it('should account for repeated enum values in the schema expansion budget', () => {
+    const smallEnum = toGeminiTool({
+      name: 'small_enum_ref',
+      description: 'Tool referencing a small enum twice',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          first: { $ref: '#/$defs/Color' },
+          second: { $ref: '#/$defs/Color' },
+        },
+        $defs: { Color: { type: 'string', enum: ['red', 'blue'] } },
+      },
+    });
+    assert.deepStrictEqual(smallEnum.parameters?.properties, {
+      first: { type: SchemaType.STRING, enum: ['red', 'blue'] },
+      second: { type: SchemaType.STRING, enum: ['red', 'blue'] },
+    });
+
+    const bigEnum = Array.from({ length: 500 }, (_, i) => `v${i}`);
+    const properties: Record<string, any> = {};
+    for (let i = 0; i < 10; i++) {
+      properties[`field${i}`] = { $ref: '#/$defs/BigEnum' };
+    }
+    assert.throws(
+      () =>
+        toGeminiTool({
+          name: 'large_enum_ref',
+          description: 'Tool repeating a large enum via $ref',
+          inputSchema: {
+            type: 'object',
+            properties,
+            $defs: { BigEnum: { type: 'string', enum: bigEnum } },
           },
         }),
       {
