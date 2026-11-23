@@ -16,8 +16,9 @@
 
 import * as assert from 'assert';
 import { GenkitError } from 'genkit';
-import { Readable } from 'node:stream';
+import { PassThrough, Readable } from 'node:stream';
 import { after, before, describe, it } from 'node:test';
+import * as vm from 'node:vm';
 import {
   Client,
   backoff,
@@ -224,52 +225,263 @@ describe('client', () => {
     assert.strictEqual(calls, 1);
   });
 
-  it('reads a Node.js stream body from a fetch of your own', async () => {
-    const nodeBody = (body: Readable): Response =>
+  describe('a body from a fetch of your own', () => {
+    // node-fetch v2 hands back a Node.js Readable as the body.
+    const nodeBody = (body: unknown): Response =>
       ({
         status: 200,
         ok: true,
         headers: new Headers({ 'content-type': 'application/json' }),
         body,
       }) as unknown as Response;
-    const answer = JSON.stringify({
-      model: 'jev',
-      answers: { urgent: { noul: 0.93 } },
-    });
-    const small = new Client({
-      fetch: async () =>
-        nodeBody(
-          Readable.from([Buffer.from(answer.slice(0, 5)), answer.slice(5)])
-        ),
-      baseUrl: 'http://unused',
-      endpoint: { name: 'test', path: '', modelsPath: '' },
-      sleep: async () => {},
-    });
-    const res = await small.decide('jev', request);
-    assert.deepStrictEqual(res.answers, { urgent: { noul: 0.93 } });
+    const ownClient = (fetch: (init?: RequestInit) => Promise<Response>) =>
+      new Client({
+        fetch: async (_url, init) => fetch(init),
+        baseUrl: 'http://unused',
+        endpoint: { name: 'test', path: '', modelsPath: '' },
+        sleep: async () => {},
+      });
 
-    let calls = 0;
-    const stream = Readable.from(
-      (function* () {
-        for (let i = 0; i < 9; i++) yield Buffer.alloc(1 << 20, 0x78);
-      })()
-    );
-    const big = new Client({
-      fetch: async () => {
-        calls++;
-        return nodeBody(stream);
-      },
-      baseUrl: 'http://unused',
-      endpoint: { name: 'test', path: '', modelsPath: '' },
-      sleep: async () => {},
+    it('reads a Node.js stream, with UTF-8 split across chunks', async () => {
+      const answer = Buffer.from(
+        JSON.stringify({
+          model: 'jev',
+          answers: { urgent: { noul: 0.93, note: 'café' } },
+        })
+      );
+      // Cuts the two bytes of é apart.
+      const cut = answer.indexOf(0xc3) + 1;
+      const res = await ownClient(async () =>
+        nodeBody(Readable.from([answer.subarray(0, cut), answer.subarray(cut)]))
+      ).decide('jev', request);
+      assert.deepStrictEqual(res.answers, {
+        urgent: { noul: 0.93, note: 'café' },
+      });
     });
-    await assert.rejects(
-      big.decide('jev', request),
-      (e: GenkitError) =>
-        e.status === 'INTERNAL' && /larger than 8388608 bytes/.test(e.message)
+
+    it('takes string chunks as text', async () => {
+      const answer = JSON.stringify({ model: 'jev', answers: {} });
+      const res = await ownClient(async () =>
+        nodeBody(Readable.from([answer.slice(0, 5), answer.slice(5)]))
+      ).decide('jev', request);
+      assert.strictEqual(res.model, 'jev');
+    });
+
+    it(
+      'stops reading an endless stream at 8 MiB, once, and ends the attempt',
+      { timeout: 10_000 },
+      async () => {
+        let calls = 0;
+        let pulled = 0;
+        let signal: AbortSignal | undefined;
+        await assert.rejects(
+          ownClient(async (init) => {
+            calls++;
+            signal = init?.signal ?? undefined;
+            return nodeBody(
+              Readable.from(
+                (function* () {
+                  // Long enough to pass the cap, short enough that a read
+                  // without one ends instead of filling memory.
+                  for (let i = 0; i < 64; i++) {
+                    pulled++;
+                    yield Buffer.alloc(1 << 20, 0x78);
+                  }
+                })(),
+                { highWaterMark: 1 }
+              )
+            );
+          }).decide('jev', request),
+          (e: GenkitError) =>
+            e.status === 'INTERNAL' &&
+            /larger than 8388608 bytes/.test(e.message)
+        );
+        assert.strictEqual(calls, 1);
+        // 9 to pass the cap, plus what the stream reads ahead.
+        assert.ok(pulled <= 12, `pulled ${pulled} chunks`);
+        // node-fetch v2 closes the connection only when its signal aborts.
+        assert.strictEqual(signal?.aborted, true);
+      }
     );
-    assert.strictEqual(calls, 1);
-    assert.strictEqual(stream.destroyed, true);
+
+    it('ends the attempt when a WHATWG body passes 8 MiB', async () => {
+      let signal: AbortSignal | undefined;
+      await assert.rejects(
+        ownClient(async (init) => {
+          signal = init?.signal ?? undefined;
+          return new Response('x'.repeat((8 << 20) + 1));
+        }).decide('jev', request),
+        (e: GenkitError) => e.status === 'INTERNAL'
+      );
+      assert.strictEqual(signal?.aborted, true);
+    });
+
+    it('refuses chunks that are not bytes, once', async () => {
+      let calls = 0;
+      let signal: AbortSignal | undefined;
+      await assert.rejects(
+        ownClient(async (init) => {
+          calls++;
+          signal = init?.signal ?? undefined;
+          return nodeBody(Readable.from([1, 2, 3]));
+        }).decide('jev', request),
+        (e: GenkitError) =>
+          e.status === 'INTERNAL' && /other than bytes/.test(e.message)
+      );
+      assert.strictEqual(calls, 1);
+      assert.strictEqual(signal?.aborted, true);
+    });
+
+    it('refuses a body that cannot be read, once', async () => {
+      let calls = 0;
+      let signal: AbortSignal | undefined;
+      await assert.rejects(
+        ownClient(async (init) => {
+          calls++;
+          signal = init?.signal ?? undefined;
+          return nodeBody({});
+        }).decide('jev', request),
+        (e: GenkitError) =>
+          e.status === 'INTERNAL' &&
+          /neither a ReadableStream nor async iterable/.test(e.message)
+      );
+      assert.strictEqual(calls, 1);
+      assert.strictEqual(signal?.aborted, true);
+    });
+
+    it('takes bytes made in another realm', async () => {
+      const answer = JSON.stringify({ model: 'jev', answers: {} });
+      const chunk = vm.runInNewContext('new Uint8Array(bytes)', {
+        bytes: [...Buffer.from(answer)],
+      });
+      assert.ok(!(chunk instanceof Uint8Array));
+      const res = await ownClient(async () =>
+        nodeBody(Readable.from([chunk]))
+      ).decide('jev', request);
+      assert.strictEqual(res.model, 'jev');
+    });
+
+    it(
+      'aborts a Node.js body past 8 MiB while still listening to it',
+      { timeout: 10_000 },
+      async () => {
+        let uncaught: unknown;
+        const onUncaught = (e: unknown) => (uncaught = e);
+        process.on('uncaughtException', onUncaught);
+        let body: PassThrough | undefined;
+        try {
+          await assert.rejects(
+            ownClient(async (init) => {
+              body = new PassThrough({ highWaterMark: 1 << 20 });
+              // As node-fetch v2 does on abort: an error emitted on the
+              // body, unguarded.
+              init?.signal?.addEventListener('abort', () =>
+                body!.emit('error', new Error('The user aborted a request.'))
+              );
+              for (let i = 0; i < 9; i++) body.write(Buffer.alloc(1 << 20));
+              body.end();
+              return nodeBody(body);
+            }).decide('jev', request),
+            (e: GenkitError) =>
+              e.status === 'INTERNAL' &&
+              /larger than 8388608 bytes/.test(e.message)
+          );
+          await new Promise((resolve) => setImmediate(resolve));
+        } finally {
+          process.off('uncaughtException', onUncaught);
+        }
+        assert.strictEqual(uncaught, undefined);
+        assert.strictEqual(body?.destroyed, true);
+      }
+    );
+
+    for (const [name, cancel] of [
+      ['rejects', () => Promise.reject(new Error('cannot cancel'))],
+      ['never settles', () => new Promise<void>(() => {})],
+    ] as const) {
+      it(
+        `refuses a WHATWG body past 8 MiB whose cancel ${name}, once`,
+        { timeout: 10_000 },
+        async () => {
+          let calls = 0;
+          let signal: AbortSignal | undefined;
+          await assert.rejects(
+            ownClient(async (init) => {
+              calls++;
+              signal = init?.signal ?? undefined;
+              let sent = 0;
+              return nodeBody(
+                new ReadableStream<Uint8Array>({
+                  // Ends after 64 MiB, so a read without a cap fails
+                  // instead of filling memory.
+                  pull: (controller) => {
+                    if (sent++ < 64) {
+                      controller.enqueue(new Uint8Array(1 << 20));
+                    } else {
+                      controller.close();
+                    }
+                  },
+                  cancel,
+                })
+              );
+            }).decide('jev', request),
+            (e: GenkitError) =>
+              e.status === 'INTERNAL' &&
+              /larger than 8388608 bytes/.test(e.message)
+          );
+          assert.strictEqual(calls, 1);
+          assert.strictEqual(signal?.aborted, true);
+        }
+      );
+    }
+
+    it('retries a stream that fails midway', async () => {
+      let calls = 0;
+      await assert.rejects(
+        ownClient(async () => {
+          calls++;
+          return nodeBody(
+            Readable.from(
+              (function* () {
+                yield Buffer.from('{"model"');
+                throw new Error('premature close');
+              })()
+            )
+          );
+        }).decide('jev', request),
+        (e: GenkitError) =>
+          e.status === 'UNAVAILABLE' && /premature close/.test(e.message)
+      );
+      assert.strictEqual(calls, 3);
+    });
+
+    it(
+      'reports a caller abort during the read as CANCELLED',
+      { timeout: 5_000 },
+      async () => {
+        const abort = new AbortController();
+        let calls = 0;
+        let body: PassThrough | undefined;
+        await assert.rejects(
+          ownClient(async (init) => {
+            calls++;
+            body = new PassThrough();
+            // As node-fetch v2 does on abort.
+            init?.signal?.addEventListener('abort', () =>
+              body!.destroy(new Error('The user aborted a request.'))
+            );
+            body.write('{"model"');
+            setImmediate(() => abort.abort());
+            return nodeBody(body);
+          }).decide('jev', request, { signal: abort.signal }),
+          (e: GenkitError) =>
+            e.status === 'CANCELLED' && /user aborted a request/.test(e.message)
+        );
+        assert.strictEqual(calls, 1);
+        // The read ended because the transport destroyed the body.
+        assert.strictEqual(body?.destroyed, true);
+      }
+    );
   });
 
   it('does not retry 501 or 505', async () => {
@@ -441,7 +653,9 @@ describe('client', () => {
       server.requests.at(-1)!.headers.authorization,
       'Bearer request-key'
     );
-    assert.strictEqual(init?.signal, undefined);
+    // No caller signal and no timeout: a signal of the attempt's own, which
+    // ends it when its body is refused.
+    assert.strictEqual(init?.signal?.aborted, false);
     assert.strictEqual(init?.redirect, 'manual');
   });
 

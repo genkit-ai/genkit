@@ -16,6 +16,7 @@
 
 import { GenkitError, type StatusName } from 'genkit';
 import { STATUS_CODES } from 'node:http';
+import { types } from 'node:util';
 import type { WireQuestion } from './protocol.js';
 import { stringifyBody, type Media } from './state.js';
 
@@ -390,11 +391,10 @@ export class Client {
         // never depends on the transport's redirect rules.
         redirect: 'manual',
       });
-      text = await readBody(resp);
+      text = await readBody(resp, attempt.abort);
     } catch (e) {
       if (signal?.aborted) throw stopped(endpoint.name, signal, e);
-      if (e instanceof BodyTooLarge) {
-        // Not worth a retry: the server would send it again.
+      if (e instanceof BodyRefused) {
         throw new AttemptFailure(
           new GenkitError({
             status: 'INTERNAL',
@@ -531,19 +531,25 @@ function stopped(
   });
 }
 
-/** A response body past {@link MAX_BODY_BYTES}. */
-class BodyTooLarge extends Error {}
+/**
+ * A response body the client will not read: past {@link MAX_BODY_BYTES}, not
+ * bytes, or not readable at all. Not worth a retry, since the server or the
+ * `fetch` would send the same again.
+ */
+class BodyRefused extends Error {}
 
 /**
  * A signal that aborts when any of the given ones does, with that one's
- * reason, as AbortSignal.any does, which Node has from 20.3 only. `release`
- * removes its listeners from the given signals once the attempt is over.
+ * reason, as AbortSignal.any does, which Node has from 20.3 only. `abort`
+ * ends the attempt from inside, such as when its body is refused, so the
+ * transport closes the connection. `release` removes its listeners from the
+ * given signals once the attempt is over.
  */
 function anySignal(signals: AbortSignal[]): {
-  signal: AbortSignal | undefined;
+  signal: AbortSignal;
+  abort: () => void;
   release: () => void;
 } {
-  if (signals.length === 0) return { signal: undefined, release: () => {} };
   const controller = new AbortController();
   const listeners: [AbortSignal, () => void][] = [];
   for (const signal of signals) {
@@ -557,6 +563,7 @@ function anySignal(signals: AbortSignal[]): {
   }
   return {
     signal: controller.signal,
+    abort: () => controller.abort(),
     release: () => {
       for (const [signal, onAbort] of listeners) {
         signal.removeEventListener('abort', onAbort);
@@ -600,44 +607,69 @@ function hook<T>(name: string, which: 'route' | 'unwrap', run: () => T): T {
   }
 }
 
-async function readBody(resp: Response): Promise<string> {
+/**
+ * Reads a response body as UTF-8 text, at most {@link MAX_BODY_BYTES} of it.
+ * `abort` ends the attempt when the body is refused, which is what closes the
+ * connection for node-fetch v2, whose body is a Node.js stream that does not
+ * reach the socket when destroyed. Each refusal aborts first, while the read
+ * still listens to the body: node-fetch v2 emits the abort as an error on
+ * the body, and with no listener left that error would be uncaught.
+ */
+async function readBody(resp: Response, abort: () => void): Promise<string> {
   if (!resp.body) return '';
   const chunks: Uint8Array[] = [];
   let size = 0;
-  const take = (chunk: Uint8Array | string): boolean => {
-    const bytes = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+  // Returns why a chunk is refused, or undefined once it is kept. A string
+  // chunk is taken as text, as from a Node.js stream with setEncoding('utf8').
+  const take = (chunk: unknown): string | undefined => {
+    const bytes =
+      typeof chunk === 'string'
+        ? Buffer.from(chunk)
+        : types.isUint8Array(chunk)
+          ? chunk
+          : undefined;
+    if (!bytes) return 'the response body yielded something other than bytes';
     size += bytes.byteLength;
-    if (size > MAX_BODY_BYTES) return false;
+    if (size > MAX_BODY_BYTES) {
+      return `response is larger than ${MAX_BODY_BYTES} bytes`;
+    }
     chunks.push(bytes);
-    return true;
+    return undefined;
   };
   const body = resp.body as unknown;
   if (typeof (body as ReadableStream).getReader === 'function') {
-    const reader = (body as ReadableStream<Uint8Array>).getReader();
+    const reader = (body as ReadableStream<unknown>).getReader();
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
-      if (!take(value)) {
-        await reader.cancel();
-        throw new BodyTooLarge(
-          `response is larger than ${MAX_BODY_BYTES} bytes`
-        );
+      const refused = take(value);
+      if (refused) {
+        abort();
+        // Not awaited: a cancel that fails or never settles must not keep
+        // the refusal from being reported.
+        reader.cancel().catch(() => {});
+        throw new BodyRefused(refused);
+      }
+    }
+  } else if (
+    typeof (body as AsyncIterable<unknown>)[Symbol.asyncIterator] === 'function'
+  ) {
+    // A fetch of your own may hand back a Node.js stream as the body, as
+    // node-fetch v2 does; it is async iterable.
+    const stream = body as AsyncIterable<unknown> & { destroy?: () => void };
+    for await (const chunk of stream) {
+      const refused = take(chunk);
+      if (refused) {
+        abort();
+        stream.destroy?.();
+        throw new BodyRefused(refused);
       }
     }
   } else {
-    // A fetch of your own may hand back a Node.js stream as the body, as
-    // node-fetch v2 does; it is async iterable.
-    const stream = body as AsyncIterable<Uint8Array | string> & {
-      destroy?: () => void;
-    };
-    for await (const chunk of stream) {
-      if (!take(chunk)) {
-        stream.destroy?.();
-        throw new BodyTooLarge(
-          `response is larger than ${MAX_BODY_BYTES} bytes`
-        );
-      }
-    }
+    abort();
+    throw new BodyRefused(
+      'the response body is neither a ReadableStream nor async iterable'
+    );
   }
   return Buffer.concat(chunks).toString('utf8');
 }
