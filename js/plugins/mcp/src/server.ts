@@ -48,12 +48,13 @@ import {
 import {
   GenkitError,
   Message,
-  type Genkit,
   type Flow,
+  type Genkit,
   type MessageData,
   type Part,
   type PromptAction,
   type ResourceAction,
+  type z,
 } from 'genkit';
 import { logger } from 'genkit/logging';
 import { toJsonSchema } from 'genkit/schema';
@@ -73,7 +74,6 @@ export class GenkitMcpServer {
   actionsResolved = false;
   toolActions: ToolAction[] = [];
   flowActions: Flow[] = [];
-  mcpToolActions = new Map<string, ToolAction | Flow>();
   promptActions: PromptAction[] = [];
   resourceActions: ResourceAction[] = [];
 
@@ -160,30 +160,34 @@ export class GenkitMcpServer {
       if (k.startsWith('/tool/')) {
         toolList.push(allActions[k] as ToolAction);
       } else if (k.startsWith('/flow/')) {
-        flowList.push(allActions[k] as Flow);
+        const flow = allActions[k] as Flow;
+        const { initSchema, initJsonSchema } = flow.__action;
+        if (initJsonSchema || (initSchema && !isVoidSchema(initSchema))) {
+          logger.warn(
+            `[MCP Server] Skipping flow '${flow.__action.name}': flows with an initSchema cannot be exposed as MCP tools yet.`
+          );
+        } else {
+          flowList.push(flow);
+        }
       } else if (k.startsWith('/prompt/')) {
         promptList.push(allActions[k] as PromptAction);
       } else if (k.startsWith('/resource/')) {
         resourceList.push(allActions[k] as ResourceAction);
       }
     }
-    const mcpToolActions = new Map<string, ToolAction | Flow>();
+    const mcpToolNames = new Set<string>();
     for (const action of [...toolList, ...flowList]) {
-      const actionName = action.__action.name;
-      const name = actionName.substring(actionName.lastIndexOf('/') + 1);
-      const mcpName =
-        action.__action.actionType === 'flow' ? `flow_${name}` : name;
-      if (mcpToolActions.has(mcpName)) {
+      const mcpName = mcpToolName(action);
+      if (mcpToolNames.has(mcpName)) {
         throw new GenkitError({
           status: 'FAILED_PRECONDITION',
           message: `Multiple actions would be exposed as MCP tool '${mcpName}'.`,
         });
       }
-      mcpToolActions.set(mcpName, action);
+      mcpToolNames.add(mcpName);
     }
     this.toolActions = toolList;
     this.flowActions = flowList;
-    this.mcpToolActions = mcpToolActions;
     this.promptActions = promptList;
     this.resourceActions = resourceList;
     this.actionsResolved = true;
@@ -198,35 +202,29 @@ export class GenkitMcpServer {
   async listTools(req: ListToolsRequest): Promise<ListToolsResult> {
     await this.setup();
     return {
-      tools: Array.from(this.mcpToolActions, ([name, action]): Tool => {
+      tools: this.mcpTools().map(([name, action]): Tool => {
         const def = toToolDefinition(action);
-        let inputSchema = def.inputSchema as Tool['inputSchema'];
-        if (action.__action.actionType === 'flow') {
-          if (
-            !action.__action.inputSchema &&
-            !action.__action.inputJsonSchema
-          ) {
-            inputSchema = { type: 'object' };
-          } else if (inputSchema?.type !== 'object') {
-            inputSchema = {
-              type: 'object',
-              properties: { input: inputSchema },
-              required: ['input'],
-            };
-          }
-        }
+        const isFlow = action.__action.actionType === 'flow';
         return {
           name,
-          inputSchema: inputSchema || { type: 'object' },
+          inputSchema: isFlow
+            ? flowToolSpec(action as Flow).inputSchema
+            : (def.inputSchema as Tool['inputSchema']) || { type: 'object' },
           description:
             def.description ||
-            (action.__action.actionType === 'flow'
-              ? `Run the Genkit flow '${action.__action.name}'.`
-              : ''),
+            (isFlow ? `Run the Genkit flow '${action.__action.name}'.` : ''),
           _meta: action.__action.metadata?.mcp?._meta,
         };
       }),
     };
+  }
+
+  /** Pairs each exposed tool and flow with its MCP tool name. */
+  private mcpTools(): Array<[string, ToolAction | Flow]> {
+    return [...this.toolActions, ...this.flowActions].map((action) => [
+      mcpToolName(action),
+      action,
+    ]);
   }
 
   /**
@@ -237,23 +235,31 @@ export class GenkitMcpServer {
    * @returns A Promise resolving to an MCP CallToolResult.
    * @throws GenkitError if the requested tool is not found.
    */
-  async callTool(req: CallToolRequest): Promise<CallToolResult> {
+  async callTool(
+    req: CallToolRequest,
+    extra?: { signal?: AbortSignal }
+  ): Promise<CallToolResult> {
     await this.setup();
-    const tool = this.mcpToolActions.get(req.params.name);
+    const tool =
+      this.mcpTools().find(([name]) => name === req.params.name)?.[1] ??
+      this.toolActions.find((t) => t.__action.name === req.params.name);
     if (!tool)
       throw new GenkitError({
         status: 'NOT_FOUND',
         message: `Tried to call tool '${req.params.name}' but it could not be found.`,
       });
-    let input: unknown = req.params.arguments;
+    const args = req.params.arguments;
+    let input: unknown = args;
     if (tool.__action.actionType === 'flow') {
-      if (!tool.__action.inputSchema && !tool.__action.inputJsonSchema) {
-        input = undefined;
-      } else if (toToolDefinition(tool).inputSchema?.type !== 'object') {
-        input = req.params.arguments?.input;
-      }
+      const { mode } = flowToolSpec(tool as Flow);
+      input =
+        mode === 'object'
+          ? (args ?? {})
+          : mode === 'wrapped'
+            ? args?.input
+            : undefined;
     }
-    const result = await tool(input);
+    const result = await tool(input, { abortSignal: extra?.signal });
     return {
       content: [
         {
@@ -403,6 +409,73 @@ export class GenkitMcpServer {
       `[MCP Server] MCP server '${this.options.name}' started successfully.`
     );
   }
+}
+
+function mcpToolName(action: ToolAction | Flow): string {
+  const actionName = action.__action.name;
+  const name = actionName.substring(actionName.lastIndexOf('/') + 1);
+  return action.__action.actionType === 'flow' ? `flow_${name}` : name;
+}
+
+function isVoidSchema(schema?: z.ZodTypeAny): boolean {
+  return schema?._def?.typeName === 'ZodVoid';
+}
+
+/**
+ * Describes how a flow's input maps to MCP tool arguments: object inputs are
+ * the arguments themselves, other inputs go in an `input` argument, and void
+ * inputs take no arguments.
+ */
+function flowToolSpec(flow: Flow): {
+  inputSchema: Tool['inputSchema'];
+  mode: 'object' | 'wrapped' | 'void';
+} {
+  const { inputSchema: schema, inputJsonSchema: jsonSchema } = flow.__action;
+  if (!schema && !jsonSchema) {
+    // Untyped flows accept any input, including none.
+    return {
+      inputSchema: { type: 'object', properties: { input: {} } },
+      mode: 'wrapped',
+    };
+  }
+  if (isVoidSchema(schema)) {
+    return { inputSchema: { type: 'object' }, mode: 'void' };
+  }
+  const inputSchema = toJsonSchema({
+    schema,
+    jsonSchema,
+  }) as Tool['inputSchema'];
+  if (inputSchema.type === 'object') {
+    return { inputSchema, mode: 'object' };
+  }
+  return {
+    inputSchema: {
+      type: 'object',
+      properties: { input: rebaseRefs(inputSchema) as object },
+      // Raw JSON Schema inputs are treated as required.
+      ...(schema?.isOptional() ? {} : { required: ['input'] }),
+    },
+    mode: 'wrapped',
+  };
+}
+
+/**
+ * Rewrites root-relative `$ref` pointers (emitted by zod-to-json-schema for
+ * reused schemas) so they still resolve once nested under `properties.input`.
+ */
+function rebaseRefs(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(rebaseRefs);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [
+      key,
+      key === '$ref' &&
+      typeof entry === 'string' &&
+      (entry === '#' || entry.startsWith('#/'))
+        ? `#/properties/input${entry.slice(1)}`
+        : rebaseRefs(entry),
+    ])
+  );
 }
 
 /**

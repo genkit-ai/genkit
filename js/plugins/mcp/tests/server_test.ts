@@ -21,6 +21,7 @@ import * as assert from 'assert';
 import express from 'express';
 import { GenkitBeta, genkit, z } from 'genkit/beta';
 import { logger } from 'genkit/logging';
+import { validateSchema, type JSONSchema } from 'genkit/schema';
 import getPort from 'get-port';
 import * as http from 'http';
 import { afterEach, beforeEach, describe, it } from 'node:test';
@@ -192,7 +193,7 @@ describe('createMcpServer', async () => {
         },
         {
           description: "Run the Genkit flow 'emptyFlow'.",
-          inputSchema: { type: 'object' },
+          inputSchema: { type: 'object', properties: { input: {} } },
           name: 'flow_emptyFlow',
         },
       ]);
@@ -256,6 +257,132 @@ describe('createMcpServer', async () => {
       } finally {
         await collidingServer.server?.close();
       }
+    });
+
+    async function isolatedServer(define: (ai: GenkitBeta) => void) {
+      const isolatedAi = genkit({});
+      define(isolatedAi);
+      const server = createMcpServer(isolatedAi, { name: 'isolated-server' });
+      await server.setup();
+      return server;
+    }
+
+    async function toolSchema(server: GenkitMcpServer, name: string) {
+      const { tools } = await server.listTools({ method: 'tools/list' });
+      return tools.find((t) => t.name === name)?.inputSchema;
+    }
+
+    async function call(server: GenkitMcpServer, name: string, args?: object) {
+      const result = await server.callTool({
+        method: 'tools/call',
+        params: { name, arguments: args },
+      });
+      return (result.content as Array<{ text: string }>)[0].text;
+    }
+
+    it('should forward input to a flow without an input schema', async () => {
+      const server = await isolatedServer((ai) =>
+        ai.defineFlow('echo', async (input) => input)
+      );
+      assert.deepStrictEqual(await toolSchema(server, 'flow_echo'), {
+        type: 'object',
+        properties: { input: {} },
+      });
+      assert.strictEqual(
+        await call(server, 'flow_echo', { input: { greeting: 'hi' } }),
+        '{"greeting":"hi"}'
+      );
+    });
+
+    it('should call a z.void() flow without input', async () => {
+      const server = await isolatedServer((ai) =>
+        ai.defineFlow({ name: 'ping', inputSchema: z.void() }, async (input) =>
+          input === undefined ? 'pong' : 'unexpected input'
+        )
+      );
+      assert.deepStrictEqual(await toolSchema(server, 'flow_ping'), {
+        type: 'object',
+      });
+      assert.strictEqual(await call(server, 'flow_ping', {}), 'pong');
+    });
+
+    it('should pass an empty object to an object flow when arguments are omitted', async () => {
+      const server = await isolatedServer((ai) =>
+        ai.defineFlow(
+          {
+            name: 'search',
+            inputSchema: z.object({ limit: z.number().optional() }),
+          },
+          async ({ limit }) => `limit=${limit ?? 'none'}`
+        )
+      );
+      assert.strictEqual(await call(server, 'flow_search'), 'limit=none');
+    });
+
+    it('should not require input for an optional scalar flow', async () => {
+      const server = await isolatedServer((ai) =>
+        ai.defineFlow(
+          { name: 'greet', inputSchema: z.string().optional() },
+          async (name) => `hi ${name}`
+        )
+      );
+      const schema = await toolSchema(server, 'flow_greet');
+      assert.strictEqual(schema?.required, undefined);
+      assert.strictEqual(
+        await call(server, 'flow_greet', { input: 'ann' }),
+        'hi ann'
+      );
+    });
+
+    it('should rebase $ref pointers in a wrapped flow input schema', async () => {
+      const part = z.object({ label: z.string() });
+      const server = await isolatedServer((ai) =>
+        ai.defineFlow(
+          { name: 'pair', inputSchema: z.tuple([part, part]) },
+          async ([a, b]) => `${a.label}:${b.label}`
+        )
+      );
+      const jsonSchema = (await toolSchema(server, 'flow_pair')) as JSONSchema;
+      const valid = (input: unknown) =>
+        validateSchema({ input }, { jsonSchema }).valid;
+      assert.strictEqual(valid([{ label: 'a' }, { label: 'b' }]), true);
+      assert.strictEqual(valid([{ label: 'a' }, { label: 1 }]), false);
+      assert.strictEqual(
+        await call(server, 'flow_pair', {
+          input: [{ label: 'a' }, { label: 'b' }],
+        }),
+        'a:b'
+      );
+    });
+
+    it('should skip flows with an initSchema', async () => {
+      const server = await isolatedServer((ai) =>
+        ai.defineFlow(
+          { name: 'session', initSchema: z.object({ id: z.string() }) },
+          async () => 'started'
+        )
+      );
+      assert.strictEqual(await toolSchema(server, 'flow_session'), undefined);
+      await assert.rejects(
+        call(server, 'flow_session', {}),
+        /could not be found/
+      );
+    });
+
+    it('should call a namespaced tool by its MCP name or full action name', async () => {
+      const server = await isolatedServer((ai) =>
+        ai.defineTool(
+          {
+            name: 'ns/find',
+            description: 'find',
+            inputSchema: z.object({ q: z.string() }),
+          },
+          async ({ q }) => `found ${q}`
+        )
+      );
+      assert.ok(await toolSchema(server, 'find'));
+      assert.strictEqual(await call(server, 'find', { q: 'a' }), 'found a');
+      assert.strictEqual(await call(server, 'ns/find', { q: 'b' }), 'found b');
     });
   });
 

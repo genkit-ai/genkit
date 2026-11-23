@@ -245,7 +245,7 @@ The `createMcpServer` function returns a `GenkitMcpServer` instance. The `start(
 
 ### Flows as MCP tools
 
-Flows registered with `ai.defineFlow` are also listed as MCP tools. Their names have a `flow_` prefix: a flow named `forecast` is exposed as `flow_forecast`. For object inputs, MCP tool arguments become the flow input. Other input types are passed in an `input` argument, and flows with no input take an empty argument object. The flow result is returned as text. If two actions would have the same MCP tool name, server setup reports an error instead of exposing an ambiguous tool.
+Flows registered with `ai.defineFlow` are also listed as MCP tools. Their names have a `flow_` prefix: a flow named `forecast` is exposed as `flow_forecast`. Object inputs are passed as the tool arguments, and `z.void()` inputs take no arguments. Other inputs are passed in an `input` argument, which is optional for optional Zod schemas and for flows without an input schema. Flows with an `initSchema` are not exposed yet. The flow result is returned as text. If two actions would have the same MCP tool name, server setup reports an error instead of exposing an ambiguous tool.
 
 ### Known Limitations
 
