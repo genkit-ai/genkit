@@ -68,8 +68,8 @@ export const TrajectoryActionSchema = z.object({
    */
   subtrajectoryId: z.string().optional(),
   /**
-   * Interrupt metadata payload when this action triggered a human-in-the-loop
-   * interrupt (while `status` is `'interrupted'` or after `resume` resolves it).
+   * Interrupt-metadata payload when this action triggered a human-in-the-loop
+   * Interrupt
    */
   interrupt: z.unknown().optional(),
   resume: z
