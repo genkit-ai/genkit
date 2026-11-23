@@ -28,6 +28,7 @@ import { JSONPath } from 'jsonpath-plus';
 import {
   FunctionCallingMode,
   FunctionDeclaration,
+  FunctionDeclarationSchema,
   FunctionResponse,
   GenerateContentCandidate as GeminiCandidate,
   Content as GeminiContent,
@@ -44,12 +45,16 @@ export function toGeminiTool(tool: ToolDefinition): FunctionDeclaration {
   const declaration: FunctionDeclaration = {
     name: tool.name.replace(/\//g, '__'), // Gemini throws on '/' in tool name
     description: tool.description,
-    parameters: toGeminiSchemaProperty(tool.inputSchema),
+    parameters: toGeminiSchemaProperty(
+      tool.inputSchema
+    ) as FunctionDeclarationSchema,
   };
   return declaration;
 }
 
-function toGeminiSchemaProperty(property?: ToolDefinition['inputSchema']) {
+function toGeminiSchemaProperty(
+  property?: ToolDefinition['inputSchema']
+): Schema | undefined {
   if (!property || !property.type) {
     return undefined;
   }
@@ -76,12 +81,13 @@ function toGeminiSchemaProperty(property?: ToolDefinition['inputSchema']) {
     propertyType = property.type;
   }
   if (propertyType === 'object') {
-    const nestedProperties = {};
+    const nestedProperties: Record<string, Schema> = {};
     if (property.properties) {
       Object.keys(property.properties).forEach((key) => {
-        nestedProperties[key] = toGeminiSchemaProperty(
-          property.properties[key]
-        );
+        const prop = toGeminiSchemaProperty(property.properties![key]);
+        if (prop) {
+          nestedProperties[key] = prop;
+        }
       });
     }
     return {
@@ -97,7 +103,9 @@ function toGeminiSchemaProperty(property?: ToolDefinition['inputSchema']) {
       items: toGeminiSchemaProperty(property.items),
     };
   } else {
-    const schemaType = SchemaType[propertyType.toUpperCase()] as SchemaType;
+    const schemaType = (SchemaType as unknown as Record<string, SchemaType>)[
+      propertyType.toUpperCase()
+    ];
     if (!schemaType) {
       throw new GenkitError({
         status: 'INVALID_ARGUMENT',

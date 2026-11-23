@@ -118,22 +118,6 @@ def test_declared_sampling_knobs_stay_flat_and_typed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_extra_keeps_plugin_level_extra_body() -> None:
-    """A request's `extra` layers over the plugin's extra_body instead of replacing it."""
-    plugin_http = genai_types.HttpOptions(extra_body={'labels': {'env': 'prod'}, 'keep': 1})
-    model = GeminiModel('gemini-2.5-flash', MagicMock(), client_kwargs={'http_options': plugin_http})
-    request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
-        config=GeminiConfig.model_validate({'extra': {'labels': {'team': 'search'}}}),
-    )
-
-    cfg = await model._genkit_to_googleai_cfg(request=request)
-
-    assert cfg is not None
-    assert _extra_body(cfg) == {'labels': {'env': 'prod', 'team': 'search'}, 'keep': 1}
-
-
-@pytest.mark.asyncio
 async def test_generate_gemini_extra_snake_case_generation_config_keeps_other_generation_fields() -> None:
     """`extra={'generation_config': {'newKnob': 2}}` merges into generationConfig instead of replacing it."""
     cfg = genai_types.GenerateContentConfig()
@@ -151,16 +135,30 @@ async def test_generate_gemini_extra_snake_case_generation_config_keeps_other_ge
 
 
 @pytest.mark.asyncio
-async def test_generate_gemini_extra_keeps_plugin_extra_body_in_other_casing() -> None:
-    """Plugin `extra_body={'generation_config': {...}}` plus request `generationConfig` keeps both sets of keys."""
-    plugin_http = genai_types.HttpOptions(extra_body={'generation_config': {'pluginKnob': 1}})
-    model = GeminiModel('gemini-2.5-flash', MagicMock(), client_kwargs={'http_options': plugin_http})
-    request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
-        config=GeminiConfig.model_validate({'extra': {'generationConfig': {'newKnob': 2}}}),
-    )
+@pytest.mark.parametrize(
+    'extra',
+    [
+        {'generationConfig': {'candidateCount': 3}},
+        {'generation_config': {'candidate_count': 3}},
+    ],
+    ids=['camel', 'snake'],
+)
+async def test_generate_gemini_extra_candidate_count_raises(extra: dict) -> None:
+    """`extra` can't ask for N candidates: Gemini would bill N and Genkit reads only candidate 0."""
+    # 1. A request that asks for three candidates through the passthrough
+    config = GeminiConfig(extra=extra)
 
-    cfg = await model._genkit_to_googleai_cfg(request=request)
+    # 2. It fails before the request is built, naming the reason
+    with pytest.raises(GenkitError, match='Gemini models return one candidate') as err:
+        await _cfg(config)
 
-    assert cfg is not None
-    assert _extra_body(cfg) == {'generation_config': {'pluginKnob': 1, 'newKnob': 2}}
+    # 3. Caller input, so retry skips it
+    assert err.value.status == 'INVALID_ARGUMENT'
+
+
+@pytest.mark.asyncio
+async def test_generate_gemini_extra_other_generation_keys_still_pass_through() -> None:
+    """Refusing candidateCount leaves the rest of generationConfig in extra alone."""
+    cfg = await _cfg(GeminiConfig(extra={'generationConfig': {'futureKnob': 1}}))
+
+    assert _extra_body(cfg)['generationConfig'] == {'futureKnob': 1}

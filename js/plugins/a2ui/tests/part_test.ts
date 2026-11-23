@@ -16,10 +16,16 @@
 
 import assert from 'node:assert';
 import { describe, it } from 'node:test';
-import { a2uiEnvelopesFromParts, a2uiPart, isA2uiPart } from '../src/part.js';
+import {
+  a2uiEnvelopesFromParts,
+  a2uiPart,
+  a2uiPartMessages,
+  isA2uiPart,
+} from '../src/part.js';
 import {
   A2UI_MIME_TYPE,
   type A2uiEnvelope,
+  type A2uiPart,
   type ActionEnvelope,
 } from '../src/types.js';
 
@@ -41,7 +47,7 @@ const sampleActionEnvelope: ActionEnvelope = {
 describe('a2uiPart', () => {
   it('wraps envelopes in a data part tagged with the a2ui mime type', () => {
     const part = a2uiPart([sampleEnvelope]);
-    assert.deepStrictEqual(part.data, { envelopes: [sampleEnvelope] });
+    assert.deepStrictEqual(part.data, { messages: [sampleEnvelope] });
     assert.strictEqual(part.metadata.mimeType, A2UI_MIME_TYPE);
   });
 });
@@ -58,17 +64,27 @@ describe('isA2uiPart', () => {
   it('rejects a data part with a different mime type', () => {
     assert.strictEqual(
       isA2uiPart({
-        data: { envelopes: [] },
+        data: { messages: [] },
         metadata: { mimeType: 'application/json' },
       }),
       false
     );
   });
 
-  it('rejects a data part whose data.envelopes is not an array', () => {
+  it('rejects a data part whose data.messages is not an array', () => {
     assert.strictEqual(
       isA2uiPart({
-        data: { envelopes: {} },
+        data: { messages: {} },
+        metadata: { mimeType: A2UI_MIME_TYPE },
+      }),
+      false
+    );
+  });
+
+  it('rejects non-array `messages` even when legacy `envelopes` is valid', () => {
+    assert.strictEqual(
+      isA2uiPart({
+        data: { messages: {}, envelopes: [sampleEnvelope] },
         metadata: { mimeType: A2UI_MIME_TYPE },
       }),
       false
@@ -141,9 +157,89 @@ describe('a2uiEnvelopesFromParts', () => {
     // surface envelopes. Arrays are `typeof 'object'`, and a stray object like
     // `{ foo: 1 }` carries no surface discriminant, so both are dropped.
     const part = {
-      data: { envelopes: [null, 'nope', [], { foo: 1 }, sampleEnvelope] },
+      data: { messages: [null, 'nope', [], { foo: 1 }, sampleEnvelope] },
       metadata: { mimeType: A2UI_MIME_TYPE },
     };
     assert.deepStrictEqual(a2uiEnvelopesFromParts([part]), [sampleEnvelope]);
+  });
+
+  it('still reads parts written with the pre-spec `envelopes` key', () => {
+    // Persisted sessions from before the rename must keep replaying.
+    const legacy = {
+      data: { envelopes: [sampleEnvelope] },
+      metadata: { mimeType: A2UI_MIME_TYPE },
+    };
+    assert.ok(isA2uiPart(legacy));
+    assert.deepStrictEqual(a2uiEnvelopesFromParts([legacy]), [sampleEnvelope]);
+  });
+
+  it('falls back to `envelopes` when `messages` is present but undefined or null', () => {
+    for (const missing of [undefined, null]) {
+      const part = {
+        data: { messages: missing, envelopes: [sampleEnvelope] },
+        metadata: { mimeType: A2UI_MIME_TYPE },
+      };
+      assert.ok(isA2uiPart(part));
+      assert.deepStrictEqual(a2uiEnvelopesFromParts([part]), [sampleEnvelope]);
+    }
+  });
+
+  it('prefers `messages` over `envelopes` when both are present, including `messages: []`', () => {
+    const nonEmpty = {
+      data: {
+        messages: [sampleEnvelope],
+        envelopes: [
+          { deleteSurface: { surfaceId: 'stale' }, version: 'v0.9' as const },
+        ],
+      },
+      metadata: { mimeType: A2UI_MIME_TYPE },
+    };
+    assert.deepStrictEqual(a2uiEnvelopesFromParts([nonEmpty]), [
+      sampleEnvelope,
+    ]);
+
+    const empty = {
+      data: { messages: [], envelopes: [sampleEnvelope] },
+      metadata: { mimeType: A2UI_MIME_TYPE },
+    };
+    assert.ok(isA2uiPart(empty));
+    assert.deepStrictEqual(a2uiEnvelopesFromParts([empty]), []);
+  });
+});
+
+describe('a2uiPartMessages', () => {
+  it('returns all envelopes (including ActionEnvelope) from `messages` or legacy `envelopes`', () => {
+    assert.deepStrictEqual(
+      a2uiPartMessages(a2uiPart([sampleEnvelope, sampleActionEnvelope])),
+      [sampleEnvelope, sampleActionEnvelope]
+    );
+    assert.deepStrictEqual(
+      a2uiPartMessages({
+        data: { envelopes: [sampleActionEnvelope] },
+        metadata: { mimeType: A2UI_MIME_TYPE },
+      }),
+      [sampleActionEnvelope]
+    );
+  });
+
+  it('prefers `messages` over `envelopes`, including when `messages` is empty', () => {
+    assert.deepStrictEqual(
+      a2uiPartMessages({
+        data: { messages: [], envelopes: [sampleEnvelope] },
+        metadata: { mimeType: A2UI_MIME_TYPE },
+      } as unknown as A2uiPart),
+      []
+    );
+  });
+
+  it('returns [] safely on malformed or cast payloads', () => {
+    assert.deepStrictEqual(
+      a2uiPartMessages({
+        data: { messages: {} },
+        metadata: { mimeType: A2UI_MIME_TYPE },
+      } as unknown as A2uiPart),
+      []
+    );
+    assert.deepStrictEqual(a2uiPartMessages(null as unknown as A2uiPart), []);
   });
 });

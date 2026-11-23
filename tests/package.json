@@ -4,7 +4,7 @@
   "description": "",
   "main": "lib/e2e.js",
   "scripts": {
-    "test": "npm-run-all test:flow_server test:reflection_api",
+    "test": "pnpm test:flow_server && pnpm test:reflection_api",
     "test:dev_ui_test": "node --import tsx src/dev_ui_test.ts",
     "test:reflection_api": "node --import tsx src/reflection_api_test.ts",
     "test:flow_server": "node --import tsx src/flow_server_test.ts"
@@ -22,7 +22,6 @@
   },
   "devDependencies": {
     "@types/json-diff": "^1.0.3",
-    "npm-run-all": "^4.1.5",
     "tsx": "^4.19.2"
   },
   "pnpm": {

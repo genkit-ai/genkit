@@ -14,15 +14,15 @@
  * limitations under the License.
  */
 
-import { describe, expect, it } from '@jest/globals';
 import { Command, InvalidArgumentError } from 'commander';
+import { describe, expect, it } from 'vitest';
 import {
   parseJson,
   parseNonNegativeInt,
   parsePort,
   parsePositiveInt,
   parseTraceStatus,
-} from '../../src/utils/option-parsers';
+} from '../../src/utils/option-parsers.js';
 
 describe('option-parsers', () => {
   describe('parsePositiveInt', () => {

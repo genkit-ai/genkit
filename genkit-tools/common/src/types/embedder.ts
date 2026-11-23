@@ -15,7 +15,7 @@
  */
 
 import { z } from 'zod';
-import { DocumentDataSchema } from './document';
+import { DocumentDataSchema } from './document.js';
 
 //
 // IMPORTANT: Keep this file in sync with genkit/ai/src/embedder.ts!

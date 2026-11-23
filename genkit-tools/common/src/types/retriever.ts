@@ -18,7 +18,7 @@
 // IMPORTANT: Keep this file in sync with js/ai/src/retriever.ts!
 //
 import { z } from 'zod';
-import { DocumentDataSchema } from './document';
+import { DocumentDataSchema } from './document.js';
 
 /**
  * Zod schema for retriever request.

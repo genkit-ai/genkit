@@ -35,7 +35,7 @@ import { defineEchoModel } from '../helpers.js';
 initNodeFeatures();
 
 describe('prompt', () => {
-  let registry;
+  let registry: Registry;
 
   beforeEach(() => {
     registry = new Registry();
@@ -910,7 +910,7 @@ function stripUndefined(input: any) {
   ) {
     return input;
   }
-  const out = {};
+  const out: Record<string, any> = {};
   for (const key in input) {
     if (input[key] !== undefined) {
       out[key] = stripUndefined(input[key]);
