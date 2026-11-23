@@ -71,15 +71,12 @@ func rejectBackgroundModel(provider, id string) error {
 	return nil
 }
 
-// GoogleAI is a Genkit plugin for interacting with the Google AI (Gemini
-// Developer API) service under the "googleai" provider prefix.
+// GoogleAI is a Genkit plugin for the Google AI (Gemini Developer API) service
+// under the "googleai" provider prefix.
 //
-// GoogleAI implements [api.DynamicPlugin] and resolves any model or embedder ID
-// served by the Gemini API on demand when referenced as "googleai/<model-id>"
-// (for example, ai.WithModelName("googleai/gemini-flash-latest") or
-// genkit.WithDefaultModel("googleai/gemini-3.8-flash")), including newly
-// released models not listed in internal capability tables. The "googleai/"
-// prefix is always required when referencing a model or embedder.
+// It implements [api.DynamicPlugin] and resolves any model or embedder ID
+// served by the Gemini API on demand when referenced as "googleai/<id>"
+// (for example, ai.WithModelName("googleai/gemini-flash-latest")).
 type GoogleAI struct {
 	APIKey     string // API key to access the service. If empty, the values of the environment variables GEMINI_API_KEY or GOOGLE_API_KEY will be consulted, in that order.
 	APIVersion string // API version to use ("v1", "v1beta", or "v1alpha"). If empty, the genai SDK default (v1beta) is used. Can be overridden per-request via config.HTTPOptions.APIVersion.
@@ -128,15 +125,12 @@ type GoogleAI struct {
 	initted bool          // Whether the plugin has been initialized.
 }
 
-// VertexAI is a Genkit plugin for interacting with the Google Cloud Vertex AI
-// service under the "vertexai" provider prefix.
+// VertexAI is a Genkit plugin for Google Cloud Vertex AI under the "vertexai"
+// provider prefix.
 //
-// VertexAI implements [api.DynamicPlugin] and resolves any model or embedder ID
-// served by Vertex AI on demand when referenced as "vertexai/<model-id>" (for
-// example, ai.WithModelName("vertexai/gemini-3.8-flash") or
-// genkit.WithDefaultModel("vertexai/gemini-3.8-flash")), including newly
-// released models not listed in internal capability tables. The "vertexai/"
-// prefix is always required when referencing a model or embedder.
+// It implements [api.DynamicPlugin] and resolves any model or embedder ID
+// served by Vertex AI on demand when referenced as "vertexai/<id>"
+// (for example, ai.WithModelName("vertexai/gemini-3.8-flash")).
 type VertexAI struct {
 	ProjectID  string // Google Cloud project to use for Vertex AI. If empty, the value of the environment variable GOOGLE_CLOUD_PROJECT will be consulted.
 	Location   string // Location of the Vertex AI service. If empty, GOOGLE_CLOUD_LOCATION and GOOGLE_CLOUD_REGION environment variables will be consulted, in that order. Accepts a regional location (e.g. "us-central1"), a multi-region location ("us" or "eu"), or "global".
@@ -288,15 +282,10 @@ func (v *VertexAI) customEndpointOnly() bool {
 		os.Getenv("GOOGLE_CLOUD_PROJECT") == "" && vertexLocationFromEnv() == ""
 }
 
-// Init initializes the Google AI plugin client.
-//
-// GoogleAI is a dynamic plugin ([api.DynamicPlugin]): Init registers no
-// actions up front, and [GoogleAI.ResolveAction] dynamically resolves any
-// model or embedder ID served by the Gemini Developer API on demand (for
-// example, via ai.WithModelName("googleai/gemini-flash-latest"), [ModelRef],
-// or [GoogleAIModel]), including newly released models not listed in internal
-// capability tables. Configure [GoogleAI.Models] or [GoogleAI.Embedders] only
-// when you need to override the capabilities advertised for a specific ID.
+// Init initializes the Google AI client. It registers no actions up front;
+// models and embedders are resolved on demand via "googleai/<id>" (see
+// [GoogleAI]). Configure [GoogleAI.Models] or [GoogleAI.Embedders] only to
+// override capabilities for a specific ID.
 func (ga *GoogleAI) Init(ctx context.Context) []api.Action {
 	ga.mu.Lock()
 	defer ga.mu.Unlock()
@@ -339,15 +328,10 @@ func (ga *GoogleAI) Init(ctx context.Context) []api.Action {
 	return []api.Action{}
 }
 
-// Init initializes the Vertex AI plugin client.
-//
-// VertexAI is a dynamic plugin ([api.DynamicPlugin]): Init registers no
-// actions up front, and [VertexAI.ResolveAction] dynamically resolves any
-// model or embedder ID served by Vertex AI on demand (for example, via
-// ai.WithModelName("vertexai/gemini-3.8-flash"), [ModelRef], or
-// [VertexAIModel]), including newly released models not listed in internal
-// capability tables. Configure [VertexAI.Models] or [VertexAI.Embedders] only
-// when you need to override the capabilities advertised for a specific ID.
+// Init initializes the Vertex AI client. It registers no actions up front;
+// models and embedders are resolved on demand via "vertexai/<id>" (see
+// [VertexAI]). Configure [VertexAI.Models] or [VertexAI.Embedders] only to
+// override capabilities for a specific ID.
 func (v *VertexAI) Init(ctx context.Context) []api.Action {
 	v.mu.Lock()
 	defer v.mu.Unlock()

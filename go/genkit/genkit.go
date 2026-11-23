@@ -174,13 +174,11 @@ func WithPlugins(plugins ...api.Plugin) GenkitOption {
 
 // WithDefaultModel sets the default model name to use for generation tasks
 // when no specific model is provided in the request options, formatted as
-// "<provider>/<model-id>" (for example,
-// genkit.WithDefaultModel("googleai/gemini-flash-latest")). The "<provider>/"
-// prefix is required; bare model IDs without a provider prefix do not resolve.
+// "<provider>/<model-id>" (for example, "googleai/gemini-flash-latest").
+// The provider prefix is required.
 //
 // The name may refer to a model registered via [DefineModelAction] or one
-// served by a plugin; dynamic plugins resolve arbitrary model IDs on demand at
-// request time. This option can only be applied once.
+// resolved on demand by a dynamic plugin. This option can only be applied once.
 func WithDefaultModel(model string) GenkitOption {
 	return &genkitOptions{DefaultModel: model}
 }
