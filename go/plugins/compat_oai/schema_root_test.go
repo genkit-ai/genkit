@@ -207,87 +207,57 @@ func personDefs() map[string]any {
 	}
 }
 
-func TestHoistDefRefs(t *testing.T) {
+func TestWrapSchemaRootTreatsNamesAsNames(t *testing.T) {
+	// const, enum, default and examples are data only in keyword position.
+	// As property or definition names they hold schemas, and refs to and
+	// from them are rewritten like any other.
+	inner := map[string]any{
+		"type":                 "object",
+		"properties":           map[string]any{"n": map[string]any{"type": "number"}},
+		"required":             []any{"n"},
+		"additionalProperties": false,
+	}
 	schema := map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"person":   map[string]any{"$ref": "#/$defs/Person"},
-			"nickname": map[string]any{"$ref": "#/$defs/Person/properties/name"},
-			"legacy":   map[string]any{"$ref": "#/definitions/Old/properties/id"},
-			"self":     map[string]any{"$ref": "#/properties/person"},
-		},
-		"required":             []any{"person", "nickname", "legacy", "self"},
-		"additionalProperties": false,
-		"$defs":                personDefs(),
-		"definitions": map[string]any{
-			"Old": map[string]any{
-				"type":       "object",
-				"properties": map[string]any{"id": map[string]any{"type": "integer"}},
+		"type": "array",
+		"items": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"default": inner,
+				"other":   map[string]any{"$ref": "#/items/properties/default"},
+				"const":   map[string]any{"$ref": "#/items/properties/default"},
 			},
+			"required":             []any{"default", "other", "const"},
+			"additionalProperties": false,
 		},
+		"$defs": map[string]any{"examples": map[string]any{"$ref": "#/items/properties/default"}},
 	}
-	got := hoistDefRefs(schema)
+	got := wrapSchemaRoot(schema)
 
-	want := map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"person":   map[string]any{"$ref": "#/$defs/Person"},
-			"nickname": map[string]any{"$ref": "#/$defs/Person_properties_name_2"},
-			"legacy":   map[string]any{"$ref": "#/$defs/Old_properties_id"},
-			// Other local refs are left alone on an object root.
-			"self": map[string]any{"$ref": "#/properties/person"},
-		},
-		"required":             []any{"person", "nickname", "legacy", "self"},
-		"additionalProperties": false,
-		"$defs": map[string]any{
-			"Person": map[string]any{
-				"type":                 "object",
-				"properties":           map[string]any{"name": map[string]any{"$ref": "#/$defs/Person_properties_name_2"}},
-				"required":             []any{"name"},
-				"additionalProperties": false,
-			},
-			"Person_properties_name":   map[string]any{"type": "number"},
-			"Person_properties_name_2": map[string]any{"type": "string", "minLength": 1},
-			"Old_properties_id":        map[string]any{"type": "integer"},
-		},
-		"definitions": map[string]any{
-			"Old": map[string]any{
-				"type":       "object",
-				"properties": map[string]any{"id": map[string]any{"$ref": "#/$defs/Old_properties_id"}},
-			},
-		},
+	const target = "#/$defs/value_items_properties_default"
+	defs := got["$defs"].(map[string]any)
+	if !reflect.DeepEqual(defs["value_items_properties_default"], inner) {
+		t.Errorf("$defs = %v, want the default property hoisted", defs)
 	}
-	if !reflect.DeepEqual(got, want) {
-		gotJSON, _ := json.MarshalIndent(got, "", "  ")
-		t.Errorf("hoistDefRefs() =\n%s", gotJSON)
+	if ref := defs["examples"].(map[string]any)["$ref"]; ref != target {
+		t.Errorf("examples definition $ref = %v, want %v", ref, target)
 	}
-	if !reflect.DeepEqual(schema["$defs"], personDefs()) {
-		t.Error("hoistDefRefs mutated its input")
+	props := got["properties"].(map[string]any)["value"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)
+	for _, name := range []string{"default", "other", "const"} {
+		if ref := props[name].(map[string]any)["$ref"]; ref != target {
+			t.Errorf("property %q $ref = %v, want %v", name, ref, target)
+		}
 	}
-
-	valid := map[string]any{"person": map[string]any{"name": "Ann"}, "nickname": "Annie", "legacy": 1, "self": map[string]any{"name": "B"}}
+	valid := map[string]any{"value": []any{map[string]any{
+		"default": map[string]any{"n": 1}, "other": map[string]any{"n": 2}, "const": map[string]any{"n": 3},
+	}}}
 	if err := base.ValidateValue(valid, got); err != nil {
 		t.Errorf("valid value failed validation: %v", err)
 	}
-	for _, bad := range []map[string]any{
-		{"person": map[string]any{"name": "Ann"}, "nickname": "", "legacy": 1, "self": map[string]any{"name": "B"}},
-		{"person": map[string]any{"name": ""}, "nickname": "Annie", "legacy": 1, "self": map[string]any{"name": "B"}},
-		{"person": map[string]any{"name": "Ann"}, "nickname": "Annie", "legacy": "x", "self": map[string]any{"name": "B"}},
-	} {
-		if err := base.ValidateValue(bad, got); err == nil {
-			t.Errorf("%v passed validation, want the hoisted constraints enforced", bad)
-		}
-	}
-}
-
-func TestHoistDefRefsLeavesSchemaWithoutThemAlone(t *testing.T) {
-	schema := map[string]any{
-		"type":       "object",
-		"properties": map[string]any{"p": map[string]any{"$ref": "#/$defs/Person"}},
-		"$defs":      personDefs(),
-	}
-	if got := hoistDefRefs(schema); reflect.ValueOf(got).Pointer() != reflect.ValueOf(schema).Pointer() {
-		t.Errorf("hoistDefRefs() returned a copy, want the schema itself")
+	invalid := map[string]any{"value": []any{map[string]any{
+		"default": map[string]any{"n": 1}, "other": map[string]any{"n": "x"}, "const": map[string]any{"n": 3},
+	}}}
+	if err := base.ValidateValue(invalid, got); err == nil {
+		t.Error("a non-numeric other.n passed validation, want the rewritten $ref enforced")
 	}
 }
 
@@ -442,8 +412,8 @@ func TestApplyResponseFormatWrapsNonObjectRoot(t *testing.T) {
 		t.Errorf("host without ObjectSchemaRoot sent %v (unwrap %v), want the schema unchanged", got, g.unwrapRoot)
 	}
 
-	// An object root that refers into the middle of a definition has that
-	// part hoisted to a definition of its own, but only on object-root hosts.
+	// An object root goes out as it is, a ref into a definition included.
+	// Strict-mode refs on object roots are left for a follow-up.
 	intoDef := map[string]any{
 		"type":       "object",
 		"properties": map[string]any{"nick": map[string]any{"$ref": "#/$defs/Person/properties/name"}},
@@ -451,13 +421,8 @@ func TestApplyResponseFormatWrapsNonObjectRoot(t *testing.T) {
 	}
 	g = NewModelGenerator(nil, "m").withObjectSchemaRoot(true)
 	g.applyResponseFormat(jsonOut(intoDef))
-	if got := sentSchema(g); !reflect.DeepEqual(got, hoistDefRefs(intoDef)) || g.unwrapRoot {
-		t.Errorf("object root with a ref into a definition sent %v (unwrap %v), want it hoisted and not unwrapped", got, g.unwrapRoot)
-	}
-	g = NewModelGenerator(nil, "m")
-	g.applyResponseFormat(jsonOut(intoDef))
-	if got := sentSchema(g); !reflect.DeepEqual(got, intoDef) {
-		t.Errorf("host without ObjectSchemaRoot sent %v, want the schema unchanged", got)
+	if got := sentSchema(g); !reflect.DeepEqual(got, intoDef) || g.unwrapRoot {
+		t.Errorf("object root with a ref into a definition sent %v (unwrap %v), want it unchanged", got, g.unwrapRoot)
 	}
 }
 

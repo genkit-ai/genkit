@@ -59,7 +59,7 @@ func hasObjectRoot(schema map[string]any) bool {
 // top-level definitions, so each referenced subschema moves into $defs and
 // both its old place and every reference to it point there instead.
 func wrapSchemaRoot(schema map[string]any) map[string]any {
-	h := newRefHoister(schema, true)
+	h := newRefHoister(schema)
 	inner := make(map[string]any, len(schema))
 	wrapped := map[string]any{
 		"type":                 "object",
@@ -71,7 +71,7 @@ func wrapSchemaRoot(schema map[string]any) map[string]any {
 		case "$schema":
 			wrapped[k] = v
 		case "definitions":
-			wrapped[k] = h.walk(v, "#/definitions")
+			wrapped[k] = h.walkNames(v, "#/definitions")
 		case "$defs":
 			if !h.walkDefs(v) {
 				wrapped[k] = v
@@ -87,29 +87,20 @@ func wrapSchemaRoot(schema map[string]any) map[string]any {
 	return wrapped
 }
 
-// hoistDefRefs returns schema with every reference into the middle of a
-// definition ("#/$defs/Person/properties/name") pointed at a new top-level
-// definition instead, since strict hosts resolve only whole top-level
-// definitions. A schema without such references comes back unchanged.
-func hoistDefRefs(schema map[string]any) map[string]any {
-	h := newRefHoister(schema, false)
-	if len(h.targets) == 0 {
-		return schema
-	}
-	out := make(map[string]any, len(schema)+1)
-	for k, v := range schema {
-		if k == "$defs" && h.walkDefs(v) {
-			continue
-		}
-		out[k] = h.walk(v, "#/"+escapePointer(k))
-	}
-	out["$defs"] = h.defs
-	return out
-}
-
 // dataKeywords hold data rather than subschemas, so a $ref inside them is not
 // a reference.
 var dataKeywords = map[string]bool{"const": true, "enum": true, "default": true, "examples": true}
+
+// nameMaps are the keywords whose values map names to subschemas. Keys there
+// are names, so a property called "default" or "$ref" is a schema like any
+// other.
+var nameMaps = map[string]bool{
+	"properties":        true,
+	"patternProperties": true,
+	"$defs":             true,
+	"definitions":       true,
+	"dependentSchemas":  true,
+}
 
 // refHoister moves the subschemas that local references point at into $defs
 // as it copies a schema.
@@ -119,10 +110,10 @@ type refHoister struct {
 	defs    map[string]any
 }
 
-// newRefHoister finds the references in schema that strict hosts can't
-// follow: those into the middle of a definition and, when local is set, those
-// anywhere else outside $defs and definitions.
-func newRefHoister(schema map[string]any, local bool) *refHoister {
+// newRefHoister finds the local references in schema that strict hosts
+// can't follow once it is wrapped: all but those to a whole top-level
+// definition.
+func newRefHoister(schema map[string]any) *refHoister {
 	h := &refHoister{targets: map[string]string{}, defs: map[string]any{}}
 	taken := map[string]bool{}
 	if defs, ok := schema["$defs"].(map[string]any); ok {
@@ -132,14 +123,14 @@ func newRefHoister(schema map[string]any, local bool) *refHoister {
 	}
 	var refs []string
 	collectRefs(schema, func(ref string) {
-		if !hoistable(ref, local) {
+		if !hoistable(ref) {
 			return
 		}
 		if _, seen := h.targets[ref]; !seen && resolvePointer(schema, ref) {
 			h.targets[ref] = ""
 			refs = append(refs, ref)
 		}
-	})
+	}, false)
 	slices.Sort(refs)
 	for _, ref := range refs {
 		h.targets[ref] = uniqueDefName(ref, taken)
@@ -160,23 +151,36 @@ func (h *refHoister) walkDefs(v any) bool {
 	return true
 }
 
-// walk copies node, found at JSON pointer ptr in the caller's schema. A node
-// that a reference points at goes into defs, and a reference to it is left in
-// its place.
+// walk copies the schema node, found at JSON pointer ptr in the caller's
+// schema. A node that a reference points at goes into defs, and a reference
+// to it is left in its place.
 func (h *refHoister) walk(node any, ptr string) any {
-	if name, ok := h.targets[ptr]; ok {
-		h.defs[name] = h.copy(node, ptr)
-		return map[string]any{"$ref": "#/$defs/" + name}
-	}
-	return h.copy(node, ptr)
+	return h.hoist(node, ptr, false)
 }
 
-func (h *refHoister) copy(node any, ptr string) any {
+// walkNames is walk for a map of names to subschemas, such as the value of
+// properties.
+func (h *refHoister) walkNames(node any, ptr string) any {
+	return h.hoist(node, ptr, true)
+}
+
+func (h *refHoister) hoist(node any, ptr string, names bool) any {
+	if name, ok := h.targets[ptr]; ok {
+		h.defs[name] = h.copy(node, ptr, names)
+		return map[string]any{"$ref": "#/$defs/" + name}
+	}
+	return h.copy(node, ptr, names)
+}
+
+func (h *refHoister) copy(node any, ptr string, names bool) any {
 	switch n := node.(type) {
 	case map[string]any:
 		out := make(map[string]any, len(n))
 		for k, v := range n {
+			at := ptr + "/" + escapePointer(k)
 			switch ref, isString := v.(string); {
+			case names:
+				out[k] = h.walk(v, at)
 			case k == "$ref" && isString:
 				if name, ok := h.targets[ref]; ok {
 					ref = "#/$defs/" + name
@@ -185,7 +189,7 @@ func (h *refHoister) copy(node any, ptr string) any {
 			case dataKeywords[k]:
 				out[k] = v
 			default:
-				out[k] = h.walk(v, ptr+"/"+escapePointer(k))
+				out[k] = h.hoist(v, at, nameMaps[k])
 			}
 		}
 		return out
@@ -200,38 +204,41 @@ func (h *refHoister) copy(node any, ptr string) any {
 	}
 }
 
-// collectRefs calls found with every $ref in node.
-func collectRefs(node any, found func(string)) {
+// collectRefs calls found with every $ref in node. names says node is a map
+// of names to subschemas (the value of properties, say), not a schema.
+func collectRefs(node any, found func(string), names bool) {
 	switch n := node.(type) {
 	case map[string]any:
 		for k, v := range n {
 			switch ref, isString := v.(string); {
+			case names:
+				collectRefs(v, found, false)
 			case k == "$ref" && isString:
 				found(ref)
 			case dataKeywords[k]:
 			default:
-				collectRefs(v, found)
+				collectRefs(v, found, nameMaps[k])
 			}
 		}
 	case []any:
 		for _, v := range n {
-			collectRefs(v, found)
+			collectRefs(v, found, false)
 		}
 	}
 }
 
 // hoistable reports whether ref is a local reference that strict hosts can't
-// follow. A reference to a whole top-level definition is fine. One into the
-// middle of a definition is not, and nor, when local is set, is any other
-// local reference.
-func hoistable(ref string, local bool) bool {
+// follow once the schema is wrapped. A reference to a whole top-level
+// definition is fine; one into the middle of a definition or anywhere else in
+// the schema is not.
+func hoistable(ref string) bool {
 	if ref != "#" && !strings.HasPrefix(ref, "#/") {
 		return false
 	}
 	if rest, ok := defsPath(ref); ok {
 		return strings.Contains(rest, "/")
 	}
-	return local && ref != "#/$defs" && ref != "#/definitions"
+	return ref != "#/$defs" && ref != "#/definitions"
 }
 
 // defsPath returns what follows "#/$defs/" or "#/definitions/" in ref.
