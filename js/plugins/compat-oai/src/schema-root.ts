@@ -46,25 +46,37 @@ function isRecord(node: Json): node is Record<string, Json> {
   return node !== null && typeof node === 'object' && !Array.isArray(node);
 }
 
-/** Whether `ref` points into the schema itself rather than into `$defs` or
- * `definitions`. */
-function isLocalRef(ref: string): boolean {
-  if (ref !== '#' && !ref.startsWith('#/')) return false;
-  return !['#/$defs', '#/definitions'].some(
-    (defs) => ref === defs || ref.startsWith(`${defs}/`)
-  );
+/** What follows `#/$defs/` or `#/definitions/` in `ref`, if either starts it. */
+function defsPath(ref: string): string | undefined {
+  for (const prefix of ['#/$defs/', '#/definitions/']) {
+    if (ref.startsWith(prefix)) return ref.slice(prefix.length);
+  }
+  return undefined;
 }
 
-/** Calls `found` with every local reference in `node`. */
-function collectLocalRefs(node: Json, found: (ref: string) => void): void {
+/**
+ * Whether `ref` is a local reference that strict hosts can't follow. A
+ * reference to a whole top-level definition is fine. One into the middle of a
+ * definition is not, and nor, when `local` is set, is any other local
+ * reference.
+ */
+function hoistable(ref: string, local: boolean): boolean {
+  if (ref !== '#' && !ref.startsWith('#/')) return false;
+  const path = defsPath(ref);
+  if (path !== undefined) return path.includes('/');
+  return local && ref !== '#/$defs' && ref !== '#/definitions';
+}
+
+/** Calls `found` with every `$ref` in `node`. */
+function collectRefs(node: Json, found: (ref: string) => void): void {
   if (Array.isArray(node)) {
-    node.forEach((v) => collectLocalRefs(v, found));
+    node.forEach((v) => collectRefs(v, found));
   } else if (isRecord(node)) {
     for (const [key, value] of Object.entries(node)) {
       if (key === '$ref' && typeof value === 'string') {
-        if (isLocalRef(value)) found(value);
+        found(value);
       } else if (!DATA_KEYWORDS.has(key)) {
-        collectLocalRefs(value, found);
+        collectRefs(value, found);
       }
     }
   }
@@ -93,28 +105,45 @@ function escapePointer(key: string): string {
 }
 
 /**
- * Copies a schema, moving the subschemas that local references point at into
- * `defs` and pointing both their old place and the references there.
+ * Copies a schema, moving the subschemas that references point at into `defs`
+ * and pointing both their old place and the references there. It moves the
+ * targets of references into the middle of a definition and, when `local` is
+ * set, those of any other local reference outside the definitions.
  */
 class RefHoister {
   /** Each referenced JSON pointer, and its name in `defs`. */
   private readonly targets = new Map<string, string>();
   readonly defs: Record<string, Json> = {};
 
-  constructor(schema: JsonSchema) {
+  constructor(schema: JsonSchema, local: boolean) {
     const taken = new Set(
       isRecord(schema.$defs) ? Object.keys(schema.$defs) : []
     );
     const refs = new Set<string>();
-    collectLocalRefs(schema, (ref) => {
-      if (resolvesToSchema(schema, ref)) refs.add(ref);
+    collectRefs(schema, (ref) => {
+      if (hoistable(ref, local) && resolvesToSchema(schema, ref)) refs.add(ref);
     });
+    // A pointer into a definition is named after its path there
+    // (`Person_properties_name`), and any other after its path under the
+    // wrapper (`value_items`).
     for (const ref of [...refs].sort()) {
-      const base = (WRAPPER_KEY + ref.slice(1)).replace(/[^\w-]/g, '_');
+      const path = defsPath(ref) ?? WRAPPER_KEY + ref.slice(1);
+      const base = path.replace(/[^\w-]/g, '_');
       let name = base;
       for (let i = 2; taken.has(name); i++) name = `${base}_${i}`;
       taken.add(name);
       this.targets.set(ref, name);
+    }
+  }
+
+  get hoists(): boolean {
+    return this.targets.size > 0;
+  }
+
+  /** Copies the `$defs` map into `defs`. */
+  walkDefs($defs: Record<string, Json>): void {
+    for (const [name, def] of Object.entries($defs)) {
+      this.defs[name] = this.walk(def, `#/$defs/${escapePointer(name)}`);
     }
   }
 
@@ -158,13 +187,14 @@ class RefHoister {
  */
 export function wrapSchemaRoot(schema: JsonSchema): JsonSchema {
   const { $schema, $defs, definitions, ...inner } = schema;
-  const hoister = new RefHoister(schema);
-  if (isRecord($defs)) {
-    for (const [name, def] of Object.entries($defs)) {
-      hoister.defs[name] = hoister.walk(def, `#/$defs/${escapePointer(name)}`);
-    }
-  }
+  const hoister = new RefHoister(schema, true);
+  if (isRecord($defs)) hoister.walkDefs($defs);
   const value = hoister.walk(inner, '#');
+  // Walk definitions before deciding on $defs, since walking them can hoist.
+  const walkedDefinitions =
+    definitions !== undefined
+      ? hoister.walk(definitions, '#/definitions')
+      : undefined;
   const defs =
     isRecord($defs) || Object.keys(hoister.defs).length > 0
       ? hoister.defs
@@ -176,10 +206,31 @@ export function wrapSchemaRoot(schema: JsonSchema): JsonSchema {
     required: [WRAPPER_KEY],
     additionalProperties: false,
     ...(defs !== undefined ? { $defs: defs } : {}),
-    ...(definitions !== undefined
-      ? { definitions: hoister.walk(definitions, '#/definitions') }
+    ...(walkedDefinitions !== undefined
+      ? { definitions: walkedDefinitions }
       : {}),
   };
+}
+
+/**
+ * Returns `schema` with every reference into the middle of a definition
+ * (`#/$defs/Person/properties/name`) pointed at a new top-level definition
+ * instead, since strict hosts resolve only whole top-level definitions. A
+ * schema without such references comes back unchanged.
+ */
+export function hoistDefRefs(schema: JsonSchema): JsonSchema {
+  const hoister = new RefHoister(schema, false);
+  if (!hoister.hoists) return schema;
+  const out: JsonSchema = {};
+  for (const [key, value] of Object.entries(schema)) {
+    if (key === '$defs' && isRecord(value)) {
+      hoister.walkDefs(value);
+    } else {
+      out[key] = hoister.walk(value, `#/${escapePointer(key)}`);
+    }
+  }
+  out.$defs = hoister.defs;
+  return out;
 }
 
 /**

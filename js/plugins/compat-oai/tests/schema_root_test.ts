@@ -30,6 +30,7 @@ import { openAI, type OpenAIPluginOptions } from '../src/openai';
 import {
   WrapperStreamUnwrapper,
   hasObjectRoot,
+  hoistDefRefs,
   unwrapValue,
   wrapSchemaRoot,
 } from '../src/schema-root';
@@ -197,6 +198,155 @@ describe('wrapSchemaRoot local references', () => {
   });
 });
 
+/** A $defs map whose Person has a name that other schemas refer into, plus a
+ * definition already holding the name that ref would hoist to. */
+function personDefs() {
+  return {
+    Person: {
+      type: 'object',
+      properties: { name: { type: 'string', minLength: 1 } },
+      required: ['name'],
+      additionalProperties: false,
+    },
+    Person_properties_name: { type: 'number' },
+  };
+}
+
+const hoistedPersonDefs = {
+  Person: {
+    type: 'object',
+    properties: { name: { $ref: '#/$defs/Person_properties_name_2' } },
+    required: ['name'],
+    additionalProperties: false,
+  },
+  Person_properties_name: { type: 'number' },
+  Person_properties_name_2: { type: 'string', minLength: 1 },
+};
+
+describe('hoistDefRefs', () => {
+  const schema = {
+    type: 'object',
+    properties: {
+      person: { $ref: '#/$defs/Person' },
+      nickname: { $ref: '#/$defs/Person/properties/name' },
+      legacy: { $ref: '#/definitions/Old/properties/id' },
+      self: { $ref: '#/properties/person' },
+    },
+    required: ['person', 'nickname', 'legacy', 'self'],
+    additionalProperties: false,
+    $defs: personDefs(),
+    definitions: {
+      Old: { type: 'object', properties: { id: { type: 'integer' } } },
+    },
+  };
+
+  it('moves refs into the middle of a definition to definitions of their own', () => {
+    expect(hoistDefRefs(schema)).toStrictEqual({
+      type: 'object',
+      properties: {
+        person: { $ref: '#/$defs/Person' },
+        nickname: { $ref: '#/$defs/Person_properties_name_2' },
+        legacy: { $ref: '#/$defs/Old_properties_id' },
+        // Other local refs are left alone on an object root.
+        self: { $ref: '#/properties/person' },
+      },
+      required: ['person', 'nickname', 'legacy', 'self'],
+      additionalProperties: false,
+      $defs: { ...hoistedPersonDefs, Old_properties_id: { type: 'integer' } },
+      definitions: {
+        Old: {
+          type: 'object',
+          properties: { id: { $ref: '#/$defs/Old_properties_id' } },
+        },
+      },
+    });
+    expect(schema.$defs).toStrictEqual(personDefs());
+  });
+
+  it('keeps the constraints of the hoisted parts', () => {
+    const jsonSchema = hoistDefRefs(schema);
+    const ok = { person: { name: 'Ann' }, nickname: 'Annie', legacy: 1 };
+    expect(
+      validateSchema({ ...ok, self: { name: 'B' } }, { jsonSchema }).valid
+    ).toBe(true);
+    for (const bad of [
+      { ...ok, nickname: '' },
+      { ...ok, person: { name: '' } },
+      { ...ok, legacy: 'x' },
+    ]) {
+      expect(
+        validateSchema({ ...bad, self: { name: 'B' } }, { jsonSchema }).valid
+      ).toBe(false);
+    }
+  });
+
+  it('returns a schema without such refs unchanged', () => {
+    const plain = {
+      type: 'object',
+      properties: { p: { $ref: '#/$defs/Person' } },
+      $defs: personDefs(),
+    };
+    expect(hoistDefRefs(plain)).toBe(plain);
+  });
+
+  it('adds $defs when wrapping a schema that has only definitions', () => {
+    const wrapped = wrapSchemaRoot({
+      type: 'array',
+      items: { $ref: '#/definitions/Person/properties/name' },
+      definitions: { Person: personDefs().Person },
+    });
+    expect(wrapped).toStrictEqual({
+      type: 'object',
+      properties: {
+        value: {
+          type: 'array',
+          items: { $ref: '#/$defs/Person_properties_name' },
+        },
+      },
+      required: ['value'],
+      additionalProperties: false,
+      $defs: { Person_properties_name: { type: 'string', minLength: 1 } },
+      definitions: {
+        Person: {
+          type: 'object',
+          properties: { name: { $ref: '#/$defs/Person_properties_name' } },
+          required: ['name'],
+          additionalProperties: false,
+        },
+      },
+    });
+    expect(validateSchema({ value: [''] }, { jsonSchema: wrapped }).valid).toBe(
+      false
+    );
+  });
+
+  it('moves them when wrapping a non-object root too', () => {
+    const wrapped = wrapSchemaRoot({
+      type: 'array',
+      items: { $ref: '#/$defs/Person/properties/name' },
+      $defs: personDefs(),
+    });
+    expect(wrapped).toStrictEqual({
+      type: 'object',
+      properties: {
+        value: {
+          type: 'array',
+          items: { $ref: '#/$defs/Person_properties_name_2' },
+        },
+      },
+      required: ['value'],
+      additionalProperties: false,
+      $defs: hoistedPersonDefs,
+    });
+    expect(
+      validateSchema({ value: ['Ann'] }, { jsonSchema: wrapped }).valid
+    ).toBe(true);
+    expect(validateSchema({ value: [''] }, { jsonSchema: wrapped }).valid).toBe(
+      false
+    );
+  });
+});
+
 describe('unwrapValue', () => {
   it('returns the wrapped value', () => {
     expect(unwrapValue({ value: [1, 2] })).toStrictEqual([1, 2]);
@@ -267,6 +417,25 @@ describe('toOpenAIRequestBody with non-object roots', () => {
       objectSchemaRoot: true,
     }) as any;
     expect(body.response_format.json_schema.schema).toStrictEqual(obj);
+  });
+
+  it('hoists refs into a definition on an object root, for object-only hosts', () => {
+    const intoDef = {
+      type: 'object',
+      properties: { nick: { $ref: '#/$defs/Person/properties/name' } },
+      $defs: personDefs(),
+    };
+    const hoisted = toOpenAIRequestBody('gpt-4o', request(intoDef), undefined, {
+      objectSchemaRoot: true,
+    }) as any;
+    expect(hoisted.response_format.json_schema.schema).toStrictEqual(
+      hoistDefRefs(intoDef)
+    );
+    expect(hoisted.response_format.json_schema.schema.$defs).toHaveProperty(
+      'Person_properties_name_2'
+    );
+    const unchanged = toOpenAIRequestBody('gpt-4o', request(intoDef)) as any;
+    expect(unchanged.response_format.json_schema.schema).toStrictEqual(intoDef);
   });
 });
 

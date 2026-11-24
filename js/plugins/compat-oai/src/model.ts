@@ -55,6 +55,7 @@ import { PluginOptions } from './index.js';
 import {
   WrapperStreamUnwrapper,
   hasObjectRoot,
+  hoistDefRefs,
   unwrapValue,
   wrapSchemaRoot,
 } from './schema-root.js';
@@ -684,9 +685,14 @@ export function toOpenAIRequestBody(
         type: 'json_schema',
         json_schema: {
           name: 'output',
+          // Hosts that take only object roots also resolve only whole
+          // top-level definitions, so refs into the middle of one are
+          // hoisted whether or not the root is wrapped.
           schema: needsRootWrapper(request, pluginOptions)
             ? wrapSchemaRoot(request.output!.schema!)
-            : request.output!.schema,
+            : pluginOptions?.objectSchemaRoot
+              ? hoistDefRefs(request.output!.schema!)
+              : request.output!.schema,
           ...(strict !== undefined ? { strict } : {}),
         },
       };
