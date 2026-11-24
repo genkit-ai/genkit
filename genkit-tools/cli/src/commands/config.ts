@@ -24,6 +24,7 @@ import {
 } from '@genkit-ai/tools-common/utils';
 import * as clc from 'colorette';
 import { Command } from 'commander';
+import { writeStderr, writeStdout } from '../utils/output.js';
 
 export const UPDATE_NOTIFICATIONS_OPT_OUT_CONFIG_TAG =
   'updateNotificationsOptOut';
@@ -65,9 +66,9 @@ config
 
     const userSettings = getUserSettings();
     if (userSettings[tag] !== undefined) {
-      logger.info(userSettings[tag]);
+      writeStdout(String(userSettings[tag]));
     } else {
-      logger.info(clc.italic('(unset)'));
+      writeStderr(clc.italic('(unset)'));
     }
   });
 
@@ -102,7 +103,7 @@ config
       [tag]: parsedValue,
     });
 
-    logger.info(`Set "${clc.bold(tag)}" to "${clc.bold(value)}".`);
+    writeStderr(`Set "${clc.bold(tag)}" to "${clc.bold(value)}".`);
   });
 
 function readableTagsHint() {

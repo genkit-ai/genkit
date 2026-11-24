@@ -48,6 +48,7 @@ import { traceList } from './commands/trace-list.js';
 import { uiStart } from './commands/ui-start.js';
 import { uiStop } from './commands/ui-stop.js';
 import { warnIfLegacyGenkitContext } from './utils/legacy-context-warning.js';
+import { isInteractive, isStderrTTY, writeStdout } from './utils/output.js';
 import { detectCLIRuntime } from './utils/runtime-detector.js';
 import { showUpdateNotification } from './utils/updates.js';
 import { version } from './utils/version.js';
@@ -113,7 +114,7 @@ export async function startCLI(): Promise<void> {
       const projectRuntime = await detectRuntime(projectRoot);
 
       if (
-        !process.argv.includes('--non-interactive') &&
+        isInteractive() &&
         commandName !== 'config' &&
         commandName !== 'mcp' &&
         actionCommand.name() !== SERVER_HARNESS_COMMAND
@@ -150,9 +151,15 @@ export async function startCLI(): Promise<void> {
   const hasNoUpdateNotification = process.argv.includes(
     '--no-update-notification'
   );
+  const isNonInteractive = process.argv.includes('--non-interactive');
   const { operands } = program.parseOptions(process.argv.slice(2));
   const isMcpCommand = operands[0] === 'mcp';
-  if (!hasNoUpdateNotification && !isMcpCommand) {
+  if (
+    isStderrTTY() &&
+    !isNonInteractive &&
+    !hasNoUpdateNotification &&
+    !isMcpCommand
+  ) {
     try {
       await showUpdateNotification();
     } catch (e) {
@@ -185,7 +192,7 @@ export async function startCLI(): Promise<void> {
   program.on('command:*', (operands) => {
     logger.error(`unknown command '${operands[0]}'`);
     // helpInformation() returns the help text. help() would exit with code 0.
-    logger.info(program.helpInformation());
+    writeStdout(program.helpInformation());
     process.exit(1);
   });
 

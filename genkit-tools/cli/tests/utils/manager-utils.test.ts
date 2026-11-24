@@ -584,6 +584,38 @@ describe('runWithManager', () => {
       expect.objectContaining({ reflectionSecret: undefined })
     );
   });
+
+  it.each([
+    {
+      name: 'lowers info level to warn during ephemeral startup and restores it afterward',
+      initialLevel: 'info',
+      expectedDuringStartup: 'warn',
+    },
+    {
+      name: 'preserves debug level during ephemeral startup',
+      initialLevel: 'debug',
+      expectedDuringStartup: 'debug',
+    },
+  ])('$name', async ({ initialLevel, expectedDuringStartup }) => {
+    const origLevel = logger.level;
+    logger.level = initialLevel;
+    let levelDuringStartup: string | undefined;
+    mockManager.listRuntimes = vi.fn().mockReturnValue([{ id: 'rt-1' }]);
+    vi.spyOn(ProcessManager.prototype, 'start').mockImplementation(async () => {
+      levelDuringStartup = logger.level;
+    });
+
+    try {
+      await runWithManager('/mock/root', async () => {}, {
+        runtimeCommand: ['node', 'app.js'],
+      });
+
+      expect(levelDuringStartup).toBe(expectedDuringStartup);
+      expect(logger.level).toBe(initialLevel);
+    } finally {
+      logger.level = origLevel;
+    }
+  });
 });
 
 describe('resolveReflectionSecret', () => {

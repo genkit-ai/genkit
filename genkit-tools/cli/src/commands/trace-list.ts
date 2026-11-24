@@ -24,7 +24,7 @@ import {
 import { Command } from 'commander';
 import { runWithManager } from '../utils/manager-utils.js';
 import { parsePositiveInt, parseTraceStatus } from '../utils/option-parsers.js';
-import { writeStdout } from '../utils/output.js';
+import { writeStderr, writeStdout } from '../utils/output.js';
 
 function formatTruncated(val: any, maxLen = 100): string {
   if (val === undefined) return '';
@@ -93,7 +93,7 @@ export const traceList = new Command('trace:list')
         const response = await manager.listTraces(listRequest);
 
         if (!response || !response.traces || response.traces.length === 0) {
-          logger.info('No traces found.');
+          writeStderr('No traces found.');
           return;
         }
 

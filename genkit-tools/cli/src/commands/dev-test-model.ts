@@ -32,6 +32,7 @@ import {
   startDevProcessManager,
   startManager,
 } from '../utils/manager-utils.js';
+import { writeStderr } from '../utils/output.js';
 
 interface TestOptions {
   supports: string;
@@ -517,13 +518,13 @@ async function waitForActions(
       const registeredKeys = new Set(Object.keys(actions));
       const missing = [...requiredKeys].filter((k) => !registeredKeys.has(k));
       if (missing.length === 0) {
-        logger.info(
+        writeStderr(
           `All ${requiredKeys.size} model actions registered. Starting tests.`
         );
         return;
       }
       if (attempt % 10 === 0 && attempt > 0) {
-        logger.info(
+        writeStderr(
           `Waiting for ${missing.length} model action(s) to register: ${missing.join(', ')}...`
         );
       }
@@ -543,7 +544,7 @@ async function runTest(
   model: string,
   testCase: TestCase
 ): Promise<boolean> {
-  logger.info(`Running test: ${testCase.name}...`);
+  writeStderr(`Running test: ${testCase.name}...`);
   try {
     // Adjust model name if needed (e.g. /model/ prefix)
     const modelKey = model.startsWith('/') ? model : `/model/${model}`;
@@ -576,7 +577,7 @@ async function runTest(
       validator(response, arg, collectedChunks);
     }
 
-    logger.info(`✅ Passed: ${testCase.name}`);
+    writeStderr(`✅ Passed: ${testCase.name}`);
     return true;
   } catch (e) {
     if (e instanceof GenkitToolsError) {
@@ -601,7 +602,7 @@ async function runTestSuite(
 ): Promise<{ passed: number; failed: number }> {
   const supports = suite.supports || (suite.tests ? [] : defaultSupports);
 
-  logger.info(`Testing model: ${suite.model}`);
+  writeStderr(`Testing model: ${suite.model}`);
 
   const promises: Promise<boolean>[] = [];
 
@@ -728,8 +729,8 @@ export const devTestModel = new Command('dev:test-model')
           totalFailed += failed;
         }
 
-        logger.info('--------------------------------------------------');
-        logger.info(
+        writeStderr('--------------------------------------------------');
+        writeStderr(
           `Tests Completed: ${totalPassed} Passed, ${totalFailed} Failed`
         );
 

@@ -24,6 +24,7 @@ import {
   runWithManager,
 } from '../utils/manager-utils.js';
 import { parseJson } from '../utils/option-parsers.js';
+import { writeStderr, writeStdout } from '../utils/output.js';
 
 interface FlowBatchRunOptions {
   /** --experimental-auth. */
@@ -108,14 +109,14 @@ export const flowBatchRun = new Command('flow:batch-run')
               : undefined,
           });
 
-          logger.info(clc.green('Result:'));
+          writeStderr(clc.green('Result:'));
           const resultOutput =
             typeof response.result === 'string'
               ? response.result
               : JSON.stringify(response.result, undefined, '  ');
-          logger.info(resultOutput);
+          writeStdout(resultOutput);
           if (response.telemetry?.traceId) {
-            logger.info(
+            writeStderr(
               `${clc.cyan('Trace ID:')} ${response.telemetry.traceId}`
             );
           }

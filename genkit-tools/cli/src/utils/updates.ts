@@ -22,6 +22,7 @@ import * as clc from 'colorette';
 import { arch, platform } from 'os';
 import semver from 'semver';
 import { UPDATE_NOTIFICATIONS_OPT_OUT_CONFIG_TAG } from '../commands/config.js';
+import { writeStderr } from '../utils/output.js';
 import { detectCLIRuntime } from '../utils/runtime-detector.js';
 import {
   version as currentVersion,
@@ -242,7 +243,7 @@ export async function showUpdateNotification(): Promise<void> {
       `For other CLI management options, visit ${CLI_DOCS_URL}\n` +
       `${clc.dim('Run')} ${clc.bold('genkit config set updateNotificationsOptOut true')} ${clc.dim('to disable these notifications')}\n`;
 
-    logger.info(`\n${updateNotificationMessage}`);
+    writeStderr(`\n${updateNotificationMessage}`);
   } catch (e) {
     // Silently fail - update notifications shouldn't break the CLI
     logger.debug('Failed to show update notification', e);

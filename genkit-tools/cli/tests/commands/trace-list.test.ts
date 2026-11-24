@@ -63,6 +63,7 @@ describe('trace:list command', () => {
     vi.spyOn(logger, 'info').mockImplementation((() => {}) as any);
     vi.spyOn(logger, 'error').mockImplementation((() => {}) as any);
     vi.spyOn(output, 'writeStdout').mockImplementation(() => {});
+    vi.spyOn(output, 'writeStderr').mockImplementation(() => {});
   });
 
   afterEach(() => {
@@ -184,14 +185,14 @@ describe('trace:list command', () => {
     );
   });
 
-  it('should log info when no traces are found', async () => {
+  it('should write to stderr when no traces are found', async () => {
     mockManager.listTraces.mockResolvedValue({
       traces: [],
     });
 
     await traceList.parseAsync(['node', 'trace:list']);
 
-    expect(logger.info).toHaveBeenCalledWith('No traces found.');
+    expect(output.writeStderr).toHaveBeenCalledWith('No traces found.');
   });
 
   it('should handle and log errors', async () => {

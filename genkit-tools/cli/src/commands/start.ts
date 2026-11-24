@@ -32,6 +32,7 @@ import {
   startManager,
 } from '../utils/manager-utils.js';
 import { parsePort } from '../utils/option-parsers.js';
+import { writeStderr } from '../utils/output.js';
 
 interface RunOptions {
   /** --experimental-auth. */
@@ -161,7 +162,7 @@ export const start = new Command('start')
       // creation, so chmod too in case the file already existed.
       fs.writeFileSync(options.writeEnvFile, content, { mode: 0o600 });
       fs.chmodSync(options.writeEnvFile, 0o600);
-      logger.info(`Wrote environment variables to ${options.writeEnvFile}`);
+      writeStderr(`Wrote environment variables to ${options.writeEnvFile}`);
     }
 
     // Always start the manager.

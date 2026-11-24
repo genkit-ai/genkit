@@ -119,13 +119,18 @@ describe('flow:run and flow:batchRun validation', () => {
     expect(runWithManager).not.toHaveBeenCalled();
   });
 
-  it('writes streamed chunks via writeStdout when --stream is enabled', async () => {
+  it('writes streamed chunks and result payload via writeStdout and chrome via writeStderr', async () => {
     vi.spyOn(output, 'writeStdout').mockImplementation(() => {});
-    vi.spyOn(logger, 'info').mockImplementation((() => {}) as any);
+    vi.spyOn(output, 'writeStderr').mockImplementation(() => {});
     vi.mocked(runWithManager).mockImplementation(async (_root, action) => {
       const mockManager = {
         runAction: vi.fn(
-          (_req: unknown, onChunk?: (chunk: unknown) => void) => {
+          (
+            _req: unknown,
+            onChunk?: (chunk: unknown) => void,
+            onTraceId?: (traceId: string) => void
+          ) => {
+            onTraceId?.('trace-123');
             onChunk?.({ step: 1 });
             return Promise.resolve({ result: 'done' });
           }
@@ -138,6 +143,13 @@ describe('flow:run and flow:batchRun validation', () => {
 
     expect(output.writeStdout).toHaveBeenCalledWith(
       JSON.stringify({ step: 1 }, undefined, '  ')
+    );
+    expect(output.writeStdout).toHaveBeenCalledWith('done');
+    expect(output.writeStderr).toHaveBeenCalledWith(
+      expect.stringContaining('Result:')
+    );
+    expect(output.writeStderr).toHaveBeenCalledWith(
+      expect.stringContaining('Trace ID:')
     );
   });
 });

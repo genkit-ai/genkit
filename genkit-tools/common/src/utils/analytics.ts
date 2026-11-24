@@ -192,11 +192,11 @@ export async function notifyAnalyticsIfFirstRun(
     return;
   }
 
-  logger.info(ANALYTICS_NOTIFICATION);
+  process.stderr.write(`${ANALYTICS_NOTIFICATION}\n`);
 
   const readline = createInterface({
     input: process.stdin,
-    output: process.stdout,
+    output: process.stderr,
   });
   await readline.question('Press "Enter" to acknowledge and continue');
   readline.close();

@@ -29,13 +29,13 @@ const {
   mockAxiosGet,
   mockGetUserSettings,
   mockLoggerDebug,
-  mockLoggerInfo,
+  mockWriteStderr,
   mockDetectCLIRuntime,
 } = vi.hoisted(() => ({
   mockAxiosGet: vi.fn() as MockedFunction<any>,
   mockGetUserSettings: vi.fn(),
   mockLoggerDebug: vi.fn(),
-  mockLoggerInfo: vi.fn(),
+  mockWriteStderr: vi.fn(),
   mockDetectCLIRuntime: vi.fn(),
 }));
 
@@ -52,10 +52,13 @@ vi.mock('@genkit-ai/tools-common/utils', async (importOriginal) => {
     getUserSettings: mockGetUserSettings,
     logger: {
       debug: mockLoggerDebug,
-      info: mockLoggerInfo,
     },
   };
 });
+
+vi.mock('../../src/utils/output.js', () => ({
+  writeStderr: mockWriteStderr,
+}));
 
 vi.mock('../../src/utils/runtime-detector.js', () => ({
   detectCLIRuntime: mockDetectCLIRuntime,
@@ -240,7 +243,7 @@ describe('updates', () => {
 
       await showUpdateNotification();
 
-      expect(mockLoggerInfo).not.toHaveBeenCalled();
+      expect(mockWriteStderr).not.toHaveBeenCalled();
       expect(mockAxiosGet).not.toHaveBeenCalled();
     });
 
@@ -251,7 +254,7 @@ describe('updates', () => {
 
       await showUpdateNotification();
 
-      expect(mockLoggerInfo).not.toHaveBeenCalled();
+      expect(mockWriteStderr).not.toHaveBeenCalled();
       expect(mockAxiosGet).not.toHaveBeenCalled();
     });
 
@@ -273,10 +276,10 @@ describe('updates', () => {
 
       await showUpdateNotification();
 
-      expect(mockLoggerInfo).toHaveBeenCalledWith(
+      expect(mockWriteStderr).toHaveBeenCalledWith(
         expect.stringContaining('Update available')
       );
-      expect(mockLoggerInfo).toHaveBeenCalledWith(
+      expect(mockWriteStderr).toHaveBeenCalledWith(
         expect.stringContaining('v1.15.0 → v1.16.0')
       );
     });
@@ -299,7 +302,7 @@ describe('updates', () => {
 
       await showUpdateNotification();
 
-      expect(mockLoggerInfo).not.toHaveBeenCalled();
+      expect(mockWriteStderr).not.toHaveBeenCalled();
     });
 
     it('should handle network errors gracefully without throwing', async () => {

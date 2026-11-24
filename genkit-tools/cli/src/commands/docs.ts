@@ -23,6 +23,7 @@ import {
   loadDocs,
   searchDocs,
 } from '../utils/docs.js';
+import { writeStderr, writeStdout } from '../utils/output.js';
 
 export const docsList = new Command('docs:list')
   .description('list available Genkit documentation files')
@@ -39,21 +40,21 @@ export const docsList = new Command('docs:list')
         .sort();
 
       if (fileList.length === 0) {
-        logger.info(`No documentation found for language: ${lang}`);
+        writeStderr(`No documentation found for language: ${lang}`);
         return;
       }
 
-      logger.info(`Genkit Documentation Index (${lang}):\n`);
+      writeStdout(`Genkit Documentation Index (${lang}):\n`);
       fileList.forEach((file) => {
         const doc = documents[file];
-        logger.info(`${clc.bold(doc.title)}`);
-        logger.info(`  Path: ${file}`);
+        writeStdout(`${clc.bold(doc.title)}`);
+        writeStdout(`  Path: ${file}`);
         if (doc.description) {
-          logger.info(`  ${clc.italic(doc.description)}`);
+          writeStdout(`  ${clc.italic(doc.description)}`);
         }
-        logger.info('');
+        writeStdout('');
       });
-      logger.info(`Use 'genkit docs:read <path>' to read a document.`);
+      writeStderr(`Use 'genkit docs:read <path>' to read a document.`);
     } catch (e: unknown) {
       logger.error(
         `Failed to load documentation: ${e instanceof Error ? e.message : String(e)}`
@@ -79,20 +80,20 @@ export const docsSearch = new Command('docs:search')
       const results = searchDocs(documents, query, lang).slice(0, 10);
 
       if (results.length === 0) {
-        logger.info(`No results found for "${query}" in ${lang} docs.`);
+        writeStderr(`No results found for "${query}" in ${lang} docs.`);
         return;
       }
 
-      logger.info(
+      writeStdout(
         `Found ${results.length} matching documents for "${query}":\n`
       );
       results.forEach((r) => {
-        logger.info(`${clc.bold(r.doc.title)}`);
-        logger.info(`  Path: ${r.file}`);
+        writeStdout(`${clc.bold(r.doc.title)}`);
+        writeStdout(`  Path: ${r.file}`);
         if (r.doc.description) {
-          logger.info(`  ${clc.italic(r.doc.description)}`);
+          writeStdout(`  ${clc.italic(r.doc.description)}`);
         }
-        logger.info('');
+        writeStdout('');
       });
     } catch (e: unknown) {
       logger.error(
@@ -115,10 +116,10 @@ export const docsRead = new Command('docs:read')
         return;
       }
 
-      logger.info(clc.bold(doc.title));
-      logger.info('='.repeat(doc.title.length));
-      logger.info('');
-      logger.info(doc.text);
+      writeStderr(clc.bold(doc.title));
+      writeStderr('='.repeat(doc.title.length));
+      writeStderr('');
+      writeStdout(doc.text);
     } catch (e: unknown) {
       logger.error(
         `Failed to load documentation: ${e instanceof Error ? e.message : String(e)}`

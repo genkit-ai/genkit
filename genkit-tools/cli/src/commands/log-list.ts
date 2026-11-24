@@ -16,15 +16,11 @@
 
 import type { LogQueryFilter } from '@genkit-ai/tools-common';
 import type { BaseRuntimeManager } from '@genkit-ai/tools-common/manager';
-import {
-  findProjectRoot,
-  forceStderr,
-  logger,
-} from '@genkit-ai/tools-common/utils';
+import { findProjectRoot, logger } from '@genkit-ai/tools-common/utils';
 import { Command, Option } from 'commander';
 import { runWithManager } from '../utils/manager-utils.js';
 import { parsePositiveInt } from '../utils/option-parsers.js';
-import { writeStdout } from '../utils/output.js';
+import { writeStderr, writeStdout } from '../utils/output.js';
 
 export interface LogListOptions {
   limit: number;
@@ -62,7 +58,6 @@ export const logList = new Command('log:list')
   )
   .option('--continuation-token <token>', 'continuation token for pagination')
   .action(async (options: LogListOptions) => {
-    if (options.format === 'jsonl') forceStderr();
     const projectRoot = await findProjectRoot();
 
     const runAction = async (manager: BaseRuntimeManager) => {
@@ -101,7 +96,7 @@ export const logList = new Command('log:list')
         const response = await manager.listLogs(listRequest);
 
         if (!response || !response.logs || response.logs.length === 0) {
-          logger.info('No logs found.');
+          writeStderr('No logs found.');
           return;
         }
 
@@ -149,7 +144,7 @@ export const logList = new Command('log:list')
 
         if (response.continuationToken) {
           if (options.format === 'jsonl') {
-            logger.info(
+            writeStderr(
               `To get the next page, use: --continuation-token ${response.continuationToken}`
             );
           } else {

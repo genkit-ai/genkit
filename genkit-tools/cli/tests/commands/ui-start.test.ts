@@ -38,6 +38,7 @@ import {
   type MockedFunction,
 } from 'vitest';
 import { uiStart } from '../../src/commands/ui-start.js';
+import * as output from '../../src/utils/output.js';
 import { detectCLIRuntime } from '../../src/utils/runtime-detector.js';
 import {
   buildServerHarnessSpawnConfig,
@@ -162,6 +163,7 @@ describe('ui:start', () => {
     mockedSpawn.mockReturnValue(mockChildProcess as any);
     mockedWaitUntilHealthy.mockResolvedValue(true);
     mockedClc.green.mockImplementation((text) => `GREEN:${text}`);
+    vi.spyOn(output, 'writeStderr').mockImplementation(() => {});
   });
 
   describe('port validation', () => {
@@ -241,12 +243,12 @@ describe('ui:start', () => {
 
       await createCommand().parseAsync(['node', 'ui:start']);
 
-      expect(mockedLogger.info).toHaveBeenCalledWith(
+      expect(output.writeStderr).toHaveBeenCalledWith(
         expect.stringContaining(
           'Genkit Developer UI is already running at: http://localhost:4000'
         )
       );
-      expect(mockedLogger.info).toHaveBeenCalledWith(
+      expect(output.writeStderr).toHaveBeenCalledWith(
         expect.stringContaining('To stop the UI, run `genkit ui:stop`')
       );
     });
@@ -266,7 +268,7 @@ describe('ui:start', () => {
       expect(mockedLogger.debug).toHaveBeenCalledWith(
         'Found UI server metadata but server is not healthy. Starting a new one...'
       );
-      expect(mockedLogger.info).toHaveBeenCalledWith('Starting...');
+      expect(output.writeStderr).toHaveBeenCalledWith('Starting...');
     });
 
     it('should start new server when tools.json is invalid', async () => {
@@ -275,7 +277,7 @@ describe('ui:start', () => {
 
       await createCommand().parseAsync(['node', 'ui:start']);
 
-      expect(mockedLogger.info).toHaveBeenCalledWith('Starting...');
+      expect(output.writeStderr).toHaveBeenCalledWith('Starting...');
     });
 
     it('should start new server when tools.json does not exist', async () => {
@@ -286,7 +288,7 @@ describe('ui:start', () => {
       expect(mockedLogger.debug).toHaveBeenCalledWith(
         'No UI running. Starting a new one...'
       );
-      expect(mockedLogger.info).toHaveBeenCalledWith('Starting...');
+      expect(output.writeStderr).toHaveBeenCalledWith('Starting...');
     });
   });
 
@@ -330,7 +332,7 @@ describe('ui:start', () => {
         mockToolsJsonPath,
         expect.stringContaining(`"url": "http://localhost:${actualPort}"`)
       );
-      expect(mockedLogger.info).toHaveBeenCalledWith(
+      expect(output.writeStderr).toHaveBeenCalledWith(
         expect.stringContaining(
           `Genkit Developer UI started at: http://localhost:${actualPort}`
         )
@@ -422,7 +424,7 @@ describe('ui:start', () => {
         'Failed to write UI server metadata. UI server will continue to run.'
       );
       // Should still report success
-      expect(mockedLogger.info).toHaveBeenCalledWith(
+      expect(output.writeStderr).toHaveBeenCalledWith(
         expect.stringContaining('Genkit Developer UI started at:')
       );
     });
@@ -629,7 +631,7 @@ describe('ui:start', () => {
 
       await createCommand().parseAsync(['node', 'ui:start']);
 
-      expect(mockedLogger.info).toHaveBeenCalledWith(
+      expect(output.writeStderr).toHaveBeenCalledWith(
         'Set env variable `GENKIT_ENV` to `dev` and start your app code to interact with it in the UI.'
       );
     });

@@ -31,6 +31,7 @@ import {
 } from 'vitest';
 import { start } from '../../src/commands/start.js';
 import * as managerUtils from '../../src/utils/manager-utils.js';
+import * as output from '../../src/utils/output.js';
 
 vi.mock('@genkit-ai/tools-common/server');
 vi.mock('@genkit-ai/tools-common/utils', () => ({
@@ -54,6 +55,7 @@ describe('start command', () => {
   let startServerSpy: any;
 
   beforeEach(() => {
+    vi.spyOn(output, 'writeStderr').mockImplementation(() => {});
     vi.spyOn(managerUtils, 'getDevEnvVars').mockResolvedValue({
       envVars: {},
       telemetryServerUrl: 'http://localhost:4033',

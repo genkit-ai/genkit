@@ -53,6 +53,7 @@ describe('log:list command', () => {
     vi.spyOn(logger, 'info').mockImplementation((() => {}) as any);
     vi.spyOn(logger, 'error').mockImplementation((() => {}) as any);
     vi.spyOn(output, 'writeStdout').mockImplementation(() => {});
+    vi.spyOn(output, 'writeStderr').mockImplementation(() => {});
   });
 
   afterEach(() => {
@@ -249,14 +250,14 @@ describe('log:list command', () => {
     );
   });
 
-  it('should log info when no logs are found', async () => {
+  it('should write to stderr when no logs are found', async () => {
     mockManager.listLogs.mockResolvedValue({
       logs: [],
     });
 
     await logList.parseAsync(['node', 'log:list']);
 
-    expect(logger.info).toHaveBeenCalledWith('No logs found.');
+    expect(output.writeStderr).toHaveBeenCalledWith('No logs found.');
   });
 
   it('should handle and log errors', async () => {

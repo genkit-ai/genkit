@@ -21,7 +21,6 @@ const {
   mockRecord,
   mockFindProjectRoot,
   mockDetectRuntime,
-  mockForceStderr,
   mockShowUpdateNotification,
   mockStartMcpServer,
   mockWarnIfLegacyGenkitContext,
@@ -32,7 +31,6 @@ const {
   mockRecord: vi.fn(() => Promise.resolve()),
   mockFindProjectRoot: vi.fn(() => Promise.resolve('/mock/root')),
   mockDetectRuntime: vi.fn(() => Promise.resolve('nodejs')),
-  mockForceStderr: vi.fn(),
   mockShowUpdateNotification: vi.fn(() => Promise.resolve()),
   mockStartMcpServer: vi.fn(() => Promise.resolve()),
   mockWarnIfLegacyGenkitContext: vi.fn(() => Promise.resolve()),
@@ -49,7 +47,6 @@ vi.mock('@genkit-ai/tools-common/utils', async (importOriginal) => {
     record: mockRecord,
     findProjectRoot: mockFindProjectRoot,
     detectRuntime: mockDetectRuntime,
-    forceStderr: mockForceStderr,
     logger: {
       debug: vi.fn(),
       info: vi.fn(),
@@ -99,11 +96,25 @@ vi.mock('../src/commands/server-harness.js', async () => {
 
 describe('startCLI', () => {
   const originalArgv = process.argv;
+  const origStdinTTY = process.stdin.isTTY;
+  const origStderrTTY = process.stderr.isTTY;
   let startCLI: typeof import('../src/cli.js').startCLI;
 
   beforeEach(async () => {
     vi.resetModules();
     vi.clearAllMocks();
+    Object.defineProperty(process.stdin, 'isTTY', {
+      value: true,
+      configurable: true,
+      writable: true,
+    });
+    Object.defineProperty(process.stderr, 'isTTY', {
+      value: true,
+      configurable: true,
+      writable: true,
+    });
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     const actualCommander =
       await vi.importActual<typeof import('commander')>('commander');
     vi.doMock('commander', () => ({
@@ -115,6 +126,17 @@ describe('startCLI', () => {
 
   afterEach(() => {
     process.argv = originalArgv;
+    Object.defineProperty(process.stdin, 'isTTY', {
+      value: origStdinTTY,
+      configurable: true,
+      writable: true,
+    });
+    Object.defineProperty(process.stderr, 'isTTY', {
+      value: origStderrTTY,
+      configurable: true,
+      writable: true,
+    });
+    vi.restoreAllMocks();
   });
 
   it('skips first-run analytics prompt and update notification for mcp command', async () => {
@@ -124,7 +146,6 @@ describe('startCLI', () => {
 
     expect(mockNotifyAnalyticsIfFirstRun).not.toHaveBeenCalled();
     expect(mockShowUpdateNotification).not.toHaveBeenCalled();
-    expect(mockForceStderr).toHaveBeenCalled();
     expect(mockStartMcpServer).toHaveBeenCalled();
   });
 
@@ -157,13 +178,42 @@ describe('startCLI', () => {
     expect(mockNotifyAnalyticsIfFirstRun).toHaveBeenCalledExactlyOnceWith('go');
   });
 
-  it('skips first-run analytics prompt when --non-interactive is set', async () => {
+  it('skips first-run analytics prompt and update notification when --non-interactive is set', async () => {
     process.argv = ['node', 'genkit', '--non-interactive', 'docs:list', 'js'];
 
     await startCLI();
 
     expect(mockNotifyAnalyticsIfFirstRun).not.toHaveBeenCalled();
+    expect(mockShowUpdateNotification).not.toHaveBeenCalled();
     expect(mockLoadDocs).toHaveBeenCalledOnce();
+  });
+
+  it('skips first-run analytics prompt when stdin is not a TTY', async () => {
+    Object.defineProperty(process.stdin, 'isTTY', {
+      value: undefined,
+      configurable: true,
+      writable: true,
+    });
+    process.argv = ['node', 'genkit', 'docs:list', 'js'];
+
+    await startCLI();
+
+    expect(mockNotifyAnalyticsIfFirstRun).not.toHaveBeenCalled();
+    expect(mockShowUpdateNotification).toHaveBeenCalledOnce();
+  });
+
+  it('skips first-run analytics prompt and update notification when stderr is not a TTY', async () => {
+    Object.defineProperty(process.stderr, 'isTTY', {
+      value: undefined,
+      configurable: true,
+      writable: true,
+    });
+    process.argv = ['node', 'genkit', 'docs:list', 'js'];
+
+    await startCLI();
+
+    expect(mockNotifyAnalyticsIfFirstRun).not.toHaveBeenCalled();
+    expect(mockShowUpdateNotification).not.toHaveBeenCalled();
   });
 
   it('skips first-run analytics prompt for __server-harness daemon process', async () => {
