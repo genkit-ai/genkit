@@ -64,6 +64,51 @@ describe('hasObjectRoot', () => {
     [{ type: 'string', enum: ['a', 'b'] }, false],
     [{ type: 'integer' }, false],
     [{ anyOf: [{ type: 'object' }, { type: 'string' }] }, false],
+    [{ type: ['object', 'null'] }, false],
+    [
+      { $ref: '#/definitions/Foo', definitions: { Foo: { type: 'object' } } },
+      true,
+    ],
+    [{ $ref: '#/$defs/Foo', $defs: { Foo: { type: 'object' } } }, true],
+    [
+      {
+        $schema: 'http://json-schema.org/draft-07/schema#',
+        $ref: '#/$defs/Foo',
+        $defs: { Foo: { type: 'object' } },
+      },
+      true,
+    ],
+    // OpenAI does not resolve escaped names or allow keywords beside $ref.
+    [{ $ref: '#/$defs/a~1b', $defs: { 'a/b': { type: 'object' } } }, false],
+    [
+      {
+        $ref: '#/$defs/Foo',
+        description: 'd',
+        $defs: { Foo: { type: 'object' } },
+      },
+      false,
+    ],
+    [
+      {
+        $ref: '#/$defs/A',
+        $defs: { A: { $ref: '#/$defs/B', title: 'A' }, B: { type: 'object' } },
+      },
+      false,
+    ],
+    [
+      {
+        $ref: '#/$defs/A',
+        $defs: { A: { $ref: '#/$defs/B' }, B: { type: 'object' } },
+      },
+      true,
+    ],
+    [{ $ref: '#/$defs/Foo', $defs: { Foo: { type: 'array' } } }, false],
+    [{ $ref: '#/$defs/Missing', $defs: {} }, false],
+    [{ $ref: '#/$defs/A', $defs: { A: { $ref: '#/$defs/A' } } }, false],
+    [
+      { $ref: '#/$defs/Foo/properties/a', $defs: { Foo: { type: 'object' } } },
+      false,
+    ],
   ])('%j -> %s', (schema, expected) => {
     expect(hasObjectRoot(schema)).toBe(expected);
   });

@@ -28,13 +28,37 @@ export const WRAPPER_KEY = 'value';
 type JsonSchema = Record<string, unknown>;
 
 /**
- * Whether the schema's root is explicitly an object. Anything else, including
- * `properties` without a `type` (which also allows non-object values), is
- * wrapped.
+ * Whether the schema's root is explicitly an object, either directly or
+ * through a bare root `$ref` to a top-level definition, which OpenAI accepts
+ * unwrapped. Anything else, including `properties` without a `type` (which
+ * also allows non-object values), is wrapped.
+ *
+ * OpenAI rejects a `$ref` with sibling keywords (`description`, `title`, ...)
+ * and does not resolve escaped names (`~0`, `~1`) at the root, while non-strict
+ * requests accept both once wrapped, so those roots are wrapped.
  */
 export function hasObjectRoot(schema: JsonSchema): boolean {
-  return schema.type === 'object';
+  const seen = new Set<string>();
+  let node: unknown = schema;
+  let allowed = ROOT_REF_KEYS;
+  while (isRecord(node)) {
+    if (node.type !== undefined) return node.type === 'object';
+    const ref = node.$ref;
+    if (typeof ref !== 'string' || seen.has(ref)) return false;
+    if (Object.keys(node).some((k) => !allowed.has(k))) return false;
+    seen.add(ref);
+    const match = /^#\/(\$defs|definitions)\/([^/~]+)$/.exec(ref);
+    if (!match) return false;
+    const defs = schema[match[1]];
+    node = isRecord(defs) ? defs[match[2]] : undefined;
+    allowed = REF_KEYS;
+  }
+  return false;
 }
+
+/** Keywords a bare `$ref` may sit beside: at the root, and in a definition. */
+const ROOT_REF_KEYS = new Set(['$ref', '$schema', '$defs', 'definitions']);
+const REF_KEYS = new Set(['$ref']);
 
 /** Keywords whose values are data, not subschemas, so `$ref` there is not a
  * reference. */
