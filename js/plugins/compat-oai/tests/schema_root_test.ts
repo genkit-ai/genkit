@@ -19,7 +19,11 @@ import { genkit, z } from 'genkit';
 import type { GenerateRequest } from 'genkit/model';
 import { toJsonSchema, validateSchema } from 'genkit/schema';
 import OpenAI from 'openai';
-import { openAICompatible } from '../src';
+import {
+  compatOaiModelRef,
+  defineCompatOpenAIModel,
+  openAICompatible,
+} from '../src';
 import {
   fromOpenAIChoice,
   needsRootWrapper,
@@ -30,7 +34,6 @@ import { openAI, type OpenAIPluginOptions } from '../src/openai';
 import {
   WrapperStreamUnwrapper,
   hasObjectRoot,
-  hoistDefRefs,
   unwrapValue,
   wrapSchemaRoot,
 } from '../src/schema-root';
@@ -196,6 +199,65 @@ describe('wrapSchemaRoot local references', () => {
     });
     expect(schema.items.properties.all.$ref).toBe('#');
   });
+
+  it('treats property and definition names as names, not keywords', () => {
+    // `default`, `enum`, `const` and `examples` are data only in keyword
+    // position. As property or definition names they hold schemas.
+    const Inner = z.object({ n: z.number() }).strict();
+    const schema = toJsonSchema({
+      schema: z.array(z.object({ default: Inner, other: Inner }).strict()),
+    }) as any;
+    const wrapped = wrapSchemaRoot(schema) as any;
+    const refs: string[] = [];
+    const collect = (node: unknown): void => {
+      if (Array.isArray(node)) node.forEach(collect);
+      else if (node && typeof node === 'object') {
+        for (const [k, v] of Object.entries(node)) {
+          if (k === '$ref' && typeof v === 'string') refs.push(v);
+          else collect(v);
+        }
+      }
+    };
+    collect(wrapped);
+    expect(refs.length).toBeGreaterThan(0);
+    for (const ref of refs) {
+      expect(ref).toMatch(/^#\/\$defs\/[\w-]+$/);
+      expect(wrapped.$defs).toHaveProperty(ref.slice('#/$defs/'.length));
+    }
+    const value = [{ default: { n: 1 }, other: { n: 2 } }];
+    expect(validateSchema({ value }, { jsonSchema: wrapped }).valid).toBe(true);
+    expect(
+      validateSchema(
+        { value: [{ default: { n: 1 }, other: { n: 'x' } }] },
+        { jsonSchema: wrapped }
+      ).valid
+    ).toBe(false);
+  });
+
+  it('rewrites refs held under a property or definition named like a keyword', () => {
+    const wrapped = wrapSchemaRoot({
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          enum: { type: 'object', properties: { n: { type: 'number' } } },
+          const: { $ref: '#/items/properties/enum' },
+        },
+      },
+      $defs: { examples: { $ref: '#/items/properties/enum' } },
+    }) as any;
+    expect(wrapped.$defs.examples).toStrictEqual({
+      $ref: '#/$defs/value_items_properties_enum',
+    });
+    expect(wrapped.$defs.value_items_properties_enum.type).toBe('object');
+    const items = (wrapped.properties.value as any).items;
+    expect(items.properties.enum).toStrictEqual({
+      $ref: '#/$defs/value_items_properties_enum',
+    });
+    expect(items.properties.const).toStrictEqual({
+      $ref: '#/$defs/value_items_properties_enum',
+    });
+  });
 });
 
 /** A $defs map whose Person has a name that other schemas refer into, plus a
@@ -223,72 +285,7 @@ const hoistedPersonDefs = {
   Person_properties_name_2: { type: 'string', minLength: 1 },
 };
 
-describe('hoistDefRefs', () => {
-  const schema = {
-    type: 'object',
-    properties: {
-      person: { $ref: '#/$defs/Person' },
-      nickname: { $ref: '#/$defs/Person/properties/name' },
-      legacy: { $ref: '#/definitions/Old/properties/id' },
-      self: { $ref: '#/properties/person' },
-    },
-    required: ['person', 'nickname', 'legacy', 'self'],
-    additionalProperties: false,
-    $defs: personDefs(),
-    definitions: {
-      Old: { type: 'object', properties: { id: { type: 'integer' } } },
-    },
-  };
-
-  it('moves refs into the middle of a definition to definitions of their own', () => {
-    expect(hoistDefRefs(schema)).toStrictEqual({
-      type: 'object',
-      properties: {
-        person: { $ref: '#/$defs/Person' },
-        nickname: { $ref: '#/$defs/Person_properties_name_2' },
-        legacy: { $ref: '#/$defs/Old_properties_id' },
-        // Other local refs are left alone on an object root.
-        self: { $ref: '#/properties/person' },
-      },
-      required: ['person', 'nickname', 'legacy', 'self'],
-      additionalProperties: false,
-      $defs: { ...hoistedPersonDefs, Old_properties_id: { type: 'integer' } },
-      definitions: {
-        Old: {
-          type: 'object',
-          properties: { id: { $ref: '#/$defs/Old_properties_id' } },
-        },
-      },
-    });
-    expect(schema.$defs).toStrictEqual(personDefs());
-  });
-
-  it('keeps the constraints of the hoisted parts', () => {
-    const jsonSchema = hoistDefRefs(schema);
-    const ok = { person: { name: 'Ann' }, nickname: 'Annie', legacy: 1 };
-    expect(
-      validateSchema({ ...ok, self: { name: 'B' } }, { jsonSchema }).valid
-    ).toBe(true);
-    for (const bad of [
-      { ...ok, nickname: '' },
-      { ...ok, person: { name: '' } },
-      { ...ok, legacy: 'x' },
-    ]) {
-      expect(
-        validateSchema({ ...bad, self: { name: 'B' } }, { jsonSchema }).valid
-      ).toBe(false);
-    }
-  });
-
-  it('returns a schema without such refs unchanged', () => {
-    const plain = {
-      type: 'object',
-      properties: { p: { $ref: '#/$defs/Person' } },
-      $defs: personDefs(),
-    };
-    expect(hoistDefRefs(plain)).toBe(plain);
-  });
-
+describe('wrapSchemaRoot refs into the middle of a definition', () => {
   it('adds $defs when wrapping a schema that has only definitions', () => {
     const wrapped = wrapSchemaRoot({
       type: 'array',
@@ -419,23 +416,18 @@ describe('toOpenAIRequestBody with non-object roots', () => {
     expect(body.response_format.json_schema.schema).toStrictEqual(obj);
   });
 
-  it('hoists refs into a definition on an object root, for object-only hosts', () => {
+  it('leaves an object root as it is, refs into a definition included', () => {
+    // Strict-mode refs on object roots are a separate limit, left for a
+    // follow-up gated on strict.
     const intoDef = {
       type: 'object',
       properties: { nick: { $ref: '#/$defs/Person/properties/name' } },
       $defs: personDefs(),
     };
-    const hoisted = toOpenAIRequestBody('gpt-4o', request(intoDef), undefined, {
+    const body = toOpenAIRequestBody('gpt-4o', request(intoDef), undefined, {
       objectSchemaRoot: true,
     }) as any;
-    expect(hoisted.response_format.json_schema.schema).toStrictEqual(
-      hoistDefRefs(intoDef)
-    );
-    expect(hoisted.response_format.json_schema.schema.$defs).toHaveProperty(
-      'Person_properties_name_2'
-    );
-    const unchanged = toOpenAIRequestBody('gpt-4o', request(intoDef)) as any;
-    expect(unchanged.response_format.json_schema.schema).toStrictEqual(intoDef);
+    expect(body.response_format.json_schema.schema).toStrictEqual(intoDef);
   });
 });
 
@@ -775,22 +767,41 @@ describe('plugins and the object-root setting', () => {
 
   it('openAICompatible() sends the schema unchanged', async () => {
     reply('["a","b"]');
+    const schema = z.array(z.string());
     const ai = genkit({
       plugins: [
         openAICompatible({
           name: 'host',
           apiKey: 'k',
           baseURL: server.baseUrl,
+          // A model that declares constrained JSON output, so the schema is
+          // sent as response_format.
+          resolver: (client, actionType, actionName) =>
+            actionType === 'model'
+              ? defineCompatOpenAIModel({
+                  name: actionName,
+                  client,
+                  pluginOptions: { name: 'host' },
+                  modelRef: compatOaiModelRef({
+                    name: actionName,
+                    namespace: 'host',
+                    info: {
+                      supports: { output: ['json'], constrained: 'all' },
+                    },
+                  }),
+                })
+              : undefined,
         }),
       ],
     });
     const { output } = await ai.generate({
       model: 'host/some-model',
       prompt: 'hi',
-      output: { schema: z.array(z.string()), constrained: true },
+      output: { schema },
     });
     const sent = server.requests[0].body.response_format?.json_schema?.schema;
-    expect(sent?.properties?.value).toBeUndefined();
+    expect(sent).toBeDefined();
+    expect(sent).toStrictEqual(toJsonSchema({ schema }));
     expect(output).toStrictEqual(['a', 'b']);
   });
 });
