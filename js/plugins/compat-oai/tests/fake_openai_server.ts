@@ -23,6 +23,9 @@ export interface MockResponse {
   headers?: http.OutgoingHttpHeaders;
   stream?: boolean;
   chunks?: any[]; // For streaming
+  // Verbatim SSE frames, for wire shapes `chunks` cannot express (e.g. an
+  // `event: error` field line). No [DONE] frame is appended.
+  rawSse?: string[];
 }
 
 export class FakeOpenAIServer {
@@ -99,6 +102,13 @@ export class FakeOpenAIServer {
         headers['Connection'] = 'keep-alive';
         res.writeHead(statusCode, headers);
 
+        if (response.rawSse) {
+          for (const frame of response.rawSse) {
+            res.write(frame);
+          }
+          res.end();
+          return;
+        }
         if (response.chunks) {
           for (const chunk of response.chunks) {
             res.write(`data: ${JSON.stringify(chunk)}\n\n`);

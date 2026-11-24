@@ -75,6 +75,25 @@ export function isResponsesOnlyModelName(
 }
 
 /**
+ * Responses-only models that reject `stream: true`. A streaming caller gets
+ * the completed response delivered as a single chunk instead. Hand-curated
+ * like {@link RESPONSES_ONLY_MODELS}, from the per-model feature tables.
+ */
+export const NON_STREAMING_RESPONSES_MODELS = ['o1-pro', 'o3-pro'] as const;
+
+/**
+ * Checks whether a Responses model name must not be streamed, with the same
+ * suffix bias as {@link isResponsesOnlyModelName}.
+ * @param name The bare model name, without the plugin namespace.
+ */
+export function isNonStreamingResponsesModelName(name?: string): boolean {
+  if (!name) return false;
+  return NON_STREAMING_RESPONSES_MODELS.some(
+    (base) => name === base || name.startsWith(`${base}-`)
+  );
+}
+
+/**
  * OpenAI Responses API custom configuration schema.
  *
  * - `store` defaults to `false` here (the API itself defaults to retaining
@@ -86,8 +105,7 @@ export function isResponsesOnlyModelName(
  * - `temperature` / `topP` are passed through unchanged. Reasoning and `pro`
  *   models are widely reported to reject non-default values with a 400, but
  *   OpenAI's docs do not state it per model, so they are not stripped here.
- * - Raw `tools` / `tool_choice` pass through, but a function tool call in the
- *   output throws UNIMPLEMENTED until tool calling lands.
+ * - Raw `tools` / `tool_choice` pass through alongside the request's own tools.
  */
 export const OpenAIResponsesConfigSchema = ResponsesCommonConfigSchema.extend({
   store: z.boolean().optional(),
@@ -103,9 +121,8 @@ export const OpenAIResponsesConfigSchema = ResponsesCommonConfigSchema.extend({
 const RESPONSES_MODEL_INFO: ModelInfo = {
   supports: {
     multiturn: true,
-    // The models support function calling; slice 2 flips this once the runner
-    // maps tool calls.
-    tools: false,
+    tools: true,
+    toolChoice: true,
     media: true,
     systemRole: true,
     output: ['text', 'json'],
