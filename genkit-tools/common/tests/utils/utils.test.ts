@@ -17,6 +17,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { stripVTControlCharacters } from 'util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   detectRuntime,
@@ -273,9 +274,9 @@ describe('utils', () => {
         logger[level](message);
 
         expect(stdoutSpy).not.toHaveBeenCalled();
-        expect(stderrSpy).toHaveBeenCalledWith(
-          expect.stringContaining(expected)
-        );
+        expect(stderrSpy).toHaveBeenCalledOnce();
+        const written = String(stderrSpy.mock.calls[0][0]);
+        expect(stripVTControlCharacters(written)).toContain(expected);
       }
     );
   });
