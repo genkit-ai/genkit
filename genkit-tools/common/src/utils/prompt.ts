@@ -26,6 +26,19 @@ const PICOSCHEMA_SCALAR_TYPES = new Set([
   'string',
 ]);
 
+const STRUCTURAL_SCHEMA_KEYWORDS = [
+  '$ref',
+  'allOf',
+  'anyOf',
+  'const',
+  'else',
+  'if',
+  'not',
+  'oneOf',
+  'prefixItems',
+  'then',
+];
+
 /**
  * Converts JSON Schema into Dotprompt's compact Picoschema notation.
  * Picoschema is a subset of JSON Schema, so constraints without a Picoschema
@@ -36,6 +49,13 @@ const PICOSCHEMA_SCALAR_TYPES = new Set([
 export function jsonSchemaToPicoschema(schema: unknown): unknown {
   if (!isRecord(schema) || Object.keys(schema).length === 0) return undefined;
   const converted = convertJsonSchemaNode(schema);
+  // Dotprompt expands root `any` to an invalid JSON Schema type.
+  if (
+    typeof converted === 'string' &&
+    (converted === 'any' || converted.startsWith('any,'))
+  ) {
+    return undefined;
+  }
   // Dotprompt treats these root `type` values as JSON Schema, not properties.
   if (
     isRecord(converted) &&
@@ -58,6 +78,7 @@ function convertJsonSchemaNode(
   // Arrays and enums need a property-key annotation in Picoschema. Returning
   // just their items/values here would lose structure at the root or in items.
   if (
+    requiresJsonSchema(schema, type) ||
     Array.isArray(schema.enum) ||
     type === 'array' ||
     isRecord(schema.items) ||
@@ -79,11 +100,30 @@ function convertJsonSchemaNode(
     return convertJsonSchemaObject(schema);
   }
 
-  if (type) {
-    return description ? `${type}, ${description}` : type;
-  }
-
   return undefined;
+}
+
+function requiresJsonSchema(
+  schema: Record<string, unknown>,
+  type: string | undefined
+): boolean {
+  if (schema.type !== undefined) {
+    if (type === undefined) return true;
+    if (
+      type !== 'array' &&
+      type !== 'object' &&
+      !PICOSCHEMA_SCALAR_TYPES.has(type)
+    ) {
+      return true;
+    }
+  }
+  return (
+    STRUCTURAL_SCHEMA_KEYWORDS.some((keyword) =>
+      Object.hasOwn(schema, keyword)
+    ) ||
+    Array.isArray(schema.items) ||
+    schema.items === false
+  );
 }
 
 function convertJsonSchemaObject(
@@ -108,27 +148,46 @@ function convertJsonSchemaObject(
     const optional = !requiredProperties.has(propertyName);
     const key = optional ? `${propertyName}?` : propertyName;
     const type = scalarType(value.type);
+    const isObject = type === 'object' || isRecord(value.properties);
+    const description =
+      typeof value.description === 'string' ? value.description : undefined;
 
-    // Only optional (`?`) properties can express nullable types compactly.
-    if (!optional && Array.isArray(value.type) && value.type.includes('null')) {
+    // Only optional fields can express nullable types compactly, and
+    // Dotprompt adds a duplicate type if the field already has type null.
+    if (
+      requiresJsonSchema(value, type) ||
+      (optional && type === 'null') ||
+      (!optional && Array.isArray(value.type) && value.type.includes('null'))
+    ) {
       return undefined;
     }
+
+    if (
+      description !== undefined &&
+      (Array.isArray(value.enum) || type === 'array' || isObject) &&
+      (description === '' ||
+        description.startsWith(' ') ||
+        /[()\r\n\u2028\u2029]/.test(description))
+    ) {
+      return undefined;
+    }
+    const annotation = description ? `, ${description}` : '';
 
     if (Array.isArray(value.enum)) {
       const values = value.enum.filter((enumValue) => enumValue !== null);
       if (values.length === 0) return undefined;
-      result[`${key}(enum)`] = values;
+      result[`${key}(enum${annotation})`] = values;
     } else if (type === 'array') {
       const items =
         isRecord(value.items) && Object.keys(value.items).length > 0
           ? convertJsonSchemaNode(value.items)
           : 'any';
       if (items === undefined) return undefined;
-      result[`${key}(array)`] = items;
-    } else if (type === 'object' || isRecord(value.properties)) {
+      result[`${key}(array${annotation})`] = items;
+    } else if (isObject) {
       const nestedObject = convertJsonSchemaObject(value);
       if (!nestedObject) return undefined;
-      result[`${key}(object)`] = nestedObject;
+      result[`${key}(object${annotation})`] = nestedObject;
     } else {
       const converted = convertJsonSchemaNode(value, optional);
       if (converted === undefined) return undefined;
@@ -172,6 +231,16 @@ function isPicoschemaPropertyName(propertyName: string): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && !Array.isArray(value) && typeof value === 'object';
+}
+
+function hasJsonSchemaRoot(schema: Record<string, unknown>): boolean {
+  const { type, properties } = schema;
+  return (
+    type === 'object' ||
+    type === 'array' ||
+    (typeof type === 'string' && PICOSCHEMA_SCALAR_TYPES.has(type)) ||
+    (type === undefined && isRecord(properties))
+  );
 }
 
 function toFrontmatterSchema(
@@ -266,18 +335,40 @@ export function toPromptFile(request: {
     input: toFrontmatterInput(request.input, request.picoSchema),
     output: toFrontmatterOutput(request.output, request.picoSchema),
   };
-  return renderPromptFile(frontmatter, request.messages);
+  const cleaned = cleanupFrontmatter(frontmatter);
+  if (request.picoSchema) {
+    for (const channel of ['input', 'output'] as const) {
+      const schema = frontmatter[channel]?.schema;
+      const original = request[channel]?.jsonSchema ?? request[channel]?.schema;
+      if (
+        isRecord(schema) &&
+        schema === original &&
+        hasJsonSchemaRoot(schema)
+      ) {
+        // Keep nested constraints on recognizable JSON Schema roots. Other
+        // roots use the same serialization as the default export.
+        cleaned[channel] = { ...cleaned[channel], schema };
+      }
+    }
+  }
+  return renderCleanPromptFile(cleaned, request.messages);
 }
 
 export function renderPromptFile(
   frontmatter: PromptFrontmatter,
   messages: MessageData[]
 ): string {
-  const cleanFrontmatter = cleanupFrontmatter(frontmatter);
+  return renderCleanPromptFile(cleanupFrontmatter(frontmatter), messages);
+}
+
+function renderCleanPromptFile(
+  frontmatter: PromptFrontmatter,
+  messages: MessageData[]
+): string {
   const { rendered: renderedMessages, anyOmitted } = renderMessages(messages);
 
   const header = `---
-${stringify(cleanFrontmatter, {
+${stringify(frontmatter, {
   collectionStyle: 'block',
   aliasDuplicateObjects: false,
 }).trim()}
@@ -346,7 +437,7 @@ function renderMessages(messages: MessageData[]): {
  * Removes empty arrays, empty objects, and null/undefined values from the
  * frontmatter to ensure the generated YAML is clean and idiomatic.
  */
-function cleanupFrontmatter(frontmatter: PromptFrontmatter): any {
+function cleanupFrontmatter(frontmatter: PromptFrontmatter): PromptFrontmatter {
   return recursiveCleanup(frontmatter) || {};
 }
 

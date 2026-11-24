@@ -338,9 +338,7 @@ export interface ContentBlockLocationCitation {
 
 /** Union of all citation types for documents. */
 export type AnthropicCitation =
-  | CharLocationCitation
-  | PageLocationCitation
-  | ContentBlockLocationCitation;
+  CharLocationCitation | PageLocationCitation | ContentBlockLocationCitation;
 
 /**
  * Calculates the API key to use for a request.

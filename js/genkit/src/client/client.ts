@@ -232,8 +232,7 @@ export async function runFlow<O = any, Init = any>({
     throw new HttpStatusError(response.status, await response.text());
   }
   const wrappedResult = (await response.json()) as
-    | { result: O }
-    | { error: unknown };
+    { result: O } | { error: unknown };
   if ('error' in wrappedResult) {
     if (typeof wrappedResult.error === 'string') {
       throw new Error(wrappedResult.error);

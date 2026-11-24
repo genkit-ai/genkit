@@ -82,9 +82,7 @@ export type McpTransportServerConfig = {
  * custom/arbitary transports are supported as well.
  */
 export type McpServerConfig = (
-  | McpStdioServerConfig
-  | McpStreamableHttpConfig
-  | McpTransportServerConfig
+  McpStdioServerConfig | McpStreamableHttpConfig | McpTransportServerConfig
 ) &
   McpServerControls;
 

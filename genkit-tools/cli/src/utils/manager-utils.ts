@@ -20,8 +20,11 @@ import {
   startTelemetryServer,
 } from '@genkit-ai/telemetry-server';
 import type { Status } from '@genkit-ai/tools-common';
-import {
+import type {
   BaseRuntimeManager,
+  GenkitToolsError,
+} from '@genkit-ai/tools-common/manager';
+import {
   DEFAULT_REFLECTION_V2_HOST,
   ProcessManager,
   REFLECTION_SECRET_ENV,
@@ -29,7 +32,6 @@ import {
   RuntimeManager,
   generateReflectionSecret,
   reflectionV2Url,
-  type GenkitToolsError,
 } from '@genkit-ai/tools-common/manager';
 import { logger } from '@genkit-ai/tools-common/utils';
 import getPort, { portNumbers } from 'get-port';
@@ -204,11 +206,13 @@ export async function getDevEnvVars(
 
   if (useOtel) {
     // Drive the app's own OTel SDK to the dev telemetry server's OTLP endpoints.
-    // The server only parses JSON bodies (express.json), so http/json is
-    // required; per-signal endpoints are used verbatim (no /v1/* appended), so
-    // the full path is spelled out. Metrics are deliberately not redirected:
-    // the server doesn't ingest them, so they go wherever the app's own OTel
-    // config sends them.
+    // The protocol is set explicitly to http/protobuf (the OTLP spec default,
+    // supported by Go autoexport, Python, Java, and JS NodeSDK) so a shell
+    // OTEL_EXPORTER_OTLP_*_PROTOCOL=grpc or Python opentelemetry-distro's grpc
+    // default cannot leak in; per-signal endpoints are used verbatim (no /v1/*
+    // appended), so the full path is spelled out. Metrics are deliberately not
+    // redirected: the server doesn't ingest them, so they go wherever the app's
+    // own OTel config sends them.
     //
     // GENKIT_TELEMETRY_SERVER is blanked rather than omitted: the child
     // inherits process.env, so a value exported in the shell (the
@@ -221,9 +225,9 @@ export async function getDevEnvVars(
     // with one, and naive concatenation would yield a double slash.
     const baseUrl = telemetryServerUrl.replace(/\/+$/, '');
     envVars.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = `${baseUrl}/api/otlp/v1/traces`;
-    envVars.OTEL_EXPORTER_OTLP_TRACES_PROTOCOL = 'http/json';
+    envVars.OTEL_EXPORTER_OTLP_TRACES_PROTOCOL = 'http/protobuf';
     envVars.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT = `${baseUrl}/api/otlp/v1/logs`;
-    envVars.OTEL_EXPORTER_OTLP_LOGS_PROTOCOL = 'http/json';
+    envVars.OTEL_EXPORTER_OTLP_LOGS_PROTOCOL = 'http/protobuf';
   } else {
     envVars.GENKIT_TELEMETRY_SERVER = telemetryServerUrl;
     if (!disableRealtimeTelemetry) {

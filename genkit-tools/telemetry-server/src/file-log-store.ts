@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-import {
+import type {
+  LogQuery,
+  LogQueryResponse,
   LogRecordData,
-  type LogQuery,
-  type LogQueryResponse,
-  type LogStore,
+  LogStore,
 } from '@genkit-ai/tools-common';
 import { logger } from '@genkit-ai/tools-common/utils';
 import { Mutex } from 'async-mutex';

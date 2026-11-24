@@ -22,7 +22,7 @@ require (
 	github.com/blues/jsonata-go v1.5.4
 	github.com/coder/websocket v1.8.14
 	github.com/goccy/go-yaml v1.19.2
-	github.com/google/dotprompt/go v0.0.0-20260708220100-73beb993ac95
+	github.com/google/dotprompt/go v0.0.0-20261118194220-bdc60beb8a17
 	github.com/google/go-cmp v0.7.0
 	github.com/google/uuid v1.6.0
 	github.com/invopop/jsonschema v0.14.0

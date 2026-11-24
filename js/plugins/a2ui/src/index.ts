@@ -42,7 +42,12 @@ export {
   type A2uiParserOptions,
   type ParseResult,
 } from './parser.js';
-export { a2uiEnvelopesFromParts, a2uiPart, isA2uiPart } from './part.js';
+export {
+  a2uiEnvelopesFromParts,
+  a2uiPart,
+  a2uiPartMessages,
+  isA2uiPart,
+} from './part.js';
 export {
   A2UI_MIME_TYPE,
   A2UI_VERSION,

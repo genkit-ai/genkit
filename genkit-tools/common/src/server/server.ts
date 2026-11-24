@@ -147,7 +147,6 @@ export function startServer(
   host: string = DEFAULT_HOST
 ) {
   const projectRuntime = detectRuntimeSync(manager.projectRoot) || 'unknown';
-  let server: Server;
   const app = express();
 
   app.use(
@@ -159,7 +158,7 @@ export function startServer(
   );
 
   // Download UI assets from public GCS bucket and serve locally
-  downloadAndExtractUiAssets({
+  void downloadAndExtractUiAssets({
     fileUrl: UI_ASSETS_ZIP_GCS_PATH,
     extractPath: UI_ASSETS_ROOT,
     zipFileName: UI_ASSETS_ZIP_FILE_NAME,
@@ -392,12 +391,12 @@ export function startServer(
   };
   app.use(errorHandler);
 
-  server = app.listen(port, host, async () => {
+  const server: Server = app.listen(port, host, () => {
     const uiUrl = 'http://localhost:' + port;
     const projectRoot = manager.projectRoot;
     logger.info(`${clc.green(clc.bold('Project root:'))} ${projectRoot}`);
     logger.info(`${clc.green(clc.bold('Genkit Developer UI:'))} ${uiUrl}`);
-    await writeToolsInfoFile(uiUrl, projectRoot);
+    void writeToolsInfoFile(uiUrl, projectRoot);
   });
 
   return new Promise<void>((resolve) => {

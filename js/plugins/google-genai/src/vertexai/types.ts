@@ -243,8 +243,7 @@ interface MultimodalEmbeddingInstance {
 }
 
 export declare type EmbeddingInstance =
-  | TextEmbeddingInstance
-  | MultimodalEmbeddingInstance;
+  TextEmbeddingInstance | MultimodalEmbeddingInstance;
 
 export declare interface TextEmbeddingPrediction {
   embeddings: {
@@ -301,8 +300,7 @@ export function isMultimodalEmbeddingPrediction(
 }
 
 export declare type EmbeddingPrediction =
-  | TextEmbeddingPrediction
-  | MultimodalEmbeddingPrediction;
+  TextEmbeddingPrediction | MultimodalEmbeddingPrediction;
 
 /**
  * Request for the `:predict` embeddings method (gemini-embedding-001,

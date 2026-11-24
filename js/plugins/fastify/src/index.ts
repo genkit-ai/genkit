@@ -106,8 +106,7 @@ export function fastifyHandler<
 
     const input = (request.body as { data?: z.infer<I> }).data as z.infer<I>;
     const init = (request.body as { init?: z.infer<Init> }).init as
-      | z.infer<Init>
-      | undefined;
+      z.infer<Init> | undefined;
     let context: Record<string, any>;
 
     try {
