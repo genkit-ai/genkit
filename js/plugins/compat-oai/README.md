@@ -25,6 +25,16 @@ Official OpenAI-compatible provider documentation:
 
 This plugin also supports OpenAI models, and custom models from other model providers.
 
+### Responses-only models (`o3-pro`, `gpt-5-pro`, `*-codex`, ...)
+
+These models are served only over OpenAI's Responses API and are routed there automatically. Notes for this release:
+
+- Calls are synchronous (non-background). Long `pro` runs can exceed the SDK default timeout; pass `config: { timeout: <ms> }` to raise it.
+- `store` defaults to `false`. A raw `previous_response_id` can chain off an earlier stored response, but a `store: false` response cannot be chained from later.
+- Function tools are not supported yet; raw `tools`/`tool_choice` config passes through, but a returned function call throws `UNIMPLEMENTED`.
+- Streaming delivers the completed response as a single chunk for now.
+- `temperature`/`topP` are passed through; reasoning models may reject non-default values.
+
 ## Installation
 
 Install the plugin in your project with your favorite package manager:
@@ -235,8 +245,8 @@ Want to contribute to the project? That's awesome! Head over to our [Contributio
 
 ## Need help?
 
- - [Genkit Discord](https://genkit.dev/discord)
- - [Github Issues](https://github.com/genkit-ai/genkit/issues)
+- [Genkit Discord](https://genkit.dev/discord)
+- [Github Issues](https://github.com/genkit-ai/genkit/issues)
 
 ## License
 
