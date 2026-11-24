@@ -110,6 +110,11 @@ export function isNonStreamingResponsesModelName(name?: string): boolean {
 export const OpenAIResponsesConfigSchema = ResponsesCommonConfigSchema.extend({
   store: z.boolean().optional(),
   timeout: z.number().int().positive().optional(),
+  previousResponseId: z.string().optional(),
+  reasoningEffort: z
+    .enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh'])
+    .optional(),
+  reasoningSummary: z.enum(['auto', 'concise', 'detailed']).optional(),
   transport: z.enum(['responses']).optional(),
 }).passthrough();
 

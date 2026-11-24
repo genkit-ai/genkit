@@ -38,6 +38,7 @@ export const OpenAIChatCompletionConfigSchema =
   ChatCompletionCommonConfigSchema.extend({
     store: z.boolean().optional(),
     strict: z.boolean().optional(),
+    transport: z.enum(['responses', 'chat_completions']).optional(),
   });
 
 /** OpenAI ModelRef helper, with OpenAI specific config. */
