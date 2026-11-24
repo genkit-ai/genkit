@@ -597,10 +597,16 @@ func (g *ModelGenerator) applyResponseFormat(output *ai.ModelOutputConfig) {
 		}
 	}
 	// A host that takes only an object at the schema root gets any other
-	// root wrapped in one, and the reply is unwrapped.
-	if g.objectSchemaRoot && format.OfJSONSchema != nil && output.Format == ai.OutputFormatJSON && !hasObjectRoot(output.Schema) {
-		format = jsonSchemaFormat(wrapSchemaRoot(output.Schema))
-		g.unwrapRoot = true
+	// root wrapped in one, and the reply is unwrapped. Such hosts also
+	// resolve only whole top-level definitions, so references into the
+	// middle of one are hoisted either way.
+	if g.objectSchemaRoot && format.OfJSONSchema != nil {
+		if output.Format == ai.OutputFormatJSON && !hasObjectRoot(output.Schema) {
+			format = jsonSchemaFormat(wrapSchemaRoot(output.Schema))
+			g.unwrapRoot = true
+		} else if schema, ok := format.OfJSONSchema.JSONSchema.Schema.(map[string]any); ok {
+			format.OfJSONSchema.JSONSchema.Schema = hoistDefRefs(schema)
+		}
 	}
 	g.request.ResponseFormat = format
 }

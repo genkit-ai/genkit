@@ -59,7 +59,7 @@ func hasObjectRoot(schema map[string]any) bool {
 // top-level definitions, so each referenced subschema moves into $defs and
 // both its old place and every reference to it point there instead.
 func wrapSchemaRoot(schema map[string]any) map[string]any {
-	h := newRefHoister(schema)
+	h := newRefHoister(schema, true)
 	inner := make(map[string]any, len(schema))
 	wrapped := map[string]any{
 		"type":                 "object",
@@ -73,11 +73,7 @@ func wrapSchemaRoot(schema map[string]any) map[string]any {
 		case "definitions":
 			wrapped[k] = h.walk(v, "#/definitions")
 		case "$defs":
-			if defs, ok := v.(map[string]any); ok {
-				for name, def := range defs {
-					h.defs[name] = h.walk(def, "#/$defs/"+escapePointer(name))
-				}
-			} else {
+			if !h.walkDefs(v) {
 				wrapped[k] = v
 			}
 		default:
@@ -89,6 +85,26 @@ func wrapSchemaRoot(schema map[string]any) map[string]any {
 		wrapped["$defs"] = h.defs
 	}
 	return wrapped
+}
+
+// hoistDefRefs returns schema with every reference into the middle of a
+// definition ("#/$defs/Person/properties/name") pointed at a new top-level
+// definition instead, since strict hosts resolve only whole top-level
+// definitions. A schema without such references comes back unchanged.
+func hoistDefRefs(schema map[string]any) map[string]any {
+	h := newRefHoister(schema, false)
+	if len(h.targets) == 0 {
+		return schema
+	}
+	out := make(map[string]any, len(schema)+1)
+	for k, v := range schema {
+		if k == "$defs" && h.walkDefs(v) {
+			continue
+		}
+		out[k] = h.walk(v, "#/"+escapePointer(k))
+	}
+	out["$defs"] = h.defs
+	return out
 }
 
 // dataKeywords hold data rather than subschemas, so a $ref inside them is not
@@ -103,7 +119,10 @@ type refHoister struct {
 	defs    map[string]any
 }
 
-func newRefHoister(schema map[string]any) *refHoister {
+// newRefHoister finds the references in schema that strict hosts can't
+// follow: those into the middle of a definition and, when local is set, those
+// anywhere else outside $defs and definitions.
+func newRefHoister(schema map[string]any, local bool) *refHoister {
 	h := &refHoister{targets: map[string]string{}, defs: map[string]any{}}
 	taken := map[string]bool{}
 	if defs, ok := schema["$defs"].(map[string]any); ok {
@@ -112,7 +131,10 @@ func newRefHoister(schema map[string]any) *refHoister {
 		}
 	}
 	var refs []string
-	collectLocalRefs(schema, func(ref string) {
+	collectRefs(schema, func(ref string) {
+		if !hoistable(ref, local) {
+			return
+		}
 		if _, seen := h.targets[ref]; !seen && resolvePointer(schema, ref) {
 			h.targets[ref] = ""
 			refs = append(refs, ref)
@@ -123,6 +145,19 @@ func newRefHoister(schema map[string]any) *refHoister {
 		h.targets[ref] = uniqueDefName(ref, taken)
 	}
 	return h
+}
+
+// walkDefs copies the $defs value v into defs, and reports false when v isn't
+// a map of definitions.
+func (h *refHoister) walkDefs(v any) bool {
+	defs, ok := v.(map[string]any)
+	if !ok {
+		return false
+	}
+	for name, def := range defs {
+		h.defs[name] = h.walk(def, "#/$defs/"+escapePointer(name))
+	}
+	return true
 }
 
 // walk copies node, found at JSON pointer ptr in the caller's schema. A node
@@ -165,39 +200,48 @@ func (h *refHoister) copy(node any, ptr string) any {
 	}
 }
 
-// collectLocalRefs calls found with every reference in node that points into
-// the schema itself rather than into $defs or definitions.
-func collectLocalRefs(node any, found func(string)) {
+// collectRefs calls found with every $ref in node.
+func collectRefs(node any, found func(string)) {
 	switch n := node.(type) {
 	case map[string]any:
 		for k, v := range n {
 			switch ref, isString := v.(string); {
 			case k == "$ref" && isString:
-				if isLocalRef(ref) {
-					found(ref)
-				}
+				found(ref)
 			case dataKeywords[k]:
 			default:
-				collectLocalRefs(v, found)
+				collectRefs(v, found)
 			}
 		}
 	case []any:
 		for _, v := range n {
-			collectLocalRefs(v, found)
+			collectRefs(v, found)
 		}
 	}
 }
 
-func isLocalRef(ref string) bool {
+// hoistable reports whether ref is a local reference that strict hosts can't
+// follow. A reference to a whole top-level definition is fine. One into the
+// middle of a definition is not, and nor, when local is set, is any other
+// local reference.
+func hoistable(ref string, local bool) bool {
 	if ref != "#" && !strings.HasPrefix(ref, "#/") {
 		return false
 	}
-	for _, defs := range []string{"#/$defs", "#/definitions"} {
-		if ref == defs || strings.HasPrefix(ref, defs+"/") {
-			return false
+	if rest, ok := defsPath(ref); ok {
+		return strings.Contains(rest, "/")
+	}
+	return local && ref != "#/$defs" && ref != "#/definitions"
+}
+
+// defsPath returns what follows "#/$defs/" or "#/definitions/" in ref.
+func defsPath(ref string) (string, bool) {
+	for _, prefix := range []string{"#/$defs/", "#/definitions/"} {
+		if rest, ok := strings.CutPrefix(ref, prefix); ok {
+			return rest, true
 		}
 	}
-	return true
+	return "", false
 }
 
 // resolvePointer reports whether the JSON pointer ref names a schema inside
@@ -232,14 +276,20 @@ func escapePointer(key string) string {
 }
 
 // uniqueDefName names the definition a referenced pointer moves to, avoiding
-// the names already taken.
+// the names already taken. A pointer into a definition is named after its
+// path there ("Person_properties_name"), and any other after its path under
+// the wrapper ("value_items").
 func uniqueDefName(ref string, taken map[string]bool) string {
+	path, inDefs := defsPath(ref)
+	if !inDefs {
+		path = wrapperKey + strings.TrimPrefix(ref, "#")
+	}
 	base := strings.Map(func(r rune) rune {
 		if r == '_' || r == '-' || unicode.IsLetter(r) || unicode.IsDigit(r) {
 			return r
 		}
 		return '_'
-	}, wrapperKey+strings.TrimPrefix(ref, "#"))
+	}, path)
 	name := base
 	for i := 2; taken[name]; i++ {
 		name = base + "_" + strconv.Itoa(i)
