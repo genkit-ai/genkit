@@ -176,31 +176,6 @@ export interface GenkitOptions {
  * Registry keeps track of actions, flows, tools, and many other components. Reflection server exposes an API to inspect the registry and trigger executions of actions in the registry. Flow server exposes flows as HTTP endpoints for production use.
  *
  * There may be multiple Genkit instances in a single codebase.
- *
- * @example
- * ```ts
- * import { genkit, z } from 'genkit';
- * import { googleAI } from '@genkit-ai/google-genai';
- *
- * const ai = genkit({
- *   plugins: [googleAI()],
- * });
- *
- * export const myFlow = ai.defineFlow(
- *   {
- *     name: 'myFlow',
- *     inputSchema: z.object({ subject: z.string() }),
- *     outputSchema: z.string(),
- *   },
- *   async ({ subject }) => {
- *     const { text } = await ai.generate({
- *       model: googleAI.model('gemini-flash-latest'),
- *       prompt: `Say hello to ${subject}`,
- *     });
- *     return text;
- *   }
- * );
- * ```
  */
 export class Genkit extends GenkitAI implements HasRegistry {
   /** Developer-configured options. */
@@ -257,20 +232,16 @@ export class Genkit extends GenkitAI implements HasRegistry {
    *
    * @example
    * ```ts
-   * export const myFlow = ai.defineFlow(
+   * const greetFlow = ai.defineFlow(
    *   {
-   *     name: 'myFlow',
-   *     inputSchema: z.object({ subject: z.string() }),
+   *     name: 'greetFlow',
+   *     inputSchema: z.object({ name: z.string() }),
    *     outputSchema: z.string(),
    *   },
-   *   async ({ subject }) => {
-   *     const { text } = await ai.generate({
-   *       model: googleAI.model('gemini-flash-latest'),
-   *       prompt: `Say hello to ${subject}`,
-   *     });
-   *     return text;
-   *   }
+   *   async ({ name }) => `Hello, ${name}!`
    * );
+   *
+   * const greeting = await greetFlow({ name: 'world' });
    * ```
    */
   defineFlow<
@@ -854,27 +825,17 @@ function registerActionV2(
  *
  * @example
  * ```ts
- * import { genkit, z } from 'genkit';
+ * import { genkit } from 'genkit';
  * import { googleAI } from '@genkit-ai/google-genai';
  *
  * const ai = genkit({
  *   plugins: [googleAI()],
  * });
  *
- * export const myFlow = ai.defineFlow(
- *   {
- *     name: 'myFlow',
- *     inputSchema: z.object({ subject: z.string() }),
- *     outputSchema: z.string(),
- *   },
- *   async ({ subject }) => {
- *     const { text } = await ai.generate({
- *       model: googleAI.model('gemini-flash-latest'),
- *       prompt: `Say hello to ${subject}`,
- *     });
- *     return text;
- *   }
- * );
+ * const { text } = await ai.generate({
+ *   model: googleAI.model('gemini-flash-latest'),
+ *   prompt: 'Why is Genkit awesome?',
+ * });
  * ```
  */
 export function genkit(options: GenkitOptions): Genkit {
