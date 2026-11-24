@@ -123,7 +123,7 @@ export async function startCLI(): Promise<void> {
       }
 
       if (
-        process.stdout.isTTY &&
+        isStderrTTY() &&
         !process.argv.includes('--non-interactive') &&
         process.argv[2] !== SERVER_HARNESS_COMMAND &&
         commandName !== 'mcp' &&

@@ -200,9 +200,10 @@ describe('startCLI', () => {
 
     expect(mockNotifyAnalyticsIfFirstRun).not.toHaveBeenCalled();
     expect(mockShowUpdateNotification).toHaveBeenCalledOnce();
+    expect(mockWarnIfLegacyGenkitContext).toHaveBeenCalledOnce();
   });
 
-  it('skips first-run analytics prompt and update notification when stderr is not a TTY', async () => {
+  it('skips first-run analytics prompt, legacy context warning, and update notification when stderr is not a TTY', async () => {
     Object.defineProperty(process.stderr, 'isTTY', {
       value: undefined,
       configurable: true,
@@ -214,6 +215,7 @@ describe('startCLI', () => {
 
     expect(mockNotifyAnalyticsIfFirstRun).not.toHaveBeenCalled();
     expect(mockShowUpdateNotification).not.toHaveBeenCalled();
+    expect(mockWarnIfLegacyGenkitContext).not.toHaveBeenCalled();
   });
 
   it('skips first-run analytics prompt for __server-harness daemon process', async () => {
