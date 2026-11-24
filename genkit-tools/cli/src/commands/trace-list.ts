@@ -146,12 +146,12 @@ export const traceList = new Command('trace:list')
         });
 
         if (response.continuationToken) {
-          writeStdout(
+          writeStderr(
             `\nTo get the next page, use: --continuation-token ${response.continuationToken}`
           );
         }
 
-        writeStdout(
+        writeStderr(
           `\nTip: Use "genkit trace:get <traceId>" to view full trace details.`
         );
       } catch (e) {

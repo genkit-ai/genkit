@@ -180,7 +180,7 @@ describe('trace:list command', () => {
         neq: { 'genkitx:ignore-trace': ['true'] },
       },
     });
-    expect(output.writeStdout).toHaveBeenCalledWith(
+    expect(output.writeStderr).toHaveBeenCalledWith(
       '\nTo get the next page, use: --continuation-token next-page-token'
     );
   });

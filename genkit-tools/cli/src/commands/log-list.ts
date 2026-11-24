@@ -143,15 +143,10 @@ export const logList = new Command('log:list')
         }
 
         if (response.continuationToken) {
-          if (options.format === 'jsonl') {
-            writeStderr(
-              `To get the next page, use: --continuation-token ${response.continuationToken}`
-            );
-          } else {
-            writeStdout(
-              `\nTo get the next page, use: --continuation-token ${response.continuationToken}`
-            );
-          }
+          const prefix = options.format === 'jsonl' ? '' : '\n';
+          writeStderr(
+            `${prefix}To get the next page, use: --continuation-token ${response.continuationToken}`
+          );
         }
       } catch (e) {
         logger.error(`Error listing logs: ${e}`);
