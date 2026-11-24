@@ -52,6 +52,12 @@ import type {
   ChatCompletionTool,
 } from 'openai/resources/index.mjs';
 import { PluginOptions } from './index.js';
+import {
+  WrapperStreamUnwrapper,
+  hasObjectRoot,
+  unwrapValue,
+  wrapSchemaRoot,
+} from './schema-root.js';
 import { maybeCreateRequestScopedOpenAIClient, toModelName } from './utils.js';
 
 /**
@@ -387,15 +393,23 @@ export function fromOpenAIToolCall(
   }
 }
 
+/** Parses JSON message content, unwrapping a wrapped root if asked. */
+function parseJsonContent(content: string, unwrapRoot: boolean): unknown {
+  const parsed = JSON.parse(content);
+  return unwrapRoot ? unwrapValue(parsed) : parsed;
+}
+
 /**
  * Converts an OpenAI message event to a Genkit GenerateResponseData object.
  * @param choice The OpenAI message event to convert.
  * @param jsonMode Whether the event is a JSON response.
+ * @param unwrapRoot Whether to unwrap a schema root wrapped for the host.
  * @returns The converted Genkit GenerateResponseData object.
  */
 export function fromOpenAIChoice(
   choice: ChatCompletion.Choice,
-  jsonMode = false
+  jsonMode = false,
+  unwrapRoot = false
 ): GenerateResponseData {
   const toolRequestParts = choice.message.tool_calls?.map((toolCall) =>
     fromOpenAIToolCall(toolCall, choice)
@@ -418,7 +432,7 @@ export function fromOpenAIChoice(
   if (choice.message.content) {
     content.push(
       jsonMode && !hasToolRequests
-        ? { data: JSON.parse(choice.message.content!) }
+        ? { data: parseJsonContent(choice.message.content, unwrapRoot) }
         : { text: choice.message.content! }
     );
   }
@@ -566,6 +580,36 @@ export function fromOpenAIChunkChoice(
 }
 
 /**
+ * Settings that only the plugins in this package set on the options they pass
+ * to their models. They are not part of the public {@link PluginOptions}.
+ * @internal
+ */
+export interface InternalModelOptions {
+  /**
+   * The host only accepts a `json_schema` response format whose root is an
+   * object (OpenAI), so other roots are wrapped and the reply unwrapped.
+   */
+  objectSchemaRoot?: boolean;
+}
+
+/**
+ * Whether the request's output schema must be wrapped in an object (and the
+ * reply unwrapped): the host only takes object roots and the schema has none.
+ */
+export function needsRootWrapper(
+  request: GenerateRequest,
+  pluginOptions?: InternalModelOptions
+): boolean {
+  const schema = request.output?.schema;
+  return (
+    pluginOptions?.objectSchemaRoot === true &&
+    request.output?.format === 'json' &&
+    !!schema &&
+    !hasObjectRoot(schema)
+  );
+}
+
+/**
  * Converts an OpenAI request to an OpenAI API request body.
  * @param modelName The name of the OpenAI model to use.
  * @param request The Genkit GenerateRequest to convert.
@@ -575,7 +619,8 @@ export function fromOpenAIChunkChoice(
 export function toOpenAIRequestBody(
   modelName: string,
   request: GenerateRequest,
-  requestBuilder?: ModelRequestBuilder
+  requestBuilder?: ModelRequestBuilder,
+  pluginOptions?: InternalModelOptions
 ) {
   const messages = toOpenAIMessages(
     request.messages,
@@ -639,7 +684,9 @@ export function toOpenAIRequestBody(
         type: 'json_schema',
         json_schema: {
           name: 'output',
-          schema: request.output!.schema,
+          schema: needsRootWrapper(request, pluginOptions)
+            ? wrapSchemaRoot(request.output!.schema!)
+            : request.output!.schema,
           ...(strict !== undefined ? { strict } : {}),
         },
       };
@@ -664,6 +711,23 @@ export function toOpenAIRequestBody(
   return body;
 }
 
+/** Runs streamed text parts through `unwrapper`, dropping emptied parts. */
+function unwrapStreamedText(
+  content: Part[],
+  unwrapper: WrapperStreamUnwrapper
+): Part[] {
+  const out: Part[] = [];
+  for (const part of content) {
+    if (typeof part.text !== 'string') {
+      out.push(part);
+      continue;
+    }
+    const text = unwrapper.push(part.text);
+    if (text) out.push({ ...part, text } as Part);
+  }
+  return out;
+}
+
 /**
  * Creates the runner used by Genkit to interact with an OpenAI compatible
  * model.
@@ -675,7 +739,7 @@ export function openAIModelRunner(
   name: string,
   defaultClient: OpenAI,
   requestBuilder?: ModelRequestBuilder,
-  pluginOptions?: Omit<PluginOptions, 'apiKey'>
+  pluginOptions?: Omit<PluginOptions, 'apiKey'> & InternalModelOptions
 ) {
   return async (
     request: GenerateRequest,
@@ -692,7 +756,13 @@ export function openAIModelRunner(
     );
     try {
       let response: ChatCompletion;
-      const body = toOpenAIRequestBody(name, request, requestBuilder);
+      const body = toOpenAIRequestBody(
+        name,
+        request,
+        requestBuilder,
+        pluginOptions
+      );
+      const unwrapRoot = needsRootWrapper(request, pluginOptions);
       if (options?.streamingRequested) {
         const stream = client.beta.chat.completions.stream(
           {
@@ -710,6 +780,7 @@ export function openAIModelRunner(
         // tool calls incrementally: the first delta carries `name`/`id` and
         // subsequent deltas carry only fragments of the `arguments` JSON string.
         const toolCallAccumulators = new Map<number, ToolCallAccumulator[]>();
+        const unwrappers = new Map<number, WrapperStreamUnwrapper>();
         for await (const chunk of stream) {
           chunk.choices?.forEach((chunk) => {
             let accumulators = toolCallAccumulators.get(chunk.index);
@@ -718,11 +789,26 @@ export function openAIModelRunner(
               toolCallAccumulators.set(chunk.index, accumulators);
             }
             const c = fromOpenAIChunkChoice(chunk, undefined, accumulators);
+            let content = c.message?.content ?? [];
+            if (unwrapRoot) {
+              let unwrapper = unwrappers.get(chunk.index);
+              if (!unwrapper) {
+                unwrapper = new WrapperStreamUnwrapper();
+                unwrappers.set(chunk.index, unwrapper);
+              }
+              content = unwrapStreamedText(content, unwrapper);
+            }
             options?.sendChunk!({
               index: chunk.index,
-              content: c.message?.content ?? [],
+              content,
             });
           });
+        }
+        if (unwrapRoot) {
+          for (const [index, unwrapper] of unwrappers) {
+            const rest = unwrapper.flush();
+            if (rest) options?.sendChunk!({ index, content: [{ text: rest }] });
+          }
         }
         response = await stream.finalChatCompletion();
       } else {
@@ -743,7 +829,11 @@ export function openAIModelRunner(
       } else {
         const choice = response.choices[0];
         return {
-          ...fromOpenAIChoice(choice, request.output?.format === 'json'),
+          ...fromOpenAIChoice(
+            choice,
+            request.output?.format === 'json',
+            unwrapRoot
+          ),
           ...standardResponse,
         };
       }
