@@ -99,6 +99,36 @@ describe('ollama models', () => {
     assert.ok(result.text === 'The weather is sunny');
   });
 
+  it('should successfully return tool call response when streaming', async () => {
+    const get_current_weather = ai.defineTool(
+      {
+        name: 'get_current_weather',
+        description: 'gets weather',
+        inputSchema: z.object({ format: z.string(), location: z.string() }),
+      },
+      async () => {
+        return MAGIC_WORD;
+      }
+    );
+
+    const { response, stream } = ai.generateStream({
+      model: 'ollama/test-model',
+      prompt: 'Hello',
+      tools: [get_current_weather],
+    });
+
+    const chunks: string[] = [];
+    for await (const chunk of stream) {
+      if (chunk.text) {
+        chunks.push(chunk.text);
+      }
+    }
+
+    const result = await response;
+    assert.strictEqual(result.text, 'The weather is sunny');
+    assert.ok(chunks.join('').includes('The weather is sunny'));
+  });
+
   it('should throw for primitive tools', async () => {
     const get_current_weather = ai.defineTool(
       {
