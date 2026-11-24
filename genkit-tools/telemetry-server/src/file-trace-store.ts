@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
-import {
+import type {
   SpanData,
-  TraceDataSchema,
-  type TraceData,
-  type TraceQueryFilter,
+  TraceData,
+  TraceQueryFilter,
 } from '@genkit-ai/tools-common';
+import { TraceDataSchema } from '@genkit-ai/tools-common';
 import { logger } from '@genkit-ai/tools-common/utils';
 import { Mutex } from 'async-mutex';
 import fs from 'fs';
@@ -359,7 +359,7 @@ export class Index {
       return JSON.parse(
         fs.readFileSync(this.metadataFileName(), { encoding: 'utf8' })
       );
-    } catch (e) {
+    } catch {
       return undefined;
     }
   }

@@ -23,7 +23,8 @@ import {
   notifyAnalyticsIfFirstRun,
   record,
 } from '@genkit-ai/tools-common/utils';
-import { Command, program } from 'commander';
+import type { Command } from 'commander';
+import { program } from 'commander';
 import { config } from './commands/config.js';
 import { devTestModel } from './commands/dev-test-model.js';
 import { docsList, docsRead, docsSearch } from './commands/docs.js';
@@ -107,17 +108,19 @@ export async function startCLI(): Promise<void> {
         commandName = 'unknown';
       }
 
-      if (
-        !process.argv.includes('--non-interactive') &&
-        commandName !== 'config' &&
-        commandName !== 'mcp'
-      ) {
-        await notifyAnalyticsIfFirstRun();
-      }
-
       const { isCompiledBinary } = detectCLIRuntime();
       const projectRoot = await findProjectRoot();
       const projectRuntime = await detectRuntime(projectRoot);
+
+      if (
+        !process.argv.includes('--non-interactive') &&
+        commandName !== 'config' &&
+        commandName !== 'mcp' &&
+        actionCommand.name() !== SERVER_HARNESS_COMMAND
+      ) {
+        await notifyAnalyticsIfFirstRun(projectRuntime);
+      }
+
       if (
         process.stdout.isTTY &&
         !process.argv.includes('--non-interactive') &&

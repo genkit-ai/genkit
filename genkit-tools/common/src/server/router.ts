@@ -22,7 +22,7 @@ import {
   validateSchema,
 } from '../eval/index.js';
 import type { BaseRuntimeManager } from '../manager/manager.js';
-import { AppProcessStatus } from '../manager/process-manager.js';
+import type { AppProcessStatus } from '../manager/process-manager.js';
 import { GenkitToolsError, type RuntimeInfo } from '../manager/types.js';
 import type { Action } from '../types/action.js';
 import * as apis from '../types/apis.js';
@@ -116,7 +116,6 @@ const loggedProcedure = t.procedure.use(async (opts) => {
   return result;
 });
 
-// eslint-disable-next-line @typescript-eslint/explicit-function-return-type
 export const TOOLS_SERVER_ROUTER = (manager: BaseRuntimeManager) =>
   t.router({
     /** Retrieves all runnable actions. */

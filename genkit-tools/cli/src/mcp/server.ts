@@ -21,7 +21,8 @@ import { defineDocsTool } from '../mcp/docs.js';
 import { defineFlowTools } from './flows.js';
 import { defineRuntimeTools } from './runtime.js';
 import { defineTraceTools } from './trace.js';
-import { McpRuntimeManager, McpToolOptions } from './utils.js';
+import type { McpToolOptions } from './utils.js';
+import { McpRuntimeManager } from './utils.js';
 
 export async function startMcpServer(params: {
   projectRoot: string;
@@ -61,29 +62,24 @@ export async function startMcpServer(params: {
   defineTraceTools(server, options);
   defineRuntimeTools(server, options);
 
-  return new Promise(async (resolve) => {
-    const transport = new StdioServerTransport();
-    const cleanup = async () => {
-      try {
-        await manager.kill();
-      } catch (e) {
-        // ignore
-      }
-      resolve(undefined);
-      process.exit(0);
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+  logger.info('Genkit MCP Server running on stdio');
+
+  return new Promise((resolve) => {
+    const cleanup = () => {
+      void (async () => {
+        try {
+          await manager.kill();
+        } catch {
+          // ignore
+        }
+        resolve(undefined);
+        process.exit(0);
+      })();
     };
-    transport.onclose = async () => {
-      try {
-        await manager.kill();
-      } catch (e) {
-        // ignore
-      }
-      resolve(undefined);
-      process.exit(0);
-    };
+    server.server.onclose = cleanup;
     process.on('SIGINT', cleanup);
     process.on('SIGTERM', cleanup);
-    await server.connect(transport);
-    logger.info('Genkit MCP Server running on stdio');
   });
 }
