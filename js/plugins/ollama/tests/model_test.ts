@@ -129,6 +129,57 @@ describe('ollama models', () => {
     assert.ok(chunks.join('').includes('The weather is sunny'));
   });
 
+  it('should gracefully ignore final metadata-only chunk when streaming', async () => {
+    const originalFetch = global.fetch;
+    global.fetch = async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.includes('/api/chat')) {
+        const ndjson =
+          JSON.stringify({
+            model: 'llama3.2',
+            message: { role: 'assistant', content: 'Hello ' },
+            done: false,
+          }) +
+          '\n' +
+          JSON.stringify({
+            model: 'llama3.2',
+            message: { role: 'assistant', content: 'world' },
+            done: false,
+          }) +
+          '\n' +
+          JSON.stringify({
+            model: 'llama3.2',
+            done: true,
+            done_reason: 'stop',
+            total_duration: 123456,
+          }) +
+          '\n';
+        return new Response(ndjson);
+      }
+      throw new Error('Unknown API endpoint');
+    };
+
+    try {
+      const { response, stream } = ai.generateStream({
+        model: 'ollama/test-model',
+        prompt: 'Hi',
+      });
+
+      const chunks: string[] = [];
+      for await (const chunk of stream) {
+        if (chunk.text) {
+          chunks.push(chunk.text);
+        }
+      }
+
+      const result = await response;
+      assert.strictEqual(result.text, 'Hello world');
+      assert.strictEqual(chunks.join(''), 'Hello world');
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
   it('should throw for primitive tools', async () => {
     const get_current_weather = ai.defineTool(
       {

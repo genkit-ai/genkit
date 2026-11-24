@@ -312,6 +312,15 @@ function defineOllamaModel(
             return;
           }
           const json = JSON.parse(trimmed);
+          if (json.error) {
+            throw new Error(json.error);
+          }
+          if (type === 'chat' && json.message == null) {
+            return;
+          }
+          if (type === 'generate' && json.response == null) {
+            return;
+          }
           const parsed = parseMessage(json, type);
           streamingCallback({
             index: 0,
