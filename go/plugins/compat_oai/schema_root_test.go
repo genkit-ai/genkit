@@ -392,6 +392,15 @@ func TestStreamUnwrapperNeverEmitsTheClosingBraceEarly(t *testing.T) {
 	}
 }
 
+func TestStreamUnwrapperDropsWhitespaceAfterTheColonHoweverSplit(t *testing.T) {
+	spaced := "{ \"value\" :\n  [1, 2] }\n"
+	for i := 0; i <= len(spaced); i++ {
+		if got := runUnwrapper([]string{spaced[:i], spaced[i:]}); got != "[1, 2]" {
+			t.Errorf("split at %d: got %q, want %q", i, got, "[1, 2]")
+		}
+	}
+}
+
 func TestApplyResponseFormatWrapsNonObjectRoot(t *testing.T) {
 	jsonOut := func(schema map[string]any) *ai.ModelOutputConfig {
 		return &ai.ModelOutputConfig{Format: ai.OutputFormatJSON, Schema: schema, Constrained: true}

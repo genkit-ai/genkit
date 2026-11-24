@@ -410,10 +410,11 @@ func matchPrefix(text string) (prefixMatch, int) {
 // because the last brace belongs to the wrapper only if nothing follows it;
 // flush drops it. A reply that is not a wrapper passes through unchanged.
 type streamUnwrapper struct {
-	started bool
-	wrapped bool
-	head    string
-	held    string
+	started      bool
+	wrapped      bool
+	valueStarted bool
+	head         string
+	held         string
 }
 
 // push takes a streamed delta and returns the text to emit for it, which
@@ -439,6 +440,12 @@ func (u *streamUnwrapper) push(delta string) string {
 
 func (u *streamUnwrapper) release(text string) string {
 	all := u.held + text
+	// Whitespace after the colon belongs to the wrapper too, however much of
+	// it arrives after the opening matched.
+	if u.wrapped && !u.valueStarted {
+		all = strings.TrimLeftFunc(all, unicode.IsSpace)
+		u.valueStarted = all != ""
+	}
 	cut := len(strings.TrimRight(all, " \t\r\n}"))
 	u.held = all[cut:]
 	return all[:cut]
