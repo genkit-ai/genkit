@@ -30,6 +30,7 @@ import {
 } from 'vitest';
 import { traceList } from '../../src/commands/trace-list.js';
 import { runWithManager } from '../../src/utils/manager-utils.js';
+import * as output from '../../src/utils/output.js';
 
 vi.mock('@genkit-ai/tools-common/utils');
 vi.mock('../../src/utils/manager-utils.js');
@@ -61,11 +62,12 @@ describe('trace:list command', () => {
 
     vi.spyOn(logger, 'info').mockImplementation((() => {}) as any);
     vi.spyOn(logger, 'error').mockImplementation((() => {}) as any);
-    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(output, 'writeStdout').mockImplementation(() => {});
   });
 
   afterEach(() => {
     process.exitCode = undefined;
+    vi.restoreAllMocks();
   });
 
   it('should list traces with default limit', async () => {
@@ -100,11 +102,15 @@ describe('trace:list command', () => {
         neq: { 'genkitx:ignore-trace': ['true'] },
       },
     });
-    expect(console.log).toHaveBeenCalledWith('Found 1 trace:\n');
-    expect(console.log).toHaveBeenCalledWith('ID:       trace-1');
-    expect(console.log).toHaveBeenCalledWith('Status:   success');
-    expect(console.log).toHaveBeenCalledWith('Input:    my input string');
-    expect(console.log).toHaveBeenCalledWith('Output:   my output string');
+    expect(output.writeStdout).toHaveBeenCalledWith('Found 1 trace:\n');
+    expect(output.writeStdout).toHaveBeenCalledWith('ID:       trace-1');
+    expect(output.writeStdout).toHaveBeenCalledWith('Status:   success');
+    expect(output.writeStdout).toHaveBeenCalledWith(
+      'Input:    my input string'
+    );
+    expect(output.writeStdout).toHaveBeenCalledWith(
+      'Output:   my output string'
+    );
   });
 
   it('should list traces with filters and custom limit', async () => {
@@ -173,7 +179,7 @@ describe('trace:list command', () => {
         neq: { 'genkitx:ignore-trace': ['true'] },
       },
     });
-    expect(console.log).toHaveBeenCalledWith(
+    expect(output.writeStdout).toHaveBeenCalledWith(
       '\nTo get the next page, use: --continuation-token next-page-token'
     );
   });

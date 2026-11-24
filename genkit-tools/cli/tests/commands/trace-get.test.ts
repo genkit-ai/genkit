@@ -35,6 +35,7 @@ import {
 } from 'vitest';
 import { traceGet } from '../../src/commands/trace-get.js';
 import { runWithManager } from '../../src/utils/manager-utils.js';
+import * as output from '../../src/utils/output.js';
 
 vi.mock('@genkit-ai/tools-common/utils');
 vi.mock('../../src/utils/manager-utils.js');
@@ -83,8 +84,8 @@ describe('trace:get', () => {
     traceGet.setOptionValue('format', undefined);
     traceGet.setOptionValue('keepBase64', undefined);
 
-    // Mock console.log to avoid spamming test output
-    vi.spyOn(console, 'log').mockImplementation(() => {});
+    // Mock writeStdout to avoid spamming test output
+    vi.spyOn(output, 'writeStdout').mockImplementation(() => {});
 
     // Provide a default implementation for runWithManager
     mockedRunWithManager.mockImplementation(async (projectRoot, fn) => {
@@ -110,7 +111,10 @@ describe('trace:get', () => {
     expect(mockedFindProjectRoot).toHaveBeenCalled();
     expect(mockedRunWithManager).toHaveBeenCalled();
 
-    expect(console.log).toHaveBeenCalledWith(
+    expect(mockedLogger.info).toHaveBeenCalledWith(
+      expect.stringContaining('Hint: pass `--format json` flag')
+    );
+    expect(output.writeStdout).toHaveBeenCalledWith(
       expect.stringContaining('Trace ID: test-id')
     );
   });
@@ -142,7 +146,7 @@ describe('trace:get', () => {
       'json',
     ]);
 
-    const loggedStr = (console.log as Mock).mock.calls[0][0] as string;
+    const loggedStr = (output.writeStdout as Mock).mock.calls[0][0] as string;
     const parsed = JSON.parse(loggedStr);
     expect(parsed.spans.s1.attributes['genkit:input']).toEqual({
       query: 'hello',
@@ -179,7 +183,7 @@ describe('trace:get', () => {
       '--keep-base64',
     ]);
 
-    const loggedStr = (console.log as Mock).mock.calls[0][0] as string;
+    const loggedStr = (output.writeStdout as Mock).mock.calls[0][0] as string;
     const parsed = JSON.parse(loggedStr);
     expect(parsed.spans.s1.attributes.img).toEqual(rawImage);
   });

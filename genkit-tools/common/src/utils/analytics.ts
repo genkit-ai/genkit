@@ -192,7 +192,7 @@ export async function notifyAnalyticsIfFirstRun(
     return;
   }
 
-  console.log(ANALYTICS_NOTIFICATION);
+  logger.info(ANALYTICS_NOTIFICATION);
 
   const readline = createInterface({
     input: process.stdin,

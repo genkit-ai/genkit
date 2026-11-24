@@ -26,6 +26,7 @@ import {
 } from 'vitest';
 import { logList } from '../../src/commands/log-list.js';
 import { runWithManager } from '../../src/utils/manager-utils.js';
+import * as output from '../../src/utils/output.js';
 
 vi.mock('@genkit-ai/tools-common/utils');
 vi.mock('../../src/utils/manager-utils.js');
@@ -51,11 +52,12 @@ describe('log:list command', () => {
 
     vi.spyOn(logger, 'info').mockImplementation((() => {}) as any);
     vi.spyOn(logger, 'error').mockImplementation((() => {}) as any);
-    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(output, 'writeStdout').mockImplementation(() => {});
   });
 
   afterEach(() => {
     process.exitCode = undefined;
+    vi.restoreAllMocks();
   });
 
   it('should list logs with default limit', async () => {
@@ -81,12 +83,14 @@ describe('log:list command', () => {
       continuationToken: undefined,
       filter: undefined,
     });
-    expect(console.log).toHaveBeenCalledWith('Found 1 log:\n');
-    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('INFO'));
-    expect(console.log).toHaveBeenCalledWith(
+    expect(output.writeStdout).toHaveBeenCalledWith('Found 1 log:\n');
+    expect(output.writeStdout).toHaveBeenCalledWith(
+      expect.stringContaining('INFO')
+    );
+    expect(output.writeStdout).toHaveBeenCalledWith(
       expect.stringContaining('Hello World')
     );
-    expect(console.log).toHaveBeenCalledWith(
+    expect(output.writeStdout).toHaveBeenCalledWith(
       expect.stringContaining('Attrs:    genkit:name=test-log')
     );
   });
@@ -122,7 +126,7 @@ describe('log:list command', () => {
       continuationToken: 'some-token',
       filter: undefined,
     });
-    expect(console.log).toHaveBeenCalledWith(
+    expect(output.writeStdout).toHaveBeenCalledWith(
       '\nTo get the next page, use: --continuation-token next-page-token'
     );
   });
@@ -194,15 +198,17 @@ describe('log:list command', () => {
       '',
     ]);
 
-    expect(console.log).toHaveBeenCalledWith('ID:       log-123');
-    expect(console.log).toHaveBeenCalledWith('Trace ID: trace-123');
-    expect(console.log).toHaveBeenCalledWith('Span ID:  span-123');
-    expect(console.log).toHaveBeenCalledWith('Severity: WARN');
-    expect(console.log).toHaveBeenCalledWith(
+    expect(output.writeStdout).toHaveBeenCalledWith('ID:       log-123');
+    expect(output.writeStdout).toHaveBeenCalledWith('Trace ID: trace-123');
+    expect(output.writeStdout).toHaveBeenCalledWith('Span ID:  span-123');
+    expect(output.writeStdout).toHaveBeenCalledWith('Severity: WARN');
+    expect(output.writeStdout).toHaveBeenCalledWith(
       `Time:     ${new Date(1718302195000).toLocaleString()}`
     );
-    expect(console.log).toHaveBeenCalledWith(`Message:  ${'A'.repeat(100)}...`);
-    expect(console.log).toHaveBeenCalledWith('Attrs:    key=value');
+    expect(output.writeStdout).toHaveBeenCalledWith(
+      `Message:  ${'A'.repeat(100)}...`
+    );
+    expect(output.writeStdout).toHaveBeenCalledWith('Attrs:    key=value');
   });
 
   it('should output logs in jsonl format', async () => {
@@ -238,7 +244,7 @@ describe('log:list command', () => {
       filter: undefined,
     });
 
-    expect(console.log).toHaveBeenCalledWith(
+    expect(output.writeStdout).toHaveBeenCalledWith(
       JSON.stringify({ timestamp: 1718302195000, body: 'JSONL log' })
     );
   });

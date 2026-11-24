@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-import * as clc from 'colorette';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as process from 'process';
 import { pathToFileURL } from 'url';
 import { z } from 'zod';
 import { TraceDataSchema } from '../types/trace.js';
+import { logger } from '../utils/logger.js';
 import { ToolPluginSchema } from './plugins.js';
 
 const CONFIG_NAME = 'genkit-tools.conf.js';
@@ -109,10 +109,7 @@ async function findToolsConfigInternal(): Promise<ToolsConfig | null> {
         return result.data;
       }
 
-      console.warn(
-        `${clc.bold(clc.yellow('Warning:'))} ` +
-          `Malformed tools schema:\n${result.error.toString()}`
-      );
+      logger.warn(`Malformed tools schema:\n${result.error.toString()}`);
       return null;
     }
     current = path.resolve(current, '..');

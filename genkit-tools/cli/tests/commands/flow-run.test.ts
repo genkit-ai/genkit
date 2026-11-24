@@ -27,6 +27,7 @@ import {
 import { flowBatchRun } from '../../src/commands/flow-batch-run.js';
 import { flowRun } from '../../src/commands/flow-run.js';
 import { runWithManager } from '../../src/utils/manager-utils.js';
+import * as output from '../../src/utils/output.js';
 
 vi.mock('@genkit-ai/tools-common/utils');
 vi.mock('../../src/utils/manager-utils.js');
@@ -41,6 +42,8 @@ describe('flow:run and flow:batchRun validation', () => {
 
   afterEach(() => {
     process.exitCode = undefined;
+    flowRun.setOptionValue('stream', false);
+    vi.restoreAllMocks();
   });
 
   it('rejects invalid --context JSON in flow:run before starting manager', async () => {
@@ -114,5 +117,27 @@ describe('flow:run and flow:batchRun validation', () => {
       /option '-c, --context <JSON>' argument '\{not-json\}' is invalid/
     );
     expect(runWithManager).not.toHaveBeenCalled();
+  });
+
+  it('writes streamed chunks via writeStdout when --stream is enabled', async () => {
+    vi.spyOn(output, 'writeStdout').mockImplementation(() => {});
+    vi.spyOn(logger, 'info').mockImplementation((() => {}) as any);
+    vi.mocked(runWithManager).mockImplementation(async (_root, action) => {
+      const mockManager = {
+        runAction: vi.fn(
+          (_req: unknown, onChunk?: (chunk: unknown) => void) => {
+            onChunk?.({ step: 1 });
+            return Promise.resolve({ result: 'done' });
+          }
+        ),
+      };
+      await action(mockManager as any);
+    });
+
+    await flowRun.parseAsync(['node', 'flow:run', 'myFlow', '--stream']);
+
+    expect(output.writeStdout).toHaveBeenCalledWith(
+      JSON.stringify({ step: 1 }, undefined, '  ')
+    );
   });
 });
