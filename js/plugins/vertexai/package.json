@@ -66,33 +66,58 @@
   "types": "./lib/index.d.ts",
   "exports": {
     ".": {
-      "types": "./lib/index.d.ts",
-      "require": "./lib/index.js",
-      "import": "./lib/index.mjs",
+      "import": {
+        "types": "./lib/index.d.mts",
+        "default": "./lib/index.mjs"
+      },
+      "require": {
+        "types": "./lib/index.d.ts",
+        "default": "./lib/index.js"
+      },
       "default": "./lib/index.js"
     },
     "./rerankers": {
-      "types": "./lib/rerankers/index.d.ts",
-      "require": "./lib/rerankers/index.js",
-      "import": "./lib/rerankers/index.mjs",
+      "import": {
+        "types": "./lib/rerankers/index.d.mts",
+        "default": "./lib/rerankers/index.mjs"
+      },
+      "require": {
+        "types": "./lib/rerankers/index.d.ts",
+        "default": "./lib/rerankers/index.js"
+      },
       "default": "./lib/rerankers/index.js"
     },
     "./evaluation": {
-      "types": "./lib/evaluation/index.d.ts",
-      "require": "./lib/evaluation/index.js",
-      "import": "./lib/evaluation/index.mjs",
+      "import": {
+        "types": "./lib/evaluation/index.d.mts",
+        "default": "./lib/evaluation/index.mjs"
+      },
+      "require": {
+        "types": "./lib/evaluation/index.d.ts",
+        "default": "./lib/evaluation/index.js"
+      },
       "default": "./lib/evaluation/index.js"
     },
     "./modelgarden": {
-      "types": "./lib/modelgarden/index.d.ts",
-      "require": "./lib/modelgarden/index.js",
-      "import": "./lib/modelgarden/index.mjs",
+      "import": {
+        "types": "./lib/modelgarden/index.d.mts",
+        "default": "./lib/modelgarden/index.mjs"
+      },
+      "require": {
+        "types": "./lib/modelgarden/index.d.ts",
+        "default": "./lib/modelgarden/index.js"
+      },
       "default": "./lib/modelgarden/index.js"
     },
     "./vectorsearch": {
-      "types": "./lib/vectorsearch/index.d.ts",
-      "require": "./lib/vectorsearch/index.js",
-      "import": "./lib/vectorsearch/index.mjs",
+      "import": {
+        "types": "./lib/vectorsearch/index.d.mts",
+        "default": "./lib/vectorsearch/index.mjs"
+      },
+      "require": {
+        "types": "./lib/vectorsearch/index.d.ts",
+        "default": "./lib/vectorsearch/index.js"
+      },
       "default": "./lib/vectorsearch/index.js"
     }
   },

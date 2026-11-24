@@ -54,15 +54,25 @@
   "types": "./lib/index.d.ts",
   "exports": {
     ".": {
-      "types": "./lib/index.d.ts",
-      "require": "./lib/index.js",
-      "import": "./lib/index.mjs",
+      "import": {
+        "types": "./lib/index.d.mts",
+        "default": "./lib/index.mjs"
+      },
+      "require": {
+        "types": "./lib/index.d.ts",
+        "default": "./lib/index.js"
+      },
       "default": "./lib/index.js"
     },
     "./client": {
-      "types": "./lib/client.d.ts",
-      "require": "./lib/client.js",
-      "import": "./lib/client.mjs",
+      "import": {
+        "types": "./lib/client.d.mts",
+        "default": "./lib/client.mjs"
+      },
+      "require": {
+        "types": "./lib/client.d.ts",
+        "default": "./lib/client.js"
+      },
       "default": "./lib/client.js"
     }
   },

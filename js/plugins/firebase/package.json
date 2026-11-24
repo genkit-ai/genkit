@@ -61,39 +61,69 @@
   "types": "./lib/index.d.ts",
   "exports": {
     ".": {
-      "types": "./lib/index.d.ts",
-      "require": "./lib/index.js",
-      "import": "./lib/index.mjs",
+      "import": {
+        "types": "./lib/index.d.mts",
+        "default": "./lib/index.mjs"
+      },
+      "require": {
+        "types": "./lib/index.d.ts",
+        "default": "./lib/index.js"
+      },
       "default": "./lib/index.js"
     },
     "./user_engagement": {
-      "types": "./lib/user-engagement.d.ts",
-      "require": "./lib/user-engagement.js",
-      "import": "./lib/user-engagement.mjs",
+      "import": {
+        "types": "./lib/user-engagement.d.mts",
+        "default": "./lib/user-engagement.mjs"
+      },
+      "require": {
+        "types": "./lib/user-engagement.d.ts",
+        "default": "./lib/user-engagement.js"
+      },
       "default": "./lib/user-engagement.js"
     },
     "./user-engagement": {
-      "types": "./lib/user-engagement.d.ts",
-      "require": "./lib/user-engagement.js",
-      "import": "./lib/user-engagement.mjs",
+      "import": {
+        "types": "./lib/user-engagement.d.mts",
+        "default": "./lib/user-engagement.mjs"
+      },
+      "require": {
+        "types": "./lib/user-engagement.d.ts",
+        "default": "./lib/user-engagement.js"
+      },
       "default": "./lib/user-engagement.js"
     },
     "./beta/data-connect": {
-      "types": "./lib/beta/data-connect.d.ts",
-      "require": "./lib/beta/data-connect.js",
-      "import": "./lib/beta/data-connect.mjs",
+      "import": {
+        "types": "./lib/beta/data-connect.d.mts",
+        "default": "./lib/beta/data-connect.mjs"
+      },
+      "require": {
+        "types": "./lib/beta/data-connect.d.ts",
+        "default": "./lib/beta/data-connect.js"
+      },
       "default": "./lib/beta/data-connect.js"
     },
     "./beta": {
-      "types": "./lib/beta.d.ts",
-      "require": "./lib/beta.js",
-      "import": "./lib/beta.mjs",
+      "import": {
+        "types": "./lib/beta.d.mts",
+        "default": "./lib/beta.mjs"
+      },
+      "require": {
+        "types": "./lib/beta.d.ts",
+        "default": "./lib/beta.js"
+      },
       "default": "./lib/beta.js"
     },
     "./context": {
-      "types": "./lib/context.d.ts",
-      "require": "./lib/context.js",
-      "import": "./lib/context.mjs",
+      "import": {
+        "types": "./lib/context.d.mts",
+        "default": "./lib/context.mjs"
+      },
+      "require": {
+        "types": "./lib/context.d.ts",
+        "default": "./lib/context.js"
+      },
       "default": "./lib/context.js"
     }
   },
