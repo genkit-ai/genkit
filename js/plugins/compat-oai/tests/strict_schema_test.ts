@@ -127,4 +127,28 @@ describe('toOpenAIRequestBody strict schemas', () => {
       expect(body.response_format.json_schema.schema).toStrictEqual(person);
     }
   });
+
+  it('closes objects inside a wrapped non-object root', () => {
+    const body = toOpenAIRequestBody(
+      'gpt-4o',
+      {
+        messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+        config: { strict: true },
+        output: { format: 'json', schema: { type: 'array', items: person } },
+      } as unknown as GenerateRequest,
+      undefined,
+      { objectSchemaRoot: true }
+    ) as any;
+    expect(body.response_format.json_schema.schema).toStrictEqual({
+      type: 'object',
+      properties: {
+        value: {
+          type: 'array',
+          items: { ...person, additionalProperties: false },
+        },
+      },
+      required: ['value'],
+      additionalProperties: false,
+    });
+  });
 });
