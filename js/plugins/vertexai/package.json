@@ -136,5 +136,8 @@
         "./lib/vectorsearch/index"
       ]
     }
-  }
+  },
+  "files": [
+    "lib"
+  ]
 }

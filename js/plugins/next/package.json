@@ -16,7 +16,7 @@
   ],
   "version": "1.44.0",
   "type": "commonjs",
-  "main": "lib/index.js",
+  "main": "./lib/index.js",
   "scripts": {
     "check": "tsc",
     "compile": "tsup-node",
@@ -82,5 +82,8 @@
         "lib/client"
       ]
     }
-  }
+  },
+  "files": [
+    "lib"
+  ]
 }

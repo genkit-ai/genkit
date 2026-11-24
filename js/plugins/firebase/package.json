@@ -136,7 +136,7 @@
         "lib/user-engagement"
       ],
       "beta/data-connect": [
-        "lib/data-connect"
+        "lib/beta/data-connect"
       ],
       "beta": [
         "lib/beta"
@@ -145,5 +145,8 @@
         "lib/context"
       ]
     }
-  }
+  },
+  "files": [
+    "lib"
+  ]
 }

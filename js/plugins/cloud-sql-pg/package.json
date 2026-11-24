@@ -66,5 +66,8 @@
       },
       "default": "./lib/index.js"
     }
-  }
+  },
+  "files": [
+    "lib"
+  ]
 }

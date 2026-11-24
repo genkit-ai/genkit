@@ -60,9 +60,7 @@
     }
   },
   "files": [
-    "lib",
-    "README.md",
-    "LICENSE"
+    "lib"
   ],
   "scripts": {
     "check": "tsc",
