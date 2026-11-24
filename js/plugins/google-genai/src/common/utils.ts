@@ -985,10 +985,9 @@ export function parseStreamErrorText(text: string): Error {
     ) {
       // Coerce `code` to a number so a stringified code (e.g. "503") still maps.
       const rawCode = Number(apiError.code);
-      const status: StatusName = StatusNameSchema.safeParse(apiError.status)
-        .success
-        ? (apiError.status as StatusName)
-        : httpStatusToGenkitStatus(isNaN(rawCode) ? undefined : rawCode);
+      const status: StatusName =
+        StatusNameSchema.safeParse(apiError.status).data ??
+        httpStatusToGenkitStatus(isNaN(rawCode) ? undefined : rawCode);
       const message =
         typeof apiError.message === 'string'
           ? apiError.message
@@ -1263,7 +1262,7 @@ function aggregateResponses(
         }
 
         for (const part of candidate.content.parts) {
-          const newPart: Partial<Part> = {};
+          const newPart: Part = {};
 
           // Instead of iterating over the keys in the Object, which might
           // Contain new, unsupported things, we iterate over the PART_KEYS
@@ -1299,7 +1298,7 @@ function aggregateResponses(
           if (Object.keys(newPart).length === 0) {
             newPart.text = '';
           }
-          aggregatedCandidate.content.parts.push(newPart as Part);
+          aggregatedCandidate.content.parts.push(newPart);
         }
       }
     }

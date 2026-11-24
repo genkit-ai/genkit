@@ -1580,9 +1580,6 @@ export function defineModel(
       }
 
       const candidates = response.candidates || [];
-      if ((response.candidates as any)?.['undefined']) {
-        candidates.push((response.candidates as any)['undefined']);
-      }
       if (!candidates.length) {
         throw new GenkitError({
           status: 'FAILED_PRECONDITION',

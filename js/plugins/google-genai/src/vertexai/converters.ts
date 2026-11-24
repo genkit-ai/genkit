@@ -387,10 +387,15 @@ function toVeoInstances(
     metadataType: 'referenceImages',
   });
   if (referenceImages) {
-    instance.referenceImages = referenceImages.map((refImage) => ({
-      image: toVeoMedia(refImage.media),
-      referenceType: refImage.metadata?.referenceType as string,
-    }));
+    instance.referenceImages = referenceImages.map((refImage) => {
+      const referenceType = refImage.metadata?.referenceType;
+      return {
+        image: toVeoMedia(refImage.media),
+        // extractMediaArray already defaults a missing type to 'asset'.
+        referenceType:
+          typeof referenceType === 'string' ? referenceType : 'asset',
+      };
+    });
   }
 
   return [instance];

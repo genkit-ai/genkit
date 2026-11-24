@@ -282,11 +282,12 @@ export function isMultimodalEmbeddingPrediction(
   if (value.imageEmbedding && !Array.isArray(value.imageEmbedding)) {
     return false;
   }
-  if (value.videoEmbeddings && !Array.isArray(value.videoEmbeddings)) {
+  const videoEmbeddings = value.videoEmbeddings;
+  if (videoEmbeddings && !Array.isArray(videoEmbeddings)) {
     return false;
   }
-  if (value.videoEmbeddings) {
-    for (const emb of value.videoEmbeddings as Array<unknown>) {
+  if (Array.isArray(videoEmbeddings)) {
+    for (const emb of videoEmbeddings) {
       if (!isObject(emb)) {
         return false;
       }
