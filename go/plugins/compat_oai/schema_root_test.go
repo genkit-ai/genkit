@@ -55,6 +55,19 @@ func TestHasObjectRoot(t *testing.T) {
 		{map[string]any{"type": "string", "enum": []any{"a", "b"}}, false},
 		{map[string]any{"type": "integer"}, false},
 		{map[string]any{"anyOf": []any{map[string]any{"type": "object"}, map[string]any{"type": "string"}}}, false},
+		{map[string]any{"type": []any{"object", "null"}}, false},
+		{map[string]any{"$ref": "#/definitions/Foo", "definitions": map[string]any{"Foo": map[string]any{"type": "object"}}}, true},
+		{map[string]any{"$ref": "#/$defs/Foo", "$defs": map[string]any{"Foo": map[string]any{"type": "object"}}}, true},
+		{map[string]any{"$schema": "http://json-schema.org/draft-07/schema#", "$ref": "#/$defs/Foo", "$defs": map[string]any{"Foo": map[string]any{"type": "object"}}}, true},
+		// OpenAI does not resolve escaped names or allow keywords beside $ref.
+		{map[string]any{"$ref": "#/$defs/a~1b", "$defs": map[string]any{"a/b": map[string]any{"type": "object"}}}, false},
+		{map[string]any{"$ref": "#/$defs/Foo", "description": "d", "$defs": map[string]any{"Foo": map[string]any{"type": "object"}}}, false},
+		{map[string]any{"$ref": "#/$defs/A", "$defs": map[string]any{"A": map[string]any{"$ref": "#/$defs/B", "title": "A"}, "B": map[string]any{"type": "object"}}}, false},
+		{map[string]any{"$ref": "#/$defs/A", "$defs": map[string]any{"A": map[string]any{"$ref": "#/$defs/B"}, "B": map[string]any{"type": "object"}}}, true},
+		{map[string]any{"$ref": "#/$defs/Foo", "$defs": map[string]any{"Foo": personArray}}, false},
+		{map[string]any{"$ref": "#/$defs/Missing", "$defs": map[string]any{}}, false},
+		{map[string]any{"$ref": "#/$defs/A", "$defs": map[string]any{"A": map[string]any{"$ref": "#/$defs/A"}}}, false},
+		{map[string]any{"$ref": "#/$defs/Foo/properties/a", "$defs": map[string]any{"Foo": map[string]any{"type": "object"}}}, false},
 	} {
 		if got := hasObjectRoot(tc.schema); got != tc.want {
 			t.Errorf("hasObjectRoot(%v) = %v, want %v", tc.schema, got, tc.want)

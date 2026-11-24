@@ -43,11 +43,53 @@ func init() {
 // wrapper object.
 const wrapperKey = "value"
 
-// hasObjectRoot reports whether the schema's root is explicitly an object.
-// Anything else, including properties without a type (which also allows
-// non-object values), is wrapped.
+// hasObjectRoot reports whether the schema's root is explicitly an object,
+// either directly or through a bare root $ref to a top-level definition,
+// which OpenAI accepts unwrapped. Anything else, including properties without
+// a type (which also allows non-object values), is wrapped.
+//
+// OpenAI rejects a $ref with sibling keywords (description, title, ...) and
+// does not resolve escaped names (~0, ~1) at the root, while non-strict
+// requests accept both once wrapped, so those roots are wrapped.
 func hasObjectRoot(schema map[string]any) bool {
-	return schema["type"] == "object"
+	seen := map[string]bool{}
+	node := schema
+	allowed := []string{"$ref", "$schema", "$defs", "definitions"}
+	for node != nil {
+		if t, ok := node["type"]; ok {
+			return t == "object"
+		}
+		ref, ok := node["$ref"].(string)
+		if !ok || seen[ref] {
+			return false
+		}
+		for k := range node {
+			if !slices.Contains(allowed, k) {
+				return false
+			}
+		}
+		allowed = []string{"$ref"}
+		seen[ref] = true
+		keyword, name, ok := topLevelDef(ref)
+		if !ok {
+			return false
+		}
+		defs, _ := schema[keyword].(map[string]any)
+		node, _ = defs[name].(map[string]any)
+	}
+	return false
+}
+
+// topLevelDef splits a reference to a whole top-level definition
+// ("#/$defs/Name" or "#/definitions/Name") into its keyword and name. Names
+// with escapes are not matched.
+func topLevelDef(ref string) (keyword, name string, ok bool) {
+	for _, kw := range []string{"$defs", "definitions"} {
+		if rest, found := strings.CutPrefix(ref, "#/"+kw+"/"); found && rest != "" && !strings.ContainsAny(rest, "/~") {
+			return kw, rest, true
+		}
+	}
+	return "", "", false
 }
 
 // wrapSchemaRoot wraps schema as the single required property of an object
