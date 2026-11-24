@@ -48,7 +48,7 @@ import { traceList } from './commands/trace-list.js';
 import { uiStart } from './commands/ui-start.js';
 import { uiStop } from './commands/ui-stop.js';
 import { warnIfLegacyGenkitContext } from './utils/legacy-context-warning.js';
-import { isInteractive, isStderrTTY, writeStdout } from './utils/output.js';
+import { isInteractive, isStderrTTY, writeStderr } from './utils/output.js';
 import { detectCLIRuntime } from './utils/runtime-detector.js';
 import { showUpdateNotification } from './utils/updates.js';
 import { version } from './utils/version.js';
@@ -192,7 +192,7 @@ export async function startCLI(): Promise<void> {
   program.on('command:*', (operands) => {
     logger.error(`unknown command '${operands[0]}'`);
     // helpInformation() returns the help text. help() would exit with code 0.
-    writeStdout(program.helpInformation());
+    writeStderr(program.helpInformation());
     process.exit(1);
   });
 

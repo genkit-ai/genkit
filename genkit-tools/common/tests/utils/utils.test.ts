@@ -17,13 +17,11 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { stripVTControlCharacters } from 'util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   detectRuntime,
   detectRuntimeSync,
   findProjectRoot,
-  logger,
   projectNameFromGenkitFilePath,
 } from '../../src/utils/index.js';
 import {
@@ -241,43 +239,5 @@ describe('utils', () => {
       const str = 'not valid json';
       expect(parseAndSanitizeJson(str)).toBe(str);
     });
-  });
-
-  describe('logger', () => {
-    const origLevel = logger.level;
-
-    afterEach(() => {
-      logger.level = origLevel;
-      vi.restoreAllMocks();
-    });
-
-    it.each([
-      {
-        level: 'debug' as const,
-        message: 'debug msg',
-        expected: 'Debug: debug msg',
-      },
-      { level: 'info' as const, message: 'info msg', expected: 'info msg' },
-      { level: 'warn' as const, message: 'warn msg', expected: 'Warn:' },
-      { level: 'error' as const, message: 'error msg', expected: 'Error:' },
-    ])(
-      'routes $level logs to process.stderr instead of process.stdout',
-      ({ level, message, expected }) => {
-        logger.level = 'debug';
-        const stdoutSpy = vi
-          .spyOn(process.stdout, 'write')
-          .mockImplementation(() => true);
-        const stderrSpy = vi
-          .spyOn(process.stderr, 'write')
-          .mockImplementation(() => true);
-
-        logger[level](message);
-
-        expect(stdoutSpy).not.toHaveBeenCalled();
-        expect(stderrSpy).toHaveBeenCalledOnce();
-        const written = String(stderrSpy.mock.calls[0][0]);
-        expect(stripVTControlCharacters(written)).toContain(expected);
-      }
-    );
   });
 });

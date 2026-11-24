@@ -116,9 +116,9 @@ export const docsRead = new Command('docs:read')
         return;
       }
 
-      writeStderr(clc.bold(doc.title));
-      writeStderr('='.repeat(doc.title.length));
-      writeStderr('');
+      writeStdout(clc.bold(doc.title));
+      writeStdout('='.repeat(doc.title.length));
+      writeStdout('');
       writeStdout(doc.text);
     } catch (e: unknown) {
       logger.error(
