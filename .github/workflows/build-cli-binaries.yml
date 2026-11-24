@@ -176,8 +176,8 @@ jobs:
         run: |
           echo "Testing genkit ui:start"
           
-          # Start UI in background, piping any prompts to accept them
-          (echo "" | ./genkit-${{ matrix.target }} ui:start 2>&1 | tee ui_output.log) &
+          # Start UI in background in non-interactive mode so CI doesn't opt into analytics
+          ./genkit-${{ matrix.target }} --non-interactive ui:start > ui_output.log 2>&1 &
           UI_PID=$!
           
           # Give it time to start
@@ -190,7 +190,7 @@ jobs:
             
             # Try to stop it gracefully
             echo "Testing genkit ui:stop"
-            ./genkit-${{ matrix.target }} ui:stop || true
+            ./genkit-${{ matrix.target }} --non-interactive ui:stop || true
             
             # Give it time to stop
             sleep 2
@@ -216,13 +216,9 @@ jobs:
         run: |
           Write-Host "Testing genkit ui:start"
           
-          # Create empty input file first for redirecting stdin
-          "" | Out-File -FilePath ".\empty.txt"
-          
-          # Start UI in background, redirecting input to handle prompts
+          # Start UI in background in non-interactive mode so CI doesn't opt into analytics
           $process = Start-Process -FilePath ".\genkit-${{ matrix.target }}.exe" `
-            -ArgumentList "ui:start" `
-            -RedirectStandardInput ".\empty.txt" `
+            -ArgumentList "--non-interactive", "ui:start" `
             -RedirectStandardOutput ".\ui_output.log" `
             -RedirectStandardError ".\ui_error.log" `
             -PassThru `
@@ -242,7 +238,7 @@ jobs:
             
             # Try to stop it gracefully
             Write-Host "Testing genkit ui:stop"
-            & ".\genkit-${{ matrix.target }}.exe" ui:stop
+            & ".\genkit-${{ matrix.target }}.exe" --non-interactive ui:stop
             
             Start-Sleep -Seconds 2
           } else {

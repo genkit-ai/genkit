@@ -14,20 +14,27 @@
  * limitations under the License.
  */
 
+import * as readlinePromises from 'readline/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('readline/promises', () => ({
+  createInterface: vi.fn(),
+}));
 
 const UUID_V4_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 describe('analytics', () => {
-  const store = new Map<string, any>();
+  const store = new Map<string, unknown>();
+  let analyticsModule: typeof import('../../src/utils/analytics.js');
   let getAnalyticsSettings: typeof import('../../src/utils/analytics.js').getAnalyticsSettings;
   let configstoreModule: typeof import('../../src/utils/configstore.js');
 
   beforeEach(async () => {
     vi.resetModules();
     configstoreModule = await import('../../src/utils/configstore.js');
-    ({ getAnalyticsSettings } = await import('../../src/utils/analytics.js'));
+    analyticsModule = await import('../../src/utils/analytics.js');
+    ({ getAnalyticsSettings } = analyticsModule);
 
     store.clear();
     vi.spyOn(configstoreModule.configstore, 'get').mockImplementation(
@@ -35,10 +42,10 @@ describe('analytics', () => {
     );
     vi.spyOn(configstoreModule.configstore, 'set').mockImplementation(((
       key: string,
-      value?: any
+      value?: unknown
     ) => {
       store.set(key, value);
-    }) as any);
+    }) as typeof configstoreModule.configstore.set);
     vi.spyOn(configstoreModule, 'getUserSettings').mockReturnValue({});
   });
 
@@ -56,16 +63,11 @@ describe('analytics', () => {
 
       const settings = getAnalyticsSettings();
 
-      expect(settings.enabled).toBe(true);
-      if (!settings.enabled) {
-        throw new Error('Expected analytics settings to be enabled');
-      }
-      expect(settings.clientId).toMatch(UUID_V4_REGEX);
-      expect(configstoreModule.configstore.set).toHaveBeenCalledWith(
-        'genkit-tools-ga-id',
-        settings.clientId
-      );
-      expect(store.get('genkit-tools-ga-id')).toBe(settings.clientId);
+      expect(settings).toMatchObject({
+        enabled: true,
+        clientId: expect.stringMatching(UUID_V4_REGEX),
+      });
+      expect(store.get('genkit-tools-ga-id')).toMatch(UUID_V4_REGEX);
     });
 
     it('reuses existing clientId from configstore when present', () => {
@@ -74,12 +76,80 @@ describe('analytics', () => {
 
       const settings = getAnalyticsSettings();
 
-      expect(settings.enabled).toBe(true);
-      if (!settings.enabled) {
-        throw new Error('Expected analytics settings to be enabled');
-      }
-      expect(settings.clientId).toBe('existing-client-id');
+      expect(settings).toMatchObject({
+        enabled: true,
+        clientId: 'existing-client-id',
+      });
       expect(configstoreModule.configstore.set).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('FirstUsageEvent', () => {
+    it('sets project_runtime when provided', () => {
+      const event = new analyticsModule.FirstUsageEvent('go');
+
+      expect(event.parameters).toEqual({ project_runtime: 'go' });
+    });
+
+    it('falls back to unknown when project_runtime is omitted', () => {
+      const event = new analyticsModule.FirstUsageEvent();
+
+      expect(event.parameters).toEqual({ project_runtime: 'unknown' });
+    });
+  });
+
+  describe('notifyAnalyticsIfFirstRun', () => {
+    it.each([
+      ['go', 'go'],
+      [undefined, 'unknown'],
+    ])(
+      'acknowledges notification and sends first_visit with project_runtime=%s as %s',
+      async (runtime, expected) => {
+        vi.mocked(readlinePromises.createInterface).mockReturnValue({
+          question: vi.fn().mockResolvedValue(''),
+          close: vi.fn(),
+        } as unknown as readlinePromises.Interface);
+        const fetchSpy = vi
+          .spyOn(globalThis, 'fetch')
+          .mockResolvedValue(new Response(null, { status: 204 }));
+        vi.spyOn(console, 'log').mockImplementation(() => {});
+
+        await analyticsModule.notifyAnalyticsIfFirstRun(runtime);
+
+        expect(store.get('analytics_notification')).toBe(true);
+        expect(fetchSpy).toHaveBeenCalledOnce();
+        const [, init] = fetchSpy.mock.calls[0];
+        expect(JSON.parse(String(init?.body))).toMatchObject({
+          events: [
+            {
+              name: 'first_visit',
+              params: { project_runtime: expected },
+            },
+          ],
+        });
+      }
+    );
+
+    it('skips prompt and event when notification is already acknowledged', async () => {
+      store.set('analytics_notification', true);
+      const fetchSpy = vi.spyOn(globalThis, 'fetch');
+
+      await analyticsModule.notifyAnalyticsIfFirstRun('go');
+
+      expect(readlinePromises.createInterface).not.toHaveBeenCalled();
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('skips prompt and event when analyticsOptOut is enabled', async () => {
+      vi.spyOn(configstoreModule, 'getUserSettings').mockReturnValue({
+        analyticsOptOut: true,
+      });
+      const fetchSpy = vi.spyOn(globalThis, 'fetch');
+
+      await analyticsModule.notifyAnalyticsIfFirstRun('go');
+
+      expect(readlinePromises.createInterface).not.toHaveBeenCalled();
+      expect(fetchSpy).not.toHaveBeenCalled();
     });
   });
 });
