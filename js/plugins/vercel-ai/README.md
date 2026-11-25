@@ -418,7 +418,7 @@ The `UIMessage` type is also re-exported from the `ai` package for convenience.
   transport is exposed via the `genkit/beta` subpath of the main `1.x` package.
 - Vercel AI SDK `>=6.0.0` (for `useChat` with `ChatTransport`)
 - `@ai-sdk/react` `>=3.0.0` (client-side, for the `useChat` hook)
-- Node.js `>=20` (server-side)
+- Node.js `>=22.12` (server-side)
 
 ## License
 

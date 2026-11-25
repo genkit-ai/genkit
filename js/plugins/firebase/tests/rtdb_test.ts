@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-import { afterEach, beforeEach, describe, it } from '@jest/globals';
 import * as assert from 'assert';
 import { deleteApp, initializeApp, type App } from 'firebase-admin/app';
 import { getDatabase } from 'firebase-admin/database';
-import { RtdbStreamManager } from '../src/stream-manager/rtdb';
+import { afterEach, beforeEach, describe, it } from 'vitest';
+import { RtdbStreamManager } from '../src/stream-manager/rtdb.js';
 
 describe('RtdbStreamManager', () => {
   let app: App;

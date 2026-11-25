@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { BetaMessageStream } from '@anthropic-ai/sdk/lib/BetaMessageStream.js';
+import { BetaMessageStream } from '@anthropic-ai/sdk/lib/BetaMessageStream';
 import type {
   BetaContentBlock,
   BetaImageBlockParam,

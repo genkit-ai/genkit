@@ -42,7 +42,7 @@ Gemini  (@genkit-ai/google-genai)
 
 ## Prerequisites
 
-- Node.js `>=20`
+- Node.js `>=22.12`
 - A Gemini API key — get one from
   [Google AI Studio](https://aistudio.google.com/apikey).
 

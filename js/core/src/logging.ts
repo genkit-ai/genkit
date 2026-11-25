@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { format } from 'node:util';
 import type { GenkitLogRecord } from './tracing/instrumentation-api.js';
 import { hasRecordLog } from './tracing/instrumentation-api.js';
 import { activeInstrumentations } from './tracing/instrumentation.js';
@@ -72,8 +73,7 @@ class Logger {
       } else if (args.length === 1 && typeof args[0] === 'string') {
         body = args[0];
       } else {
-        const util = require('util');
-        body = util.format(...args);
+        body = format(...args);
       }
 
       const record: GenkitLogRecord = {

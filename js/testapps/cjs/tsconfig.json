@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    // Deliberately the legacy CommonJS setup: TypeScript 5.x with
+    // "module": "commonjs" resolves with node10, which ignores package.json
+    // "exports". Subpath types (e.g. "genkit/beta") resolve via typesVersions.
+    "module": "commonjs",
+    "types": ["node"],
+    "rootDir": "src",
+    "noImplicitReturns": true,
+    "noUnusedLocals": false,
+    "outDir": "lib",
+    "sourceMap": true,
+    "strict": true,
+    "skipLibCheck": true
+  },
+  "compileOnSave": true,
+  "include": ["src"]
+}

@@ -2,8 +2,6 @@
 src/
 tests/
 tsconfig.json
-tsup.common.ts
-tsup.config.ts
 
 # GitHub files
 .github/

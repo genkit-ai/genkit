@@ -21,9 +21,10 @@ import {
   beforeEach,
   describe,
   expect,
-  jest,
   test,
-} from '@jest/globals';
+  vi,
+  type Mock,
+} from 'vitest';
 
 // Mocks for Genkit-specific components
 import type { Genkit } from 'genkit';
@@ -33,12 +34,12 @@ import { Document } from 'genkit/retriever';
 
 // Import your actual source code
 import { v4 as uuidv4 } from 'uuid';
-import { Column, PostgresEngine } from '../src/engine';
+import { Column, PostgresEngine } from '../src/engine.js';
 import {
   configurePostgresIndexer,
   configurePostgresRetriever,
-} from '../src/index';
-import { DistanceStrategy } from '../src/indexes';
+} from '../src/index.js';
+import { DistanceStrategy } from '../src/indexes.js';
 
 // Load environment variables
 import * as dotenv from 'dotenv';
@@ -59,7 +60,7 @@ const METADATA_COLUMNS = [
 // --- Mocks for Genkit Interactions ---
 // Mock Genkit instance for `ai` parameter
 const mockGenkit: Genkit = {
-  embed: jest.fn(async ({ content }) => {
+  embed: vi.fn(async ({ content }) => {
     let embeddingArray = new Array(1536).fill(0.05);
     if (content === 'first document content') {
       embeddingArray = new Array(1536).fill(0.1);
@@ -69,19 +70,19 @@ const mockGenkit: Genkit = {
     return [{ embedding: embeddingArray, text: content }];
   }),
 
-  embedMany: jest.fn(async ({ content }) => {
+  embedMany: vi.fn(async ({ content }) => {
     return content.map((text: string | string[]) => ({
       embedding: new Array(1536).fill(0.1),
       text: Array.isArray(text) ? text.join(' ') : text,
     }));
   }),
 
-  defineRetriever: jest.fn((config, handler) => ({
+  defineRetriever: vi.fn((config, handler) => ({
     config,
     retrieve: handler,
   })),
 
-  defineIndexer: jest.fn(
+  defineIndexer: vi.fn(
     (
       config,
       handler: (
@@ -103,7 +104,7 @@ const mockEmbedder: EmbedderArgument<z.ZodType<any, any>> = {
 } as any;
 
 // Spy on console.log to capture output
-const consoleSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
 const REQUIRED_ENV_VARS = [
   'PROJECT_ID',
@@ -208,7 +209,7 @@ describe('configurePostgresRetriever Integration Tests', () => {
 
       // Get the configured retriever instance that Genkit would use
       // This requires accessing the mock's internal state
-      const defineRetrieverMock = mockGenkit.defineRetriever as jest.Mock;
+      const defineRetrieverMock = mockGenkit.defineRetriever as Mock;
       expect(defineRetrieverMock).toHaveBeenCalledWith(
         expect.objectContaining({
           name: `postgres/${TEST_TABLE}`,
@@ -233,7 +234,7 @@ describe('configurePostgresRetriever Integration Tests', () => {
   }, 60000); // Increased timeout for database operations
 
   afterEach(() => {
-    jest.clearAllMocks(); // Clear mock call history after each test
+    vi.clearAllMocks(); // Clear mock call history after each test
   });
 
   afterAll(async () => {
@@ -300,7 +301,7 @@ describe('configurePostgresRetriever Integration Tests', () => {
     );
 
     // Verify the SQL query contains the filter (implementation detail, but useful for integration)
-    // const rawCalls = (engine.pool.raw as jest.Mock).mock.calls;
+    // const rawCalls = (engine.pool.raw as Mock).mock.calls;
     // const selectQueryCall = rawCalls.find(call => typeof call[0] === 'string' && call[0].includes('SELECT') && call[0].includes('WHERE page = \'page2\''));
     // expect(selectQueryCall).toBeDefined();
   });
@@ -378,7 +379,7 @@ describe('configurePostgresIndexer Integration Tests', () => {
         embedder: mockEmbedder,
       });
 
-      const defineIndexerMock = mockGenkit.defineIndexer as jest.Mock;
+      const defineIndexerMock = mockGenkit.defineIndexer as Mock;
       indexerInstance = defineIndexerMock.mock.results[0].value;
     } catch (error) {
       console.error('Error during beforeAll setup:', error);
@@ -392,7 +393,7 @@ describe('configurePostgresIndexer Integration Tests', () => {
       // Add a check here for engine and pool
       await engine.pool.raw(`TRUNCATE TABLE ${SCHEMA_NAME}.${TEST_TABLE}`);
     }
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   afterAll(async () => {
@@ -528,7 +529,7 @@ describe('configurePostgresIndexer Integration Tests', () => {
   test('should handle embedding generation errors', async () => {
     const errorMockGenkit = {
       ...mockGenkit,
-      embedMany: jest.fn(() => {
+      embedMany: vi.fn(() => {
         throw new Error('Embedding failed');
       }),
     } as unknown as Genkit;
@@ -543,7 +544,7 @@ describe('configurePostgresIndexer Integration Tests', () => {
       embedder: mockEmbedder,
     });
 
-    const defineIndexerMock = errorMockGenkit.defineIndexer as jest.Mock;
+    const defineIndexerMock = errorMockGenkit.defineIndexer as Mock;
     const errorIndexerInstance = defineIndexerMock.mock.results[0].value as {
       index: (args: { documents: Document[]; options: {} }) => Promise<void>;
     };

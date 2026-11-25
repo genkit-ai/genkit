@@ -38,7 +38,7 @@ import {
   fetchDynamicTools,
   getExecutablePrompt,
   transportFrom,
-} from '../util';
+} from '../util/index.js';
 import { fetchDynamicResources } from '../util/resource.js';
 
 interface McpServerRef {

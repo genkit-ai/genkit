@@ -27,19 +27,15 @@
   },
   "license": "Apache-2.0",
   "author": "genkit",
-  "type": "commonjs",
+  "type": "module",
   "main": "./lib/index.js",
   "types": "./lib/index.d.ts",
   "exports": {
     ".": {
-      "require": "./lib/index.js",
-      "import": "./lib/index.mjs",
       "types": "./lib/index.d.ts",
       "default": "./lib/index.js"
     },
     "./client": {
-      "require": "./lib/client.js",
-      "import": "./lib/client.mjs",
       "types": "./lib/client.d.ts",
       "default": "./lib/client.js"
     }
@@ -47,7 +43,7 @@
   "typesVersions": {
     "*": {
       "client": [
-        "lib/client"
+        "lib/client.d.ts"
       ]
     }
   },
@@ -57,11 +53,11 @@
     "LICENSE"
   ],
   "scripts": {
-    "check": "tsc",
-    "compile": "tsup-node",
+    "check": "tsc --noEmit",
+    "compile": "tsc",
     "build:clean": "rimraf ./lib",
-    "build": "pnpm build:clean && pnpm check && pnpm compile",
-    "build:watch": "tsup-node --watch",
+    "build": "rimraf ./lib && tsc",
+    "build:watch": "tsc --watch",
     "test": "tsx --test ./tests/*_test.ts"
   },
   "peerDependencies": {
@@ -79,15 +75,14 @@
     "@genkit-ai/express": "workspace:*",
     "ai": "^6.0.192",
     "@types/express": "^4.17.21",
-    "@types/node": "^20.11.16",
+    "@types/node": "^22.15.3",
     "express": "^4.21.1",
     "get-port": "^5.1.0",
     "rimraf": "^6.0.1",
-    "tsup": "^8.3.5",
     "tsx": "^4.19.2",
-    "typescript": "^5.9.3"
+    "typescript": "^7.0.2"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.12"
   }
 }

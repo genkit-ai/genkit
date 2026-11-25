@@ -16,8 +16,8 @@
 
 import * as assert from 'assert';
 import { describe, it } from 'node:test';
-import { AsyncTaskQueue, Channel, LazyPromise } from '../src/async';
-import { sleep } from './utils';
+import { AsyncTaskQueue, Channel, LazyPromise } from '../src/async.js';
+import { sleep } from './utils.js';
 
 describe('AsyncTaskQueue', () => {
   it('should execute tasks in order', async () => {

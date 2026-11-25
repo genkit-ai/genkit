@@ -1,5 +1,6 @@
 {
   "compilerOptions": {
+    "types": ["node"],
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "rootDir": "src",

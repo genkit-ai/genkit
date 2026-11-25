@@ -22,7 +22,7 @@ import {
   createAgentAPI,
   remoteAgent,
   type AgentTransport,
-} from '../../src/client/index';
+} from '../../src/client/index.js';
 
 declare const signal: AbortSignal;
 

@@ -15,19 +15,19 @@
  * limitations under the License.
  */
 
-import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { modelRef } from 'genkit/model';
 import type OpenAI from 'openai';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   SpeechConfigSchema,
   TranscriptionConfigSchema,
   defineCompatOpenAISpeechModel,
   defineCompatOpenAITranscriptionModel,
-} from '../src/audio';
+} from '../src/audio.js';
 
 describe('audioModel', () => {
   afterEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   it('should correctly define supported audio tts models', () => {

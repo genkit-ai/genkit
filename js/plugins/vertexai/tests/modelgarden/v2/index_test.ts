@@ -17,20 +17,20 @@
 import * as assert from 'assert';
 import { GenkitError } from 'genkit';
 import { describe, it } from 'node:test';
-import { vertexModelGarden } from '../../../src/modelgarden/v2';
 import {
   AnthropicConfigSchema,
   isAnthropicModelName,
-} from '../../../src/modelgarden/v2/anthropic';
+} from '../../../src/modelgarden/v2/anthropic.js';
+import { vertexModelGarden } from '../../../src/modelgarden/v2/index.js';
 import {
   LlamaConfigSchema,
   isLlamaModelName,
-} from '../../../src/modelgarden/v2/llama';
+} from '../../../src/modelgarden/v2/llama.js';
 import {
   MistralConfigSchema,
   isMistralModelName,
-} from '../../../src/modelgarden/v2/mistral';
-import { modelName as stripPrefix } from '../../../src/modelgarden/v2/utils';
+} from '../../../src/modelgarden/v2/mistral.js';
+import { modelName as stripPrefix } from '../../../src/modelgarden/v2/utils.js';
 
 describe('vertexModelGarden.model helper', () => {
   it('should return an Anthropic model reference', () => {

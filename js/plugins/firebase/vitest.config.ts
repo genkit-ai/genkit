@@ -14,9 +14,11 @@
  * limitations under the License.
  */
 
-import { defineConfig, type Options } from 'tsup';
-import { defaultOptions } from '../../tsup.common';
+import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
-  ...(defaultOptions as Options),
+  test: {
+    include: ['tests/**/*_test.ts'],
+    clearMocks: true,
+  },
 });

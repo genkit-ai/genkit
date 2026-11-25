@@ -13,15 +13,18 @@
     "generative-ai"
   ],
   "version": "1.44.0",
-  "type": "commonjs",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12"
+  },
   "scripts": {
-    "check": "tsc",
-    "compile": "tsup-node",
+    "check": "tsc --noEmit",
+    "compile": "tsc",
     "build:clean": "rimraf ./lib",
-    "build": "pnpm build:clean && pnpm check && pnpm compile",
-    "build:watch": "tsup-node --watch",
-    "test": "firebase emulators:exec 'node node_modules/jest/bin/jest --runInBand --verbose' --config tests/emulator/firebase.json",
-    "test:session-store": "firebase emulators:exec 'node node_modules/jest/bin/jest session_store --runInBand --verbose' --config tests/emulator/firebase.json"
+    "build": "rimraf ./lib && tsc",
+    "build:watch": "tsc --watch",
+    "test": "firebase emulators:exec 'vitest run' --config tests/emulator/firebase.json",
+    "test:session-store": "firebase emulators:exec 'vitest run session_store' --config tests/emulator/firebase.json"
   },
   "repository": {
     "type": "git",
@@ -38,35 +41,26 @@
     "genkit": "workspace:^"
   },
   "devDependencies": {
-    "@jest/globals": "^29.7.0",
-    "@types/jest": "^29.5.12",
-    "@types/node": "^20.11.16",
+    "@types/node": "^22.15.3",
     "firebase-tools": "^13.13.2",
     "genkit": "workspace:*",
-    "jest": "^29.7.0",
     "rimraf": "^6.0.1",
-    "ts-jest": "^29.1.2",
-    "tsup": "^8.3.5",
     "tsx": "^4.19.2",
-    "typescript": "^5.9.3"
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.0"
   },
+  "main": "./lib/index.js",
   "types": "./lib/index.d.ts",
   "exports": {
     ".": {
-      "require": "./lib/index.js",
-      "import": "./lib/index.mjs",
       "types": "./lib/index.d.ts",
       "default": "./lib/index.js"
     },
     "./model-armor": {
-      "require": "./lib/model-armor.js",
-      "import": "./lib/model-armor.mjs",
       "types": "./lib/model-armor.d.ts",
       "default": "./lib/model-armor.js"
     },
     "./beta": {
-      "require": "./lib/beta.js",
-      "import": "./lib/beta.mjs",
       "types": "./lib/beta.d.ts",
       "default": "./lib/beta.js"
     }
@@ -74,10 +68,10 @@
   "typesVersions": {
     "*": {
       "model-armor": [
-        "lib/model-armor"
+        "lib/model-armor.d.ts"
       ],
       "beta": [
-        "lib/beta"
+        "lib/beta.d.ts"
       ]
     }
   }

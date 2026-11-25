@@ -16,7 +16,7 @@
 
 import assert from 'assert';
 import { describe, it, type Mock } from 'node:test';
-import { queryPublicEndpoint } from '../../src/vectorsearch/vector_search/query_public_endpoint';
+import { queryPublicEndpoint } from '../../src/vectorsearch/vector_search/query_public_endpoint.js';
 
 describe('queryPublicEndpoint', () => {
   // FIXME -- t.mock.method is not supported node above 20

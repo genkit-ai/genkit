@@ -25,13 +25,13 @@ import { ModelAction } from '@genkit-ai/ai/model';
 import { Operation, z, type JSONSchema7 } from '@genkit-ai/core';
 import * as assert from 'assert';
 import { beforeEach, describe, it } from 'node:test';
-import { dynamicResource, genkit, tool, type GenkitBeta } from '../src/beta';
+import { dynamicResource, genkit, tool, type GenkitBeta } from '../src/beta.js';
 import {
   defineEchoModel,
   defineProgrammableModel,
   runAsync,
   type ProgrammableModel,
-} from './helpers';
+} from './helpers.js';
 
 describe('generate', () => {
   describe('default model', () => {

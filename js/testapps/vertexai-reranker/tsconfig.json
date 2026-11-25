@@ -2,7 +2,9 @@
   "compileOnSave": true,
   "include": ["src"],
   "compilerOptions": {
-    "module": "commonjs",
+    "types": ["node"],
+    "rootDir": "src",
+    "module": "nodenext",
     "noImplicitReturns": true,
     "outDir": "lib",
     "sourceMap": true,

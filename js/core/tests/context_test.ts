@@ -16,8 +16,12 @@
 
 import * as assert from 'assert';
 import { describe, it } from 'node:test';
-import { UserFacingError } from '../src';
-import { apiKey, type ApiKeyContext, type RequestData } from '../src/context';
+import {
+  apiKey,
+  type ApiKeyContext,
+  type RequestData,
+} from '../src/context.js';
+import { UserFacingError } from '../src/index.js';
 
 function request(key?: string): RequestData {
   let headers: Record<string, string> = {};

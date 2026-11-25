@@ -17,8 +17,8 @@
 import * as assert from 'assert';
 import { GenerateRequest, modelRef } from 'genkit/model';
 import { describe, it } from 'node:test';
-import { LlamaConfigSchema } from '../../../src/modelgarden/v2/llama';
-import { toRequestBody } from '../../../src/modelgarden/v2/openai_compatibility';
+import { LlamaConfigSchema } from '../../../src/modelgarden/v2/llama.js';
+import { toRequestBody } from '../../../src/modelgarden/v2/openai_compatibility.js';
 
 const fakeModel = modelRef({
   name: 'vertex-model-garden/meta/llama-4-maverick-17b-128e-instruct-maas',

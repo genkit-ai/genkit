@@ -2,6 +2,8 @@
   "compileOnSave": true,
   "include": ["src"],
   "compilerOptions": {
+    "types": ["node"],
+    "rootDir": "src",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "noImplicitReturns": true,

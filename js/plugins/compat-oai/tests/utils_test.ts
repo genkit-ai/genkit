@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-import { describe, expect, it } from '@jest/globals';
 import { GenerateRequest } from 'genkit';
 import OpenAI from 'openai';
+import { describe, expect, it } from 'vitest';
 import {
   maybeCreateRequestScopedOpenAIClient,
   toModelName,
-} from '../src/utils';
+} from '../src/utils.js';
 
 describe('modelName', () => {
   it('should remove standard prefixes', () => {
