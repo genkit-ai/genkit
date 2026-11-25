@@ -100,6 +100,7 @@ describe('trajectory tool-pairing helpers', () => {
       {
         trajectorySpans: makeTrajectorySpans(toolSpans),
         claimedToolSpanIds: new Set(),
+        resumeDecisions: [],
         toolResponses: [],
       }
     );
@@ -138,6 +139,7 @@ describe('trajectory tool-pairing helpers', () => {
       {
         trajectorySpans: makeTrajectorySpans([v2Tool]),
         claimedToolSpanIds: new Set(),
+        resumeDecisions: [],
         toolResponses: [],
       }
     );
@@ -180,6 +182,7 @@ describe('trajectory tool-pairing helpers', () => {
       {
         trajectorySpans: makeTrajectorySpans([skewedTool], parentMap),
         claimedToolSpanIds: new Set(),
+        resumeDecisions: [],
         toolResponses: [
           {
             part: {
@@ -228,6 +231,7 @@ describe('trajectory tool-pairing helpers', () => {
       {
         trajectorySpans: makeTrajectorySpans([failedTool, inProgressTool]),
         claimedToolSpanIds: new Set(),
+        resumeDecisions: [],
         toolResponses: [],
       }
     );
