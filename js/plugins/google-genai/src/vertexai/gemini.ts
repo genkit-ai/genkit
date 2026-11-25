@@ -478,7 +478,7 @@ export const GeminiImageConfigSchema = GeminiConfigSchema.extend({
     })
     .passthrough()
     .optional(),
-}).passthrough();
+});
 export type GeminiImageConfigSchemaType = typeof GeminiImageConfigSchema;
 export type GeminiImageConfig = InferOutput<GeminiImageConfigSchemaType>;
 
@@ -589,7 +589,7 @@ export const GeminiTtsConfigSchema = GeminiConfigSchema.extend({
     .passthrough()
     .describe('Format of the generated audio.')
     .optional(),
-}).passthrough();
+});
 export type GeminiTtsConfigSchemaType = typeof GeminiTtsConfigSchema;
 export type GeminiTtsConfig = InferOutput<GeminiTtsConfigSchemaType>;
 
@@ -659,7 +659,7 @@ export const GeminiVideoConfigSchema = GeminiConfigSchema.extend({
     .passthrough()
     .describe('Video generation settings.')
     .optional(),
-}).passthrough();
+});
 export type GeminiVideoConfigSchemaType = typeof GeminiVideoConfigSchema;
 export type GeminiVideoConfig = InferOutput<GeminiVideoConfigSchemaType>;
 

@@ -453,7 +453,7 @@ export const GeminiTtsConfigSchema = GeminiConfigSchema.extend({
         'Interactions API (for example gemini-3.8-flash-tts).'
     )
     .optional(),
-}).passthrough();
+});
 export type GeminiTtsConfigSchemaType = typeof GeminiTtsConfigSchema;
 export type GeminiTtsConfig = InferOutput<GeminiTtsConfigSchemaType>;
 
@@ -508,7 +508,7 @@ export const GeminiImageConfigSchema = GeminiConfigSchema.extend({
       'Retrieve public web data for grounding, powered by Google Search.'
     )
     .optional(),
-}).passthrough();
+});
 export type GeminiImageConfigSchemaType = typeof GeminiImageConfigSchema;
 export type GeminiImageConfig = InferOutput<GeminiImageConfigSchemaType>;
 
@@ -578,7 +578,7 @@ export const GeminiVideoConfigSchema = GeminiConfigSchema.extend({
     .passthrough()
     .describe('Video generation settings.')
     .optional(),
-}).passthrough();
+});
 export type GeminiVideoConfigSchemaType = typeof GeminiVideoConfigSchema;
 export type GeminiVideoConfig = InferOutput<GeminiVideoConfigSchemaType>;
 
@@ -593,7 +593,7 @@ export const GemmaConfigSchema = GeminiConfigSchema.extend({
         'diverse or unexpected results.'
     )
     .optional(),
-}).passthrough();
+});
 export type GemmaConfigSchemaType = typeof GemmaConfigSchema;
 export type GemmaConfig = InferOutput<GemmaConfigSchemaType>;
 

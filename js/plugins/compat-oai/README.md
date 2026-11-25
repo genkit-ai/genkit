@@ -196,16 +196,14 @@ const modelInfo: ModelInfo = {
     output: ['json', 'text'],
   },
 };
-// Only list config the model actually supports. `.passthrough()` forwards any
+// Only list config the model actually supports. `z.looseObject` forwards any
 // other keys to the Chat Completions request body as-is.
-const schema = z
-  .object({
-    version: z.string().optional(),
-    temperature: z.number().min(0).max(1).optional(),
-    topP: z.number().optional(),
-    stopSequences: z.array(z.string()).optional(),
-  })
-  .passthrough();
+const schema = z.looseObject({
+  version: z.string().optional(),
+  temperature: z.number().min(0).max(1).optional(),
+  topP: z.number().optional(),
+  stopSequences: z.array(z.string()).optional(),
+});
 
 const ai = genkit({
   plugins: [
