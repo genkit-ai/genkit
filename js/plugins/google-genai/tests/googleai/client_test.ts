@@ -1000,9 +1000,58 @@ describe('Google AI Client', () => {
       controller.abort();
       assert.strictEqual(signal!.aborted, true);
 
-      const signal2 = getAbortSignal(clientOptions);
+      const controller2 = new AbortController();
+      const signal2 = getAbortSignal({
+        signal: controller2.signal,
+        timeout: 100,
+      });
+      assert.ok(signal2);
+      assert.strictEqual(signal2!.aborted, false);
       clock.tick(100);
       assert.strictEqual(signal2!.aborted, true);
+    });
+
+    it('should immediately return an aborted signal if provided signal is already aborted', () => {
+      const controller = new AbortController();
+      const reason = new Error('caller cancelled');
+      controller.abort(reason);
+
+      const signal = getAbortSignal({
+        signal: controller.signal,
+        timeout: 100,
+      });
+      assert.ok(signal);
+      assert.strictEqual(signal!.aborted, true);
+      assert.strictEqual(signal!.reason, reason);
+      assert.strictEqual(clock.countTimers(), 0);
+    });
+  });
+
+  describe('already-aborted signal handling', () => {
+    it('should pass an already-aborted signal to fetch in generateContent and generateContentStream', async () => {
+      const controller = new AbortController();
+      const reason = new Error('already aborted');
+      controller.abort(reason);
+
+      const request: GenerateContentRequest = {
+        contents: [{ role: 'user', parts: [{ text: 'hello' }] }],
+      };
+
+      mockFetchResponse({ candidates: [] });
+      await generateContent(apiKey, 'gemini-2.5-flash', request, {
+        signal: controller.signal,
+      });
+      const contentFetchOptions = fetchSpy.lastCall.args[1] as RequestInit;
+      assert.strictEqual(contentFetchOptions.signal?.aborted, true);
+      assert.strictEqual(contentFetchOptions.signal?.reason, reason);
+
+      mockFetchResponse('');
+      await generateContentStream(apiKey, 'gemini-2.5-flash', request, {
+        signal: controller.signal,
+      });
+      const streamFetchOptions = fetchSpy.lastCall.args[1] as RequestInit;
+      assert.strictEqual(streamFetchOptions.signal?.aborted, true);
+      assert.strictEqual(streamFetchOptions.signal?.reason, reason);
     });
   });
 });

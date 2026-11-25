@@ -1490,4 +1490,93 @@ describe('Vertex AI Client', () => {
       ]);
     });
   });
+
+  describe('TEST_ONLY.getAbortSignal', () => {
+    let clock: sinon.SinonFakeTimers;
+
+    beforeEach(() => {
+      clock = sinon.useFakeTimers();
+    });
+
+    afterEach(() => {
+      clock.restore();
+    });
+
+    it('should return undefined if no signal or timeout', () => {
+      const signal = TEST_ONLY.getAbortSignal(regionalClientOptions);
+      assert.strictEqual(signal, undefined);
+    });
+
+    it('should return a signal that aborts after timeout', () => {
+      const signal = TEST_ONLY.getAbortSignal({
+        ...regionalClientOptions,
+        timeout: 100,
+      });
+      assert.ok(signal);
+      assert.strictEqual(signal!.aborted, false);
+      clock.tick(100);
+      assert.strictEqual(signal!.aborted, true);
+    });
+
+    it('should return a signal linked to the provided signal', () => {
+      const controller = new AbortController();
+      const reason = new Error('caller cancelled');
+      const signal = TEST_ONLY.getAbortSignal({
+        ...regionalClientOptions,
+        signal: controller.signal,
+      });
+      assert.ok(signal);
+      assert.strictEqual(signal!.aborted, false);
+      controller.abort(reason);
+      assert.strictEqual(signal!.aborted, true);
+      assert.strictEqual(signal!.reason, reason);
+    });
+
+    it('should immediately return an aborted signal if provided signal is already aborted', () => {
+      const controller = new AbortController();
+      const reason = new Error('already aborted');
+      controller.abort(reason);
+
+      const signal = TEST_ONLY.getAbortSignal({
+        ...regionalClientOptions,
+        signal: controller.signal,
+        timeout: 100,
+      });
+      assert.ok(signal);
+      assert.strictEqual(signal!.aborted, true);
+      assert.strictEqual(signal!.reason, reason);
+      assert.strictEqual(clock.countTimers(), 0);
+    });
+  });
+
+  describe('already-aborted signal handling', () => {
+    it('should pass an aborted signal to fetch if aborted while fetching auth token', async () => {
+      const controller = new AbortController();
+      const reason = new Error('aborted during token fetch');
+      authMock.getAccessToken.callsFake(async () => {
+        controller.abort(reason);
+        return 'test-token';
+      });
+
+      const request: GenerateContentRequest = {
+        contents: [{ role: 'user', parts: [{ text: 'hello' }] }],
+      };
+      const opts: ClientOptions = {
+        ...regionalClientOptions,
+        signal: controller.signal,
+      };
+
+      mockFetchResponse({ candidates: [] });
+      await generateContent('gemini-2.5-flash', request, opts);
+      const contentFetchOptions = fetchSpy.lastCall.args[1] as RequestInit;
+      assert.strictEqual(contentFetchOptions.signal?.aborted, true);
+      assert.strictEqual(contentFetchOptions.signal?.reason, reason);
+
+      mockFetchResponse('');
+      await generateContentStream('gemini-2.5-flash', request, opts);
+      const streamFetchOptions = fetchSpy.lastCall.args[1] as RequestInit;
+      assert.strictEqual(streamFetchOptions.signal?.aborted, true);
+      assert.strictEqual(streamFetchOptions.signal?.reason, reason);
+    });
+  });
 });

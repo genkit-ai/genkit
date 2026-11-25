@@ -389,13 +389,25 @@ function getAbortSignal(
   const hasTimeout = (clientOptions?.timeout ?? -1) >= 0;
   if (clientOptions?.signal !== undefined || hasTimeout) {
     const controller = new AbortController();
+    if (clientOptions?.signal?.aborted) {
+      controller.abort(clientOptions.signal.reason);
+      return controller.signal;
+    }
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     if (hasTimeout) {
-      setTimeout(() => controller.abort(), clientOptions?.timeout);
+      timeoutId = setTimeout(() => controller.abort(), clientOptions?.timeout);
     }
     if (clientOptions?.signal) {
-      clientOptions.signal.addEventListener('abort', () => {
-        controller.abort();
-      });
+      clientOptions.signal.addEventListener(
+        'abort',
+        () => {
+          if (timeoutId !== undefined) {
+            clearTimeout(timeoutId);
+          }
+          controller.abort(clientOptions.signal!.reason);
+        },
+        { once: true }
+      );
     }
     return controller.signal;
   }
