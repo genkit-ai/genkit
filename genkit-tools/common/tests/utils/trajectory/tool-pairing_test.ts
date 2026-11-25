@@ -32,6 +32,7 @@ function makeTrajectorySpans(
     modelSpans: [],
     toolSpans,
     scopeSpans: toolSpans,
+    subagentByToolSpanId: new Map(),
   };
 }
 

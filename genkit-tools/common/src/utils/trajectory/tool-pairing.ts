@@ -120,6 +120,21 @@ function parseToolSpanResult(span?: NestedSpanData): {
   return parsed !== undefined ? { output: parsed } : {};
 }
 
+function matchesToolSpanName(
+  span: NestedSpanData,
+  reqShortName: string,
+  subagentByToolSpanId: ReadonlyMap<string, string>
+): boolean {
+  const tsName = shortToolName(getSpanName(span));
+  if (tsName === reqShortName) return true;
+  if (subagentByToolSpanId.has(span.spanId)) {
+    const normTs = tsName.replace(/^delegate_to_/, '');
+    const normReq = reqShortName.replace(/^delegate_to_/, '');
+    return Boolean(normTs && normTs === normReq);
+  }
+  return false;
+}
+
 function claimMatchingToolSpan(
   reqShortName: string,
   modelSpan: NestedSpanData,
@@ -127,11 +142,11 @@ function claimMatchingToolSpan(
   turnIndex: number,
   ctx: ToolPairingContext
 ): NestedSpanData | undefined {
-  const { toolSpans, parentMap } = ctx.trajectorySpans;
+  const { toolSpans, subagentByToolSpanId, parentMap } = ctx.trajectorySpans;
   const nameMatched = toolSpans.filter(
     (ts) =>
       !ctx.claimedToolSpanIds.has(ts.spanId) &&
-      shortToolName(getSpanName(ts)) === reqShortName
+      matchesToolSpanName(ts, reqShortName, subagentByToolSpanId)
   );
 
   const matched =
@@ -149,6 +164,7 @@ function claimMatchingToolSpan(
 }
 
 function classifyToolAction(
+  subtrajectoryId: string | undefined,
   matchedSpan: NestedSpanData | undefined,
   matchedResp: ToolResponseEntry | undefined
 ): {
@@ -156,17 +172,19 @@ function classifyToolAction(
   status: TrajectoryStatus;
   error?: RuntimeError;
 } {
+  const type: TrajectoryAction['type'] = subtrajectoryId ? 'subagent' : 'tool';
+
   if (matchedSpan && getSpanStatus(matchedSpan) === '✖') {
     return {
-      type: 'tool',
+      type,
       status: 'error',
       error: extractSpanRuntimeError(matchedSpan, 'Tool execution failed'),
     };
   }
   if ((matchedSpan && !matchedSpan.endTime) || (!matchedSpan && !matchedResp)) {
-    return { type: 'tool', status: 'in-progress' };
+    return { type, status: 'in-progress' };
   }
-  return { type: 'tool', status: 'success' };
+  return { type, status: 'success' };
 }
 
 /** Pairs all `toolRequest` parts of a model step into `TrajectoryAction` records. */
@@ -235,7 +253,14 @@ function buildSingleToolAction(
     spanResult.content ??
     (respContent && respContent.length > 0 ? respContent : undefined);
 
-  const { type, status, error } = classifyToolAction(matchedSpan, matchedResp);
+  const subtrajectoryId = matchedSpan
+    ? ctx.trajectorySpans.subagentByToolSpanId.get(matchedSpan.spanId)
+    : undefined;
+  const { type, status, error } = classifyToolAction(
+    subtrajectoryId,
+    matchedSpan,
+    matchedResp
+  );
 
   const startTime = matchedSpan?.startTime;
   const endTime = matchedSpan?.endTime || undefined;
@@ -252,5 +277,6 @@ function buildSingleToolAction(
     ...(error ? { error } : {}),
     ...(startTime !== undefined ? { startTime } : {}),
     ...(endTime !== undefined ? { endTime } : {}),
+    ...(subtrajectoryId ? { subtrajectoryId } : {}),
   };
 }
