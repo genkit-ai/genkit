@@ -30,7 +30,12 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
-type ExportEntry = string | { types?: string; default?: string };
+// `null` is valid in exports (blocks a subpath).
+type ExportEntry = string | null | { types?: string; default?: string };
+
+function typesOf(entry: ExportEntry): string | undefined {
+  return entry && typeof entry === 'object' ? entry.types : undefined;
+}
 interface PackageJson {
   name: string;
   private?: boolean;
@@ -61,8 +66,9 @@ function expectedTypesVersions(
   const paths: Record<string, string[]> = {};
   for (const [key, entry] of Object.entries(pkg.exports ?? {})) {
     // The root entry is covered by the top-level `types` field.
-    if (key === '.' || typeof entry !== 'object' || !entry.types) continue;
-    paths[key.replace(/^\.\//, '')] = [entry.types.replace(/^\.\//, '')];
+    const types = typesOf(entry);
+    if (key === '.' || !types) continue;
+    paths[key.replace(/^\.\//, '')] = [types.replace(/^\.\//, '')];
   }
   return Object.keys(paths).length ? { '*': paths } : undefined;
 }
@@ -96,7 +102,7 @@ for (const dir of packageDirs()) {
       problems.push(`${rel}: typesVersions out of sync with exports`);
     }
     for (const [key, entry] of Object.entries(pkg.exports ?? {})) {
-      const types = typeof entry === 'object' ? entry.types : undefined;
+      const types = typesOf(entry);
       if (types && !existsSync(join(dir, types))) {
         problems.push(`${rel}: exports["${key}"].types missing: ${types}`);
       }
