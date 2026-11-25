@@ -1,6 +1,6 @@
 {
   "name": "@genkit-ai/firebase",
-  "description": "Genkit AI framework plugin for Firebase including a Firestore retriever, Firestore session store, durable streaming, auth context and Data Connect tools.",
+  "description": "Genkit AI framework plugin for Firebase including a Firestore session store, durable streaming, auth context and Data Connect tools.",
   "keywords": [
     "genkit",
     "genkit-plugin",

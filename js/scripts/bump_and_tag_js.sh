@@ -42,19 +42,15 @@ bump_version js/ai @genkit-ai/ai ai-v
 bump_version js/genkit genkit
 
 # plugins
-bump_version js/plugins/chroma genkitx-chromadb
-bump_version js/plugins/dev-local-vectorstore @genkit-ai/dev-local-vectorstore dev-local-vectorstore-v
 bump_version js/plugins/evaluators @genkit-ai/evaluator evaluator-v
 bump_version js/plugins/firebase @genkit-ai/firebase firebase-v
 bump_version js/plugins/google-cloud @genkit-ai/google-cloud google-cloud-v
 bump_version js/plugins/next @genkit-ai/next next-v
 bump_version js/plugins/ollama genkitx-ollama
-bump_version js/plugins/pinecone genkitx-pinecone
 bump_version js/plugins/vertexai @genkit-ai/vertexai vertexai-v
 bump_version js/plugins/checks @genkit-ai/checks checks-v
 bump_version js/plugins/mcp @genkit-ai/mcp mcp-v
 bump_version js/plugins/express @genkit-ai/express express-v
-bump_version js/plugins/cloud-sql-pg genkitx-cloud-sql-pg
 bump_version js/plugins/compat-oai @genkit-ai/compat-oai compat-oai-v
 bump_version js/plugins/google-genai @genkit-ai/google-genai google-genai-v
 bump_version js/plugins/middleware @genkit-ai/middleware middleware-v

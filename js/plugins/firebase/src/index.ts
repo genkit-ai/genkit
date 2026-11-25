@@ -20,4 +20,8 @@
  * @module /
  */
 
-export { defineFirestoreRetriever } from './firestore-retriever.js';
+// The root entry point currently has no exports. Features live in subpaths:
+// `@genkit-ai/firebase/beta` (durable streaming, session store),
+// `@genkit-ai/firebase/context` (auth context) and
+// `@genkit-ai/firebase/beta/data-connect`.
+export {};

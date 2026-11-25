@@ -44,19 +44,15 @@ JS_PACKAGES=(
   js/core
   js/ai
   js/genkit
-  js/plugins/chroma
-  js/plugins/dev-local-vectorstore
   js/plugins/firebase
   js/plugins/google-cloud
   js/plugins/ollama
-  js/plugins/pinecone
   js/plugins/vertexai
   js/plugins/evaluators
   js/plugins/checks
   js/plugins/mcp
   js/plugins/express
   js/plugins/next
-  js/plugins/cloud-sql-pg
   js/plugins/compat-oai
   js/plugins/google-genai
   js/plugins/anthropic
