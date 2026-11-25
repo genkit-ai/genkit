@@ -23,7 +23,7 @@
     "build:clean": "rimraf ./lib",
     "build": "pnpm build:clean && pnpm check && pnpm compile",
     "build:watch": "tsup-node --watch",
-    "test": "jest --verbose"
+    "test": "vitest run"
   },
   "repository": {
     "type": "git",
@@ -38,18 +38,15 @@
     "zod": "^4.2.0"
   },
   "devDependencies": {
-    "@jest/globals": "^29.7.0",
-    "@types/jest": "^29.5.12",
     "@types/node": "^20.11.16",
     "genkit": "workspace:*",
-    "jest": "^29.7.0",
     "next": "^16.3.3",
     "rimraf": "^6.0.1",
-    "ts-jest": "^29.1.2",
     "tsup": "^8.0.2",
     "tsx": "^4.7.0",
     "typescript": "^5.9.3",
-    "zod": "^4.6.7"
+    "zod": "^4.6.7",
+    "vitest": "^4.1.0"
   },
   "types": "./lib/index.d.ts",
   "exports": {

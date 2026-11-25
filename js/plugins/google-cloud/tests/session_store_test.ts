@@ -15,13 +15,13 @@
  */
 
 import { Firestore } from '@google-cloud/firestore';
-import { afterEach, beforeEach, describe, it } from '@jest/globals';
 import * as assert from 'assert';
 import { AgentAPI, genkit, type SessionSnapshotInput } from 'genkit/beta';
+import { afterEach, beforeEach, describe, it } from 'vitest';
 import {
   FirestoreSessionStore,
   type FirestoreSessionStoreOptions,
-} from '../src/session-store/firestore';
+} from '../src/session-store/firestore.js';
 
 interface Custom {
   counter?: number;

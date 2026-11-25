@@ -20,7 +20,7 @@
     "build:clean": "rimraf ./lib",
     "build": "pnpm build:clean && pnpm check && pnpm compile",
     "build:watch": "tsup-node --watch",
-    "test": "firebase emulators:exec 'jest --verbose' --config tests/emulator/firebase.json"
+    "test": "firebase emulators:exec 'vitest run' --config tests/emulator/firebase.json"
   },
   "repository": {
     "type": "git",
@@ -44,18 +44,15 @@
     }
   },
   "devDependencies": {
-    "@jest/globals": "^29.7.0",
-    "@types/jest": "^29.5.12",
     "@types/node": "^20.11.16",
     "firebase": "^11.5.0",
     "firebase-tools": "^13.13.2",
     "genkit": "workspace:*",
-    "jest": "^29.7.0",
     "rimraf": "^6.0.1",
-    "ts-jest": "^29.1.2",
     "tsup": "^8.3.5",
     "tsx": "^4.19.2",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.0"
   },
   "types": "./lib/index.d.ts",
   "exports": {

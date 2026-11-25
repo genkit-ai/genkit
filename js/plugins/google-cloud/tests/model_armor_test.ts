@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-import { beforeEach, describe, expect, it } from '@jest/globals';
 import { genkit } from 'genkit';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { modelArmor } from '../src/model-armor.js';
 
 // Mock ModelArmorClient

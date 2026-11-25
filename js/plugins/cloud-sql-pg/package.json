@@ -22,7 +22,7 @@
     "build:clean": "rimraf ./lib",
     "build": "pnpm build:clean && pnpm check && pnpm compile",
     "build:watch": "tsup-node --watch",
-    "test": "jest --verbose"
+    "test": "vitest run"
   },
   "repository": {
     "type": "git",
@@ -42,16 +42,14 @@
     "genkit": "workspace:^"
   },
   "devDependencies": {
-    "@jest/globals": "^29.7.0",
     "@types/node": "^20.11.16",
     "@types/uuid": "^10.0.0",
     "dotenv": "^16.4.5",
     "rimraf": "^6.0.1",
-    "jest": "^29.7.0",
-    "ts-jest": "^29.1.2",
     "tsup": "^8.3.5",
     "tsx": "^4.19.2",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.0"
   },
   "types": "./lib/index.d.ts",
   "exports": {

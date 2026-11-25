@@ -15,11 +15,11 @@
  * limitations under the License.
  */
 
-import { describe, expect, it, jest } from '@jest/globals';
 import { GenerateRequest } from 'genkit';
 import OpenAI from 'openai';
 import { Response } from 'openai/core.mjs';
 import type { Transcription } from 'openai/resources/audio/index.mjs';
+import { describe, expect, it, vi } from 'vitest';
 import {
   defineCompatOpenAISpeechModel,
   defineCompatOpenAITranscriptionModel,
@@ -27,14 +27,14 @@ import {
   toSttRequest,
   toTTSRequest,
   transcriptionToGenerateResponse,
-} from '../src/audio';
+} from '../src/audio.js';
 
-jest.mock('genkit/model', () => {
+vi.mock('genkit/model', async () => {
   const originalModule =
-    jest.requireActual<typeof import('genkit/model')>('genkit/model');
+    await vi.importActual<typeof import('genkit/model')>('genkit/model');
   return {
     ...originalModule,
-    defineModel: jest.fn((_, runner) => {
+    defineModel: vi.fn((_, runner) => {
       return runner;
     }),
   };
@@ -72,7 +72,7 @@ describe('toTTSRequest', () => {
   });
 
   it('should run with requestBuilder', () => {
-    const requestBuilder = jest.fn((_, params) => {
+    const requestBuilder = vi.fn((_, params) => {
       (params as any).foo = 'bar';
     });
 
@@ -128,11 +128,11 @@ describe('defineCompatOpenAISpeechModel runner', () => {
     const openaiClient = {
       audio: {
         speech: {
-          create: jest.fn(async () => response),
+          create: vi.fn(async () => response),
         },
       },
     };
-    const abortSignal = jest.fn();
+    const abortSignal = vi.fn();
     const runner = defineCompatOpenAISpeechModel({
       name: 'tts-1',
       client: openaiClient as unknown as OpenAI,
@@ -309,7 +309,7 @@ describe('toSttRequest', () => {
   });
 
   it('should run with requestBuilder', () => {
-    const requestBuilder = jest.fn((_, params) => {
+    const requestBuilder = vi.fn((_, params) => {
       (params as any).foo = 'bar';
     });
 
@@ -378,11 +378,11 @@ describe('defineCompatOpenAITranscriptionModel runner', () => {
     const openaiClient = {
       audio: {
         transcriptions: {
-          create: jest.fn(async () => result),
+          create: vi.fn(async () => result),
         },
       },
     };
-    const abortSignal = jest.fn();
+    const abortSignal = vi.fn();
     const runner = defineCompatOpenAITranscriptionModel({
       name: 'whisper-1',
       client: openaiClient as unknown as OpenAI,

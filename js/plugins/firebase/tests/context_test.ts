@@ -14,14 +14,14 @@
  * limitations under the License.
  */
 
-import { describe, expect, it } from '@jest/globals';
 import type { RequestData } from 'genkit/context';
+import { describe, expect, it } from 'vitest';
 import {
   fakeToken,
   firebaseContext,
   setDebugSkipTokenVerification,
   type FirebaseContext,
-} from '../src/context';
+} from '../src/context.js';
 
 function request(headers: Record<string, string> = {}): RequestData {
   return {
@@ -66,7 +66,7 @@ describe('firebaseAuth', () => {
 
   describe('declaritive policies', () => {
     it('handles signedIn', async () => {
-      expect(() =>
+      await expect(
         firebaseContext({ signedIn: true })(request())
       ).rejects.toThrow();
       expect(await firebaseContext({ signedIn: false })(request())).toEqual({});
@@ -86,18 +86,18 @@ describe('firebaseAuth', () => {
     });
 
     it('handles emailVerified', async () => {
-      expect(() =>
+      await expect(
         firebaseContext({ emailVerified: true })(request())
       ).rejects.toThrow();
       expect(
         await firebaseContext({ emailVerified: false })(request())
       ).toEqual({});
-      expect(() =>
+      await expect(
         firebaseContext({ emailVerified: true })(
           request({ authorization: `bearer ${fakeToken({ sub: 'user' })}` })
         )
       ).rejects.toThrow();
-      expect(() =>
+      await expect(
         firebaseContext({ emailVerified: true })(
           request({
             authorization: `bearer ${fakeToken({ sub: 'user', email: 'user@google.com', email_verified: 'false' })}`,
@@ -144,7 +144,7 @@ describe('firebaseAuth', () => {
           rawToken: fakeToken({ sub: 'user', email: 'user@google.com' }),
         },
       });
-      expect(() =>
+      await expect(
         firebaseContext({ hasClaim: 'admin' })(
           request({
             authorization: `bearer ${fakeToken({
@@ -153,7 +153,7 @@ describe('firebaseAuth', () => {
           })
         )
       ).rejects.toThrow();
-      expect(() =>
+      await expect(
         firebaseContext({ hasClaim: 'admin' })(
           request({
             authorization: `bearer ${fakeToken({
@@ -166,7 +166,7 @@ describe('firebaseAuth', () => {
     });
 
     it('handles hasClaim(string[])', async () => {
-      expect(() =>
+      await expect(
         firebaseContext({ hasClaim: ['email', 'admin'] })(
           request({
             authorization: `bearer ${fakeToken({
@@ -176,7 +176,7 @@ describe('firebaseAuth', () => {
           })
         )
       ).rejects.toThrow();
-      expect(() =>
+      await expect(
         firebaseContext({ hasClaim: ['email', 'admin'] })(
           request({
             authorization: `bearer ${fakeToken({
@@ -215,7 +215,7 @@ describe('firebaseAuth', () => {
     });
 
     it('handles hasClaim(Record<string, boolean>)', async () => {
-      expect(() =>
+      await expect(
         firebaseContext({
           hasClaim: {
             admin: 'true',
@@ -230,7 +230,7 @@ describe('firebaseAuth', () => {
           })
         )
       ).rejects.toThrow();
-      expect(() =>
+      await expect(
         firebaseContext({
           hasClaim: {
             admin: 'true',
@@ -295,7 +295,7 @@ describe('firebaseAuth', () => {
           rawToken: fakeToken({ sub: 'appId' }),
         },
       });
-      expect(() =>
+      await expect(
         firebaseContext({ enforceAppCheck: true })(request())
       ).rejects.toThrow();
     });

@@ -15,22 +15,22 @@
  * limitations under the License.
  */
 
-import { describe, expect, it, jest } from '@jest/globals';
 import { GenerateRequest } from 'genkit';
 import OpenAI from 'openai';
 import type { Translation } from 'openai/resources/audio/index.mjs';
+import { describe, expect, it, vi } from 'vitest';
 import {
   defineCompatOpenAITranslationModel,
   toTranslationRequest,
   translationToGenerateResponse,
-} from '../src/translate';
+} from '../src/translate.js';
 
-jest.mock('genkit/model', () => {
+vi.mock('genkit/model', async () => {
   const originalModule =
-    jest.requireActual<typeof import('genkit/model')>('genkit/model');
+    await vi.importActual<typeof import('genkit/model')>('genkit/model');
   return {
     ...originalModule,
-    defineModel: jest.fn((_, runner) => {
+    defineModel: vi.fn((_, runner) => {
       return runner;
     }),
   };
@@ -163,7 +163,7 @@ describe('toTranslationRequest', () => {
   });
 
   it('should run with requestBuilder', () => {
-    const requestBuilder = jest.fn((_, params) => {
+    const requestBuilder = vi.fn((_, params) => {
       (params as any).foo = 'bar';
     });
 
@@ -236,11 +236,11 @@ describe('defineCompatOpenAITranslationModel runner', () => {
     const openaiClient = {
       audio: {
         translations: {
-          create: jest.fn(async () => result),
+          create: vi.fn(async () => result),
         },
       },
     };
-    const abortSignal = jest.fn();
+    const abortSignal = vi.fn();
     const runner = defineCompatOpenAITranslationModel({
       name: 'whisper-1',
       client: openaiClient as unknown as OpenAI,

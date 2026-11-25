@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-import { describe, expect, it } from '@jest/globals';
 import { UserFacingError, genkit, z } from 'genkit';
 import { InMemoryStreamManager } from 'genkit/beta';
 import { apiKey, type ApiKeyContext } from 'genkit/context';
 import { NextRequest } from 'next/server.js';
+import { describe, expect, it } from 'vitest';
 import { appRoute } from '../src/index.js';
 
 function chunks(

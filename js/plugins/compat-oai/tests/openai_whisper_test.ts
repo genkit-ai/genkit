@@ -15,20 +15,20 @@
  * limitations under the License.
  */
 
-import { describe, expect, it, jest } from '@jest/globals';
 import OpenAI from 'openai';
 import type {
   Transcription,
   Translation,
 } from 'openai/resources/audio/index.mjs';
-import { defineOpenAIWhisperModel } from '../src/openai/whisper';
+import { describe, expect, it, vi } from 'vitest';
+import { defineOpenAIWhisperModel } from '../src/openai/whisper.js';
 
-jest.mock('genkit/model', () => {
+vi.mock('genkit/model', async () => {
   const originalModule =
-    jest.requireActual<typeof import('genkit/model')>('genkit/model');
+    await vi.importActual<typeof import('genkit/model')>('genkit/model');
   return {
     ...originalModule,
-    defineModel: jest.fn((_, runner) => {
+    defineModel: vi.fn((_, runner) => {
       return runner;
     }),
   };
@@ -43,14 +43,14 @@ describe('defineOpenAIWhisperModel runner — transcription (default)', () => {
     const openaiClient = {
       audio: {
         transcriptions: {
-          create: jest.fn(async () => result),
+          create: vi.fn(async () => result),
         },
         translations: {
-          create: jest.fn(async () => ({ text: 'should not be called' })),
+          create: vi.fn(async () => ({ text: 'should not be called' })),
         },
       },
     };
-    const abortSignal = jest.fn();
+    const abortSignal = vi.fn();
 
     const runner = defineOpenAIWhisperModel({
       name: 'whisper-1',
@@ -99,14 +99,14 @@ describe('defineOpenAIWhisperModel runner — transcription (default)', () => {
     const openaiClient = {
       audio: {
         transcriptions: {
-          create: jest.fn(async () => result),
+          create: vi.fn(async () => result),
         },
         translations: {
-          create: jest.fn(async () => ({ text: 'should not be called' })),
+          create: vi.fn(async () => ({ text: 'should not be called' })),
         },
       },
     };
-    const abortSignal = jest.fn();
+    const abortSignal = vi.fn();
 
     const runner = defineOpenAIWhisperModel({
       name: 'whisper-1',
@@ -157,14 +157,14 @@ describe('defineOpenAIWhisperModel runner — translation (translate: true)', ()
     const openaiClient = {
       audio: {
         transcriptions: {
-          create: jest.fn(async () => ({ text: 'should not be called' })),
+          create: vi.fn(async () => ({ text: 'should not be called' })),
         },
         translations: {
-          create: jest.fn(async () => result),
+          create: vi.fn(async () => result),
         },
       },
     };
-    const abortSignal = jest.fn();
+    const abortSignal = vi.fn();
 
     const runner = defineOpenAIWhisperModel({
       name: 'whisper-1',

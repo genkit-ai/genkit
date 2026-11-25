@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-import { afterEach, beforeEach, describe, it } from '@jest/globals';
 import * as assert from 'assert';
 import { deleteApp, initializeApp, type App } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
-import { FirestoreStreamManager } from '../src/stream-manager/firestore';
+import { afterEach, beforeEach, describe, it } from 'vitest';
+import { FirestoreStreamManager } from '../src/stream-manager/firestore.js';
 
 describe('FirestoreStreamManager', () => {
   let app: App;
@@ -38,7 +38,7 @@ describe('FirestoreStreamManager', () => {
   afterEach(async () => {
     const db = getFirestore(app);
     // Only delete this suite's own collection so it can run in parallel with
-    // the other Firestore emulator test files (jest runs files concurrently
+    // the other Firestore emulator test files (test files run concurrently
     // against the one shared emulator).
     await db.recursiveDelete(db.collection('genkit-streams'));
     await deleteApp(app);
