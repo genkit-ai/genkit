@@ -1,5 +1,7 @@
 {
   "compilerOptions": {
+    "types": ["node"],
+    "rootDir": "src",
     "target": "es2022",
     "module": "nodenext",
     "lib": ["es2022"],

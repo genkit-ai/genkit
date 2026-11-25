@@ -1,5 +1,6 @@
 {
   "compilerOptions": {
+    "types": ["node"],
     "module": "NodeNext",
     "noImplicitReturns": true,
     "noUnusedLocals": false,

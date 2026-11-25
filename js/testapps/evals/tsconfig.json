@@ -1,5 +1,7 @@
 {
   "compilerOptions": {
+    "types": ["node"],
+    "rootDir": "src",
     "module": "NodeNext",
     "noImplicitReturns": true,
     "noUnusedLocals": false,

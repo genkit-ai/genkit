@@ -80,7 +80,7 @@
     "get-port": "^5.1.0",
     "rimraf": "^6.0.1",
     "tsx": "^4.19.2",
-    "typescript": "^5.9.3"
+    "typescript": "^7.0.2"
   },
   "engines": {
     "node": ">=22.12"

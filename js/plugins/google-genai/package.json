@@ -47,7 +47,7 @@
     "rimraf": "^6.0.1",
     "sinon": "^21.0.0",
     "tsx": "^4.19.2",
-    "typescript": "^5.9.3"
+    "typescript": "^7.0.2"
   },
   "main": "./lib/index.js",
   "types": "./lib/index.d.ts",

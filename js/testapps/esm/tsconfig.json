@@ -1,5 +1,7 @@
 {
   "compilerOptions": {
+    "types": ["node"],
+    "rootDir": "src",
     "module": "es2022",
     "moduleResolution": "bundler",
     "noImplicitReturns": true,
