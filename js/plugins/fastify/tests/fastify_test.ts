@@ -95,7 +95,7 @@ describe('fastifyHandler', async () => {
         name: 'streamingFlow',
         inputSchema: z.object({ question: z.string() }),
       },
-      async (input, sendChunk) => {
+      async (input, { sendChunk }) => {
         const { text } = await ai.generate({
           model: 'echoModel',
           prompt: input.question,
@@ -110,7 +110,7 @@ describe('fastifyHandler', async () => {
         name: 'streamingFlowV2',
         inputSchema: z.object({ question: z.string() }),
       },
-      async (input, sendChunk) => {
+      async (input, { sendChunk }) => {
         const { text } = await ai.generate({
           model: 'echoModelV2',
           prompt: input.question,
@@ -156,8 +156,7 @@ describe('fastifyHandler', async () => {
         inputSchema: z.string(),
         initSchema: z.object({ sessionId: z.string() }),
       },
-      async (input, { init }) =>
-        `input: ${input}, sessionId: ${(init as { sessionId: string }).sessionId}`
+      async (input, { init }) => `input: ${input}, sessionId: ${init.sessionId}`
     );
 
     const abortableFlow = ai.defineFlow(
@@ -687,7 +686,7 @@ describe('genkitFastify', async () => {
         name: 'streamingFlow',
         inputSchema: z.object({ question: z.string() }),
       },
-      async (input, sendChunk) => {
+      async (input, { sendChunk }) => {
         const { text } = await ai.generate({
           model: 'echoModel',
           prompt: input.question,

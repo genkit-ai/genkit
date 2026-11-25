@@ -97,6 +97,21 @@ describe('flow', () => {
       assert.equal(result, 'traceId=true spanId=true');
     });
 
+    it('passes a plain, per-call options object', async () => {
+      const testFlow = defineFlow(registry, 'testFlow', async (_, options) => {
+        // Read after an await so concurrent calls would clobber a shared object.
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        return `${typeof options} ${options.context?.user}`;
+      });
+
+      const results = await Promise.all([
+        testFlow(undefined, { context: { user: 'a' } }),
+        testFlow(undefined, { context: { user: 'b' } }),
+      ]);
+
+      assert.deepStrictEqual(results, ['object a', 'object b']);
+    });
+
     it('should rethrow the error', async () => {
       const testFlow = defineFlow(
         registry,
@@ -177,13 +192,13 @@ describe('flow', () => {
           outputSchema: z.string(),
           streamSchema: z.object({ count: z.number() }),
         },
-        async (input, streamingCallback) => {
-          if (streamingCallback) {
+        async (input, { sendChunk, streamingRequested }) => {
+          if (streamingRequested) {
             for (let i = 0; i < input; i++) {
-              streamingCallback({ count: i });
+              sendChunk({ count: i });
             }
           }
-          return `bar ${input} ${!!streamingCallback} ${JSON.stringify(getContext())}`;
+          return `bar ${input} ${streamingRequested} ${JSON.stringify(getContext())}`;
         }
       );
 
