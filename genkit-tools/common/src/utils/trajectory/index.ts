@@ -15,3 +15,7 @@
  */
 
 export { extractTrajectoryFromTrace } from './extract.js';
+export {
+  extractTrajectoryFromTraces,
+  mergeTrajectoryBundles,
+} from './session.js';
