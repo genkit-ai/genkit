@@ -242,8 +242,10 @@ func (o *OpenAICompatible) Init(ctx context.Context) []api.Action {
 
 	// The scrub goes first so everything below wins over it, and it is folded
 	// into Opts rather than passed to NewClient alone so the per-request
-	// clients clientForKey builds carry it too.
-	opts := clearInheritedOpenAIIdentity()
+	// clients clientForKey builds carry it too. The SSE filter is the
+	// outermost middleware, so it runs nearest the SDK's stream decoder and
+	// middleware passed in Opts still sees the raw stream.
+	opts := append(clearInheritedOpenAIIdentity(), option.WithMiddleware(dropDatalessSSEEvents))
 	if o.BaseURL != "" {
 		opts = append(opts, option.WithBaseURL(o.BaseURL))
 	}
