@@ -74,7 +74,8 @@ const (
 type sseFilter struct {
 	src     io.ReadCloser
 	r       *bufio.Reader
-	out     []byte // filtered bytes not yet returned to the caller
+	out     []byte // filtered bytes, returned to the caller from outIdx on
+	outIdx  int    // the next byte of out to return
 	held    []byte // non-data fields of the current event, before any data
 	hasData bool   // the current event has a data field
 	midLine bool   // the last chunk read did not end its line
@@ -87,10 +88,12 @@ func newSSEFilter(src io.ReadCloser) *sseFilter {
 }
 
 func (f *sseFilter) Read(p []byte) (int, error) {
-	for len(f.out) == 0 {
+	for f.outIdx >= len(f.out) {
 		if f.err != nil {
 			return 0, f.err
 		}
+		// Reuse out's buffer from the start once it has been drained.
+		f.out, f.outIdx = f.out[:0], 0
 		chunk, err := f.r.ReadSlice('\n')
 		if len(chunk) > 0 {
 			f.filter(chunk, err == nil)
@@ -100,8 +103,8 @@ func (f *sseFilter) Read(p []byte) (int, error) {
 			f.err = err
 		}
 	}
-	n := copy(p, f.out)
-	f.out = f.out[n:]
+	n := copy(p, f.out[f.outIdx:])
+	f.outIdx += n
 	return n, nil
 }
 
@@ -140,7 +143,7 @@ func (f *sseFilter) startLine(chunk []byte) lineAction {
 		return dropLine
 	}
 	name, _, _ := bytes.Cut(content, []byte(":"))
-	if string(name) == "data" {
+	if bytes.Equal(name, []byte("data")) {
 		f.flushHeld()
 		return passLine
 	}
