@@ -4,7 +4,7 @@
 
 - `js/` (JS SDK & plugins): `js/AGENTS.md`
 - `genkit-tools/` (CLI, MCP, telemetry server, shared schemas): `genkit-tools/AGENTS.md`
-- `go/` (Go SDK & plugins): `go/GEMINI.md`
+- `go/` (Go SDK & plugins): `go/AGENTS.md`
 
 ## Repo-Wide Checks
 
