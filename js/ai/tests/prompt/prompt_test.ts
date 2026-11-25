@@ -55,7 +55,6 @@ describe('prompt', () => {
       registry,
       {
         name: 'abortTestModel',
-        apiVersion: 'v2',
       },
       async (request, opts) => {
         // Store the abortSignal for verification

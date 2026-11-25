@@ -869,10 +869,10 @@ describe('fetchHandlers (path routing)', () => {
 function defineEchoModel(ai: Genkit): ModelAction {
   return ai.defineModel(
     { name: 'echoModel' },
-    async (request, streamingCallback) => {
-      streamingCallback?.({ content: [{ text: '3' }] });
-      streamingCallback?.({ content: [{ text: '2' }] });
-      streamingCallback?.({ content: [{ text: '1' }] });
+    async (request, { sendChunk }) => {
+      sendChunk({ content: [{ text: '3' }] });
+      sendChunk({ content: [{ text: '2' }] });
+      sendChunk({ content: [{ text: '1' }] });
       return {
         message: {
           role: 'model',

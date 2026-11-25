@@ -756,6 +756,38 @@ ai.defineModel(
   }
 );
 
+// A custom streaming model. `sendChunk` is a no-op when the caller didn't ask
+// for streaming, so `streamingRequested` is mainly useful for picking a
+// streaming vs. non-streaming upstream call (here it just skips the delay).
+ai.defineModel(
+  { name: 'countdownModel' },
+  async (request, { streamingRequested, sendChunk, abortSignal }) => {
+    const words = ['3', '2', '1', 'liftoff'];
+    for (const word of words) {
+      if (abortSignal.aborted) break;
+      if (streamingRequested) {
+        sendChunk({ content: [{ text: `${word} ` }] });
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+    }
+    return {
+      finishReason: 'stop',
+      message: { role: 'model', content: [{ text: words.join(' ') }] },
+    };
+  }
+);
+
+ai.defineFlow('streamFromCustomModel', async (_, { sendChunk }) => {
+  const { stream, response } = ai.generateStream({
+    model: 'countdownModel',
+    prompt: 'go',
+  });
+  for await (const chunk of stream) {
+    sendChunk(chunk.text);
+  }
+  return (await response).text;
+});
+
 const blockingMiddleware: ModelMiddleware = async (req, next) => {
   logger.warn(
     'blockingMiddleware invoked: request blocked due to policy violation.'

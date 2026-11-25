@@ -1200,7 +1200,7 @@ export function defineGeminiModel({
       configSchema: GeminiConfigSchema,
       use: middlewares,
     },
-    async (request, sendChunk) => {
+    async (request, { streamingRequested, sendChunk }) => {
       const vertex = vertexClientFactory(request);
 
       // Make a copy of messages to avoid side-effects
@@ -1364,7 +1364,7 @@ export function defineGeminiModel({
         let response: GenerateContentResponse;
 
         // Handle streaming and non-streaming responses
-        if (sendChunk) {
+        if (streamingRequested) {
           const result = await genModel
             .startChat(updatedChatRequest)
             .sendMessageStream(msg.parts);
@@ -1424,7 +1424,7 @@ export function defineGeminiModel({
             ai.registry,
             {
               metadata: {
-                name: sendChunk ? 'sendMessageStream' : 'sendMessage',
+                name: streamingRequested ? 'sendMessageStream' : 'sendMessage',
                 // Seed input up front so the realtime "pending" span export
                 // carries it.
                 input: {

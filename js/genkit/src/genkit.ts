@@ -32,7 +32,6 @@ import {
   type GenerateRequest,
   type GenerateResponse,
   type GenerateResponseChunk,
-  type GenerateResponseData,
   type GenerateStreamResponse,
   type ModelArgument,
   type ModelReference,
@@ -62,8 +61,8 @@ import {
   type BackgroundModelAction,
   type DefineBackgroundModelOptions,
   type DefineModelOptions,
-  type GenerateResponseChunkData,
   type ModelAction,
+  type ModelFn,
 } from '@genkit-ai/ai/model';
 import {
   RankedDocument,
@@ -93,7 +92,6 @@ import {
   type ToolFn,
 } from '@genkit-ai/ai/tool';
 import {
-  ActionFnArg,
   GenkitError,
   ReflectionServer,
   defineDynamicActionProvider,
@@ -116,7 +114,6 @@ import {
   type InferInput,
   type InferOutput,
   type JSONSchema,
-  type StreamingCallback,
 } from '@genkit-ai/core';
 import { Channel } from '@genkit-ai/core/async';
 import type { HasRegistry } from '@genkit-ai/core/registry';
@@ -314,37 +311,20 @@ export class Genkit extends GenkitAI implements HasRegistry {
 
   /**
    * Defines a new model and adds it to the registry.
-   */
-  defineModel<CustomOptionsSchema extends GenkitSchema = GenkitSchema>(
-    options: {
-      apiVersion: 'v2';
-    } & DefineModelOptions<CustomOptionsSchema>,
-    runner: (
-      request: GenerateRequest<CustomOptionsSchema>,
-      options: ActionFnArg<GenerateResponseChunkData>
-    ) => Promise<GenerateResponseData>
-  ): ModelAction<CustomOptionsSchema>;
-
-  /**
-   * Defines a new model and adds it to the registry.
+   *
+   * ```ts
+   * ai.defineModel(
+   *   { name: 'myModel', supports: { multiturn: true } },
+   *   async (request, { sendChunk, streamingRequested, abortSignal }) => {
+   *     if (streamingRequested) sendChunk({ content: [{ text: 'partial' }] });
+   *     return { message: { role: 'model', content: [{ text: 'done' }] } };
+   *   }
+   * );
+   * ```
    */
   defineModel<CustomOptionsSchema extends GenkitSchema = GenkitSchema>(
     options: DefineModelOptions<CustomOptionsSchema>,
-    runner: (
-      request: GenerateRequest<CustomOptionsSchema>,
-      streamingCallback?: StreamingCallback<GenerateResponseChunkData>
-    ) => Promise<GenerateResponseData>
-  ): ModelAction<CustomOptionsSchema>;
-
-  /**
-   * Defines a new model and adds it to the registry.
-   */
-  defineModel<CustomOptionsSchema extends GenkitSchema = GenkitSchema>(
-    options: any,
-    runner: (
-      request: GenerateRequest<CustomOptionsSchema>,
-      streamingCallback: any
-    ) => Promise<GenerateResponseData>
+    runner: ModelFn<CustomOptionsSchema>
   ): ModelAction<CustomOptionsSchema> {
     return defineModel(this.registry, options, runner);
   }

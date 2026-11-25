@@ -196,7 +196,6 @@ describe('generate', () => {
     it('rethrows response errors', async () => {
       ai.defineModel(
         {
-          apiVersion: 'v2',
           name: 'blockingModel',
         },
         async (request, { sendChunk, streamingRequested }) => {
@@ -275,7 +274,7 @@ describe('generate', () => {
         return response.text;
       });
       await flow();
-      assert.ok((model as any).__test__lastStreamingCallback);
+      assert.ok((model as any).__test__lastStreamingRequested);
     });
 
     it('strips out the noop streaming callback', async () => {
@@ -289,7 +288,7 @@ describe('generate', () => {
         return response.text;
       });
       await flow();
-      assert.ok(!(model as any).__test__lastStreamingCallback);
+      assert.ok(!(model as any).__test__lastStreamingRequested);
     });
   });
 

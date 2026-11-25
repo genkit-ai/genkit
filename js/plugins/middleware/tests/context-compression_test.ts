@@ -3771,7 +3771,7 @@ describe('contextCompression middleware', () => {
     let capturedSummaryCtx: Record<string, unknown> | undefined;
 
     const summaryModel = ai.defineModel(
-      { name: 'ctxCheckSummarizer', apiVersion: 'v2' },
+      { name: 'ctxCheckSummarizer' },
       async (req, ctx) => {
         capturedSummaryReq = req;
         capturedSummaryCtx = ctx as unknown as Record<string, unknown>;

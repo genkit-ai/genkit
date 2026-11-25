@@ -35,25 +35,25 @@ export function defineEchoModel(ai: Genkit): ModelAction {
     {
       name: 'echoModel',
     },
-    async (request, streamingCallback) => {
+    async (request, { streamingRequested, sendChunk }) => {
       (model as any).__test__lastRequest = request;
-      (model as any).__test__lastStreamingCallback = streamingCallback;
-      if (streamingCallback) {
-        streamingCallback({
+      (model as any).__test__lastStreamingRequested = streamingRequested;
+      if (streamingRequested) {
+        sendChunk({
           content: [
             {
               text: '3',
             },
           ],
         });
-        streamingCallback({
+        sendChunk({
           content: [
             {
               text: '2',
             },
           ],
         });
-        streamingCallback({
+        sendChunk({
           content: [
             {
               text: '1',

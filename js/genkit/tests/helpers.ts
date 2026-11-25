@@ -34,10 +34,10 @@ export function defineEchoModel(
       name: 'echoModel',
       ...options,
     },
-    async (request, sendChunk) => {
+    async (request, { streamingRequested, sendChunk }) => {
       (model as any).__test__lastRequest = request;
-      (model as any).__test__lastStreamingCallback = sendChunk;
-      if (sendChunk) {
+      (model as any).__test__lastStreamingRequested = streamingRequested;
+      if (streamingRequested) {
         await runAsync(() => {
           sendChunk({
             content: [
@@ -154,9 +154,12 @@ export function defineProgrammableModel(ai: Genkit): ProgrammableModel {
         tools: true,
       },
     },
-    async (request, sendChunk) => {
+    async (request, { streamingRequested, sendChunk }) => {
       pm.lastRequest = JSON.parse(JSON.stringify(request));
-      return pm.handleResponse(request, sendChunk);
+      return pm.handleResponse(
+        request,
+        streamingRequested ? sendChunk : undefined
+      );
     }
   ) as ProgrammableModel;
 
