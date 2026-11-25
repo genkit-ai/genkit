@@ -266,7 +266,7 @@ func (s *SystemOne) Init(ctx context.Context) []api.Action {
 	for key, values := range s.Headers {
 		headers[http.CanonicalHeaderKey(key)] = slices.Clone(values)
 	}
-	s.client = &systemone.Client{
+	client := &systemone.Client{
 		HTTP:    cmp.Or(s.HTTPClient, &http.Client{Timeout: systemone.RequestTimeout}),
 		BaseURL: strings.TrimSuffix(baseURL, "/"),
 		APIKey:  apiKey,
@@ -280,14 +280,15 @@ func (s *SystemOne) Init(ctx context.Context) []api.Action {
 		},
 	}
 	if newTransport := s.preset.transport; newTransport != nil {
-		transport, err := newTransport(ctx, s.client)
+		transport, err := newTransport(ctx, client)
 		if err != nil {
 			panic(s.Provider + ": " + err.Error())
 		}
 		// The native listing does not apply to a server reached on its
 		// own client, and would send the key over the native wire.
-		s.client.Endpoint.Transport, s.client.Endpoint.ModelsPath = transport, ""
+		client.Endpoint.Transport, client.Endpoint.ModelsPath = transport, ""
 	}
+	s.client = client
 	return nil
 }
 
