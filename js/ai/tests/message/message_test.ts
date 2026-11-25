@@ -16,7 +16,7 @@
 
 import * as assert from 'assert';
 import { describe, it } from 'node:test';
-import { Message } from '../../src/message';
+import { Message } from '../../src/message.js';
 
 describe('Message', () => {
   describe('.parseData()', () => {

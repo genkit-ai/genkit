@@ -18,12 +18,12 @@ import type { MessageData } from '@genkit-ai/ai';
 import type { BaseEvalDataPoint } from '@genkit-ai/ai/evaluator';
 import type { DefineModelOptions, ModelAction } from '@genkit-ai/ai/model';
 import type { StreamingCallback } from '@genkit-ai/core';
-import type { Genkit } from '../src/genkit';
+import type { Genkit } from '../src/genkit.js';
 import type {
   GenerateRequest,
   GenerateResponseChunkData,
   GenerateResponseData,
-} from '../src/model';
+} from '../src/model.js';
 
 export function defineEchoModel(
   ai: Genkit,

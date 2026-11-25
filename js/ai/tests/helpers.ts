@@ -23,7 +23,7 @@ import {
   type GenerateResponseData,
   type ModelAction,
   type ModelInfo,
-} from '../src/model';
+} from '../src/model.js';
 
 export async function runAsync<O>(fn: () => O): Promise<O> {
   return new Promise((resolve) => {

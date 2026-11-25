@@ -16,7 +16,7 @@
 
 import * as assert from 'assert';
 import { describe, it } from 'node:test';
-import { extractItems, extractJson, parsePartialJson } from '../src/extract';
+import { extractItems, extractJson, parsePartialJson } from '../src/extract.js';
 
 describe('extract', () => {
   describe('extractItems', () => {

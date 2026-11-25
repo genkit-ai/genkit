@@ -17,8 +17,8 @@
 import { logger } from '@genkit-ai/core/logging';
 import * as assert from 'assert';
 import { beforeEach, describe, it, mock } from 'node:test';
-import { genkit, type GenkitBeta } from '../src/beta';
-import { tool } from '../src/index';
+import { genkit, type GenkitBeta } from '../src/beta.js';
+import { tool } from '../src/index.js';
 import {
   backgroundModel,
   embedderActionMetadata,
@@ -26,8 +26,8 @@ import {
   genkitPluginV2,
   model,
   modelActionMetadata,
-} from '../src/plugin';
-import { defineEchoModel } from './helpers';
+} from '../src/plugin.js';
+import { defineEchoModel } from './helpers.js';
 
 const v1Plugin = genkitPlugin(
   'myV1Plugin',

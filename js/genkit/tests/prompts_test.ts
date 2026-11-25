@@ -18,14 +18,14 @@ import { modelRef, type ModelMiddleware } from '@genkit-ai/ai/model';
 import { stripUndefinedProps } from '@genkit-ai/core';
 import * as assert from 'assert';
 import { beforeEach, describe, it } from 'node:test';
-import { genkit, z, type GenkitBeta } from '../src/beta';
-import type { PromptAction } from '../src/index';
+import { genkit, z, type GenkitBeta } from '../src/beta.js';
+import type { PromptAction } from '../src/index.js';
 import {
   defineEchoModel,
   defineProgrammableModel,
   defineStaticResponseModel,
   type ProgrammableModel,
-} from './helpers';
+} from './helpers.js';
 
 const wrapRequest: ModelMiddleware = async (req, next) => {
   return next({

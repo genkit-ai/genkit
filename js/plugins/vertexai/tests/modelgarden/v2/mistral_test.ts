@@ -27,7 +27,7 @@ import {
   fromMistralResponse,
   toMistralRequest,
   type MistralConfigSchema,
-} from '../../../src/modelgarden/v2/mistral';
+} from '../../../src/modelgarden/v2/mistral.js';
 
 const MODEL_ID = 'mistral-large-2411';
 

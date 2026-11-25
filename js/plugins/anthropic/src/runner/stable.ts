@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { MessageStream } from '@anthropic-ai/sdk/lib/MessageStream.js';
+import { MessageStream } from '@anthropic-ai/sdk/lib/MessageStream';
 import type {
   ContentBlock,
   DocumentBlockParam,

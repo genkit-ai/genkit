@@ -1034,7 +1034,7 @@ describe('generate', () => {
 
 describe('generate failures', () => {
   let registry: Registry;
-  let modelCalls: number;
+  let modelCalls = 0;
 
   beforeEach(() => {
     registry = new Registry();

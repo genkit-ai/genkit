@@ -17,7 +17,7 @@
 import { GenerateRequest } from 'genkit';
 import { EmbedRequest } from 'genkit/embedder';
 import OpenAI from 'openai';
-import { PluginOptions } from '.';
+import type { PluginOptions } from './index.js';
 
 /**
  * Inspects the request and if apiKey is provided in config, creates a new client.

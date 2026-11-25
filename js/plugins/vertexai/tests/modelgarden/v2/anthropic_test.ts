@@ -22,7 +22,7 @@ import {
   fromAnthropicResponse,
   toAnthropicRequest,
   type AnthropicConfigSchema,
-} from '../../../src/modelgarden/v2/anthropic';
+} from '../../../src/modelgarden/v2/anthropic.js';
 
 const MODEL_ID = 'modelid';
 

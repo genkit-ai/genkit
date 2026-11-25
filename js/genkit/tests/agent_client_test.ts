@@ -16,7 +16,7 @@
 
 import * as assert from 'assert';
 import { afterEach, beforeEach, describe, it } from 'node:test';
-import { AgentError, remoteAgent } from '../src/client/agent';
+import { AgentError, remoteAgent } from '../src/client/agent.js';
 // Custom-transport tests import from the public entry point on purpose, to
 // verify everything needed is exported from `genkit/beta/client`.
 import {
@@ -29,7 +29,7 @@ import {
   type AgentTransport,
   type SessionSnapshot,
   type SnapshotLookup,
-} from '../src/client/index';
+} from '../src/client/index.js';
 
 // ---------------------------------------------------------------------------
 // Test transport: a fake `fetch` that drives the streamFlow/runFlow protocol.
