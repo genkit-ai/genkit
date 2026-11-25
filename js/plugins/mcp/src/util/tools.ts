@@ -97,17 +97,32 @@ export function toToolResponse(
   };
 }
 
-/**
- * Whether `text` is the JSON serialization of `value`. Compares serialized
- * forms, so it's key-order sensitive; servers normally serialize the same
- * object they return.
- */
+/** Whether `text` is the JSON serialization of `value` (key order ignored). */
 function isJsonOf(text: string, value: unknown): boolean {
   try {
-    return JSON.stringify(JSON.parse(text)) === JSON.stringify(value);
+    return jsonEqual(JSON.parse(text), value);
   } catch {
     return false;
   }
+}
+
+function jsonEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== 'object' || typeof b !== 'object' || !a || !b) return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  const ka = Object.keys(a);
+  const kb = Object.keys(b);
+  return (
+    ka.length === kb.length &&
+    ka.every(
+      (k) =>
+        Object.prototype.hasOwnProperty.call(b, k) &&
+        jsonEqual(
+          (a as Record<string, unknown>)[k],
+          (b as Record<string, unknown>)[k]
+        )
+    )
+  );
 }
 
 type ContentBlock = CallToolResult['content'][number];

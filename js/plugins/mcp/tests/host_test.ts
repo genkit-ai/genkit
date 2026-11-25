@@ -368,10 +368,11 @@ describe('createMcpHost', () => {
 
       fakeTransport.callToolResult = {
         content: [
-          { type: 'text', text: '{"status":"ok"}' },
+          { type: 'text', text: '{"code":1,"status":"ok"}' },
           { type: 'text', text: 'All good.' },
         ],
-        structuredContent: { status: 'ok' },
+        // Same data, different key order: still recognized as a duplicate.
+        structuredContent: { status: 'ok', code: 1 },
       };
 
       const tool = (await structuredHost.getActiveTools(ai))[0];
@@ -379,9 +380,9 @@ describe('createMcpHost', () => {
       await structuredHost.close();
 
       assert.deepStrictEqual(response, {
-        output: { status: 'ok' },
+        output: { status: 'ok', code: 1 },
         content: [{ text: 'All good.' }],
-        metadata: { mcp: { structuredContent: { status: 'ok' } } },
+        metadata: { mcp: { structuredContent: { status: 'ok', code: 1 } } },
       });
     });
 
