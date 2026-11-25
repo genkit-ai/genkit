@@ -268,24 +268,57 @@ func TestJSONFormatter(t *testing.T) {
 		}
 	})
 
-	t.Run("ParseChunk parses a scalar once it is complete", func(t *testing.T) {
-		handler, _ := jsonFormatter{}.Handler(map[string]any{"type": "string"})
+	t.Run("ParseChunk holds a scalar root back", func(t *testing.T) {
+		handler, _ := jsonFormatter{}.Handler(map[string]any{"type": "integer"})
 		sfh := handler.(StreamingFormatHandler)
 
-		got, err := sfh.ParseChunk(&ModelResponseChunk{Content: []*Part{NewTextPart(`"hel`)}})
-		if err != nil {
-			t.Fatalf("ParseChunk() error = %v", err)
+		for _, part := range []string{"4", "2"} {
+			got, err := sfh.ParseChunk(&ModelResponseChunk{Content: []*Part{NewTextPart(part)}})
+			if err != nil {
+				t.Fatalf("ParseChunk() error = %v", err)
+			}
+			if got != nil {
+				t.Errorf("ParseChunk(%q) = %#v, want nil", part, got)
+			}
 		}
-		if got != nil {
-			t.Errorf("ParseChunk() partial = %#v, want nil", got)
-		}
+	})
 
-		got, err = sfh.ParseChunk(&ModelResponseChunk{Content: []*Part{NewTextPart(`lo"`)}})
-		if err != nil {
-			t.Fatalf("ParseChunk() error = %v", err)
+	t.Run("only a scalar schema root parses the whole text", func(t *testing.T) {
+		tests := []struct {
+			desc   string
+			schema map[string]any
+		}{
+			{"no schema", nil},
+			{"object root", map[string]any{"type": "object"}},
+			{"array root", map[string]any{"type": "array"}},
+			{"root without a type", map[string]any{"$ref": "#/$defs/T"}},
 		}
-		if got != "hello" {
-			t.Errorf("ParseChunk() = %#v, want %q", got, "hello")
+		for _, tt := range tests {
+			t.Run(tt.desc, func(t *testing.T) {
+				handler, _ := jsonFormatter{}.Handler(tt.schema)
+				got, err := handler.(*jsonHandler).parseJSON("42", hasScalarRoot(tt.schema))
+				if err != nil {
+					t.Fatalf("parseJSON() error = %v", err)
+				}
+				if got != nil {
+					t.Errorf("parseJSON() = %#v, want nil", got)
+				}
+			})
+		}
+	})
+
+	t.Run("ParseChunk with an object root ignores leading prose", func(t *testing.T) {
+		handler, _ := jsonFormatter{}.Handler(map[string]any{"type": "object"})
+		sfh := handler.(StreamingFormatHandler)
+
+		for _, part := range []string{"2", " results:\n", "```json\n{\"a\": 1}\n```"} {
+			got, err := sfh.ParseChunk(&ModelResponseChunk{Content: []*Part{NewTextPart(part)}})
+			if err != nil {
+				t.Fatalf("ParseChunk() error = %v", err)
+			}
+			if _, isNumber := got.(float64); isNumber {
+				t.Fatalf("ParseChunk(%q) = %#v, want the leading number ignored", part, got)
+			}
 		}
 	})
 
