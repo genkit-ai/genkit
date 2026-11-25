@@ -588,13 +588,13 @@ describe('runWithManager', () => {
   it.each([
     {
       name: 'lowers info level to warn during ephemeral startup and restores it afterward',
-      initialLevel: 'info',
-      expectedDuringStartup: 'warn',
+      initialLevel: 'info' as const,
+      expectedDuringStartup: 'warn' as const,
     },
     {
       name: 'preserves debug level during ephemeral startup',
-      initialLevel: 'debug',
-      expectedDuringStartup: 'debug',
+      initialLevel: 'debug' as const,
+      expectedDuringStartup: 'debug' as const,
     },
   ])('$name', async ({ initialLevel, expectedDuringStartup }) => {
     const origLevel = logger.level;

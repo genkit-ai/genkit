@@ -89,7 +89,7 @@ function emit(level: LogLevel, args: unknown[]): void {
 }
 
 export interface Logger {
-  level: string;
+  level: LogLevel;
   debug(...args: unknown[]): void;
   info(...args: unknown[]): void;
   warn(...args: unknown[]): void;
