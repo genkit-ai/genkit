@@ -1,6 +1,6 @@
 # Flow + AI Kitchen Sink
 
-Comprehensive test app that exercises nearly every Genkit feature — generation,
+Comprehensive test app that exercises nearly every Genkit feature: generation,
 streaming, structured output, tool calling, Dotprompt, RAG, multimodal,
 evaluators, TTS, and custom model middleware. Uses Google AI (Gemini) with
 Google Cloud telemetry.
@@ -14,7 +14,7 @@ Google Cloud telemetry.
 | Streaming JSON | `streamJsonFlow` | Stream structured JSON (RPG characters) |
 | Structured Output | `jokeWithOutputFlow` | JSON output with Zod schema |
 | Multimodal | `multimodalFlow` | Describe an image from URL |
-| RAG | `ragFlow` | Retrieval-augmented generation |
+| RAG | `searchDestinations` | Retrieval-augmented generation with Firestore vector search |
 | Dotprompt | `dotpromptContext` | Prompt templates with context |
 | Tool Calling | `toolTester` | Generate joke using a tool |
 | Math Tool | `gablorkenFlow` | Custom gablorken calculator tool |
@@ -61,20 +61,20 @@ pnpm start
 1. **Open DevUI** at http://localhost:4000
 
 2. **Test basic flows**:
-   - [ ] `jokeFlow` — Joke generation (input: `{"modelName": "vertexai/gemini-2.5-pro", "subject": "cats"}`)
-   - [ ] `streamFlowVertex` — Streaming response
-   - [ ] `streamJsonFlow` — Streaming JSON (RPG characters)
+   - [ ] `jokeFlow`: Joke generation (input: `{"modelName": "vertexai/gemini-3.1-pro-preview", "subject": "cats"}`)
+   - [ ] `streamFlowVertex`: Streaming response
+   - [ ] `streamJsonFlow`: Streaming JSON (RPG characters)
 
 3. **Test structured output**:
-   - [ ] `jokeWithOutputFlow` — JSON output with schema
+   - [ ] `jokeWithOutputFlow`: JSON output with schema
 
 4. **Test tools**:
-   - [ ] `toolTester` — Tool-assisted joke generation
-   - [ ] `gablorkenFlow` — Gablorken calculator
+   - [ ] `toolTester`: Tool-assisted joke generation
+   - [ ] `gablorkenFlow`: Gablorken calculator
 
 5. **Test multimodal + RAG**:
-   - [ ] `multimodalFlow` — Image description
-   - [ ] `ragFlow` — Retrieval-augmented generation
+   - [ ] `multimodalFlow`: Image description
+   - [ ] `searchDestinations`: retrieval-augmented generation (needs a Firestore `destinations` collection with a vector index on `embedding`)
 
 6. **Expected behavior**:
    - All flows complete without errors

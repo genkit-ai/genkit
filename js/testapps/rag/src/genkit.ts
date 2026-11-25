@@ -14,25 +14,10 @@
  * limitations under the License.
  */
 
-import { devLocalVectorstore } from '@genkit-ai/dev-local-vectorstore';
 import { GenkitMetric, genkitEval } from '@genkit-ai/evaluator';
 import { googleAI } from '@genkit-ai/google-genai';
 import { vertexModelGarden } from '@genkit-ai/vertexai/modelgarden';
 import { genkit } from 'genkit';
-import { chroma } from 'genkitx-chromadb';
-import { pinecone } from 'genkitx-pinecone';
-import { GoogleAuth, type IdTokenClient } from 'google-auth-library';
-
-const auth = new GoogleAuth();
-let authClient: IdTokenClient | undefined = undefined;
-
-/** Helper method to cache {@link IdTokenClient} instance */
-async function getCloudRunAuthClient(aud: string) {
-  if (!authClient) {
-    authClient = await auth.getIdTokenClient(aud);
-  }
-  return authClient;
-}
 
 export const ai = genkit({
   plugins: [
@@ -40,47 +25,6 @@ export const ai = genkit({
     vertexModelGarden({
       location: 'us-central1',
     }),
-    pinecone([
-      {
-        indexId: 'cat-facts',
-        embedder: googleAI.embedder('gemini-embedding-001'),
-      },
-      {
-        indexId: 'pdf-chat',
-        embedder: googleAI.embedder('gemini-embedding-001'),
-      },
-    ]),
-    chroma([
-      {
-        collectionName: 'dogfacts_collection',
-        embedder: googleAI.embedder('gemini-embedding-001'),
-        createCollectionIfMissing: true,
-        clientParams: async () => {
-          // Replace this with your Cloud Run Instance URL
-          const host = 'https://<my-cloud-run-url>.run.app';
-          const client = await getCloudRunAuthClient(host);
-          const idToken = await client.idTokenProvider.fetchIdToken(host);
-          return {
-            path: host,
-            fetchOptions: {
-              headers: {
-                Authorization: 'Bearer ' + idToken,
-              },
-            },
-          };
-        },
-      },
-    ]),
-    devLocalVectorstore([
-      {
-        indexName: 'dog-facts',
-        embedder: googleAI.embedder('gemini-embedding-001'),
-      },
-      {
-        indexName: 'pdfQA',
-        embedder: googleAI.embedder('gemini-embedding-001'),
-      },
-    ]),
     genkitEval({
       judge: googleAI.model('gemini-flash-latest'),
       judgeConfig: {
@@ -102,7 +46,7 @@ export const ai = genkit({
             threshold: 'BLOCK_NONE',
           },
         ],
-      } as any,
+      },
       metrics: [GenkitMetric.FAITHFULNESS, GenkitMetric.MALICIOUSNESS],
     }),
   ],

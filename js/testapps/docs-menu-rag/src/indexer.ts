@@ -14,30 +14,25 @@
  * limitations under the License.
  */
 
-import { devLocalIndexerRef } from '@genkit-ai/dev-local-vectorstore';
 import { readFile } from 'fs/promises';
-import { z } from 'genkit';
-import { Document } from 'genkit/retriever';
+import { Document, z } from 'genkit';
 import { chunk } from 'llm-chunk';
 import path from 'path';
 import pdf from 'pdf-parse';
-import { ai } from './genkit.js';
-
-// Create a reference to the configured local indexer.
-export const menuPdfIndexer = devLocalIndexerRef('menuQA');
+import { ai, menuStore } from './genkit.js';
 
 // Create chunking config for indexing a pdf of a menu
 // See full options in https://www.npmjs.com/package/llm-chunk
-const chunkingConfig = {
+const chunkingConfig: Parameters<typeof chunk>[1] = {
   minLength: 1000,
   maxLength: 2000,
   splitter: 'sentence',
   overlap: 100,
   delimiters: '',
-} as any;
+};
 
 // Define a flow to index documents into the "vector store"
-// genkit flow:run indexMenu '"./docs/.pdf"'
+// genkit flow:run indexMenu '"./docs/GenkitGrubPub.pdf"'
 export const indexMenu = ai.defineFlow(
   {
     name: 'indexMenu',
@@ -63,10 +58,7 @@ export const indexMenu = ai.defineFlow(
     });
 
     // Add documents to the index.
-    await ai.index({
-      indexer: menuPdfIndexer,
-      documents,
-    });
+    await menuStore.index(documents);
   }
 );
 

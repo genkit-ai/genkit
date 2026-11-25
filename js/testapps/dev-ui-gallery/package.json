@@ -24,15 +24,12 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
-    "@genkit-ai/dev-local-vectorstore": "workspace:*",
     "@genkit-ai/evaluator": "workspace:*",
     "@genkit-ai/google-genai": "workspace:*",
     "@genkit-ai/middleware": "workspace:*",
     "@genkit-ai/vertexai": "workspace:*",
     "firebase-functions": "^7.4.0",
     "genkit": "workspace:*",
-    "genkitx-chromadb": "workspace:*",
-    "genkitx-ollama": "workspace:*",
-    "genkitx-pinecone": "workspace:*"
+    "genkitx-ollama": "workspace:*"
   }
 }

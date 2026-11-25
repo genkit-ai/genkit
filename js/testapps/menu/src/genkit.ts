@@ -13,21 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import { devLocalVectorstore } from '@genkit-ai/dev-local-vectorstore';
 import { googleAI } from '@genkit-ai/google-genai';
 import { genkit } from 'genkit';
 
 // Initialize Genkit
 
 export const ai = genkit({
-  plugins: [
-    googleAI(),
-    devLocalVectorstore([
-      {
-        indexName: 'menu-items',
-        embedder: googleAI.embedder('gemini-embedding-001'),
-        embedderOptions: { taskType: 'RETRIEVAL_DOCUMENT' },
-      },
-    ]),
-  ],
+  plugins: [googleAI()],
 });

@@ -14,14 +14,13 @@
  * limitations under the License.
  */
 
-import { devLocalVectorstore } from '@genkit-ai/dev-local-vectorstore';
 import { GenkitMetric, genkitEval } from '@genkit-ai/evaluator';
 import { googleAI } from '@genkit-ai/google-genai';
 import { genkit } from 'genkit';
 
 // Turn off safety checks for evaluation so that the LLM as an evaluator can
 // respond appropriately to potentially harmful content without error.
-export const PERMISSIVE_SAFETY_SETTINGS: any = {
+export const PERMISSIVE_SAFETY_SETTINGS = {
   safetySettings: [
     {
       category: 'HARM_CATEGORY_HATE_SPEECH',
@@ -53,17 +52,17 @@ export const ai = genkit({
           judgeConfig: PERMISSIVE_SAFETY_SETTINGS,
         },
         {
+          // Needs eval context, see genkit-tools.conf.js.
+          type: GenkitMetric.FAITHFULNESS,
+          judge: googleAI.model('gemini-pro-latest'),
+          judgeConfig: PERMISSIVE_SAFETY_SETTINGS,
+        },
+        {
           type: GenkitMetric.ANSWER_ACCURACY,
           judge: googleAI.model('gemini-pro-latest'),
           judgeConfig: PERMISSIVE_SAFETY_SETTINGS,
         },
       ],
     }),
-    devLocalVectorstore([
-      {
-        indexName: 'pdfQA',
-        embedder: googleAI.embedder('gemini-embedding-001'),
-      },
-    ]),
   ],
 });

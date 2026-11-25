@@ -16,7 +16,7 @@
 
 import { z } from 'genkit';
 import { ai } from './genkit.js';
-import { indexMenu } from './indexer';
+import { indexMenu } from './indexer.js';
 
 const menus = ['./docs/GenkitGrubPub.pdf'];
 

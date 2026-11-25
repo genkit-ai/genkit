@@ -1339,9 +1339,6 @@ importers:
 
   testapps/dev-ui-gallery:
     dependencies:
-      '@genkit-ai/dev-local-vectorstore':
-        specifier: workspace:*
-        version: link:../../plugins/dev-local-vectorstore
       '@genkit-ai/evaluator':
         specifier: workspace:*
         version: link:../../plugins/evaluators
@@ -1360,15 +1357,9 @@ importers:
       genkit:
         specifier: workspace:*
         version: link:../../genkit
-      genkitx-chromadb:
-        specifier: workspace:*
-        version: link:../../plugins/chroma
       genkitx-ollama:
         specifier: workspace:*
         version: link:../../plugins/ollama
-      genkitx-pinecone:
-        specifier: workspace:*
-        version: link:../../plugins/pinecone
     devDependencies:
       genkit-cli:
         specifier: link:../../../genkit-tools/cli
@@ -1407,9 +1398,6 @@ importers:
 
   testapps/docs-menu-rag:
     dependencies:
-      '@genkit-ai/dev-local-vectorstore':
-        specifier: workspace:*
-        version: link:../../plugins/dev-local-vectorstore
       '@genkit-ai/google-genai':
         specifier: workspace:*
         version: link:../../plugins/google-genai
@@ -1422,6 +1410,9 @@ importers:
       pdf-parse:
         specifier: ^1.1.1
         version: 1.1.4
+      vectra:
+        specifier: ^0.15.0
+        version: 0.15.0(ws@8.20.1)(zod@4.6.7)
     devDependencies:
       '@types/pdf-parse':
         specifier: ^1.1.4
@@ -1469,9 +1460,6 @@ importers:
       '@genkit-ai/compat-oai':
         specifier: workspace:*
         version: link:../../plugins/compat-oai
-      '@genkit-ai/dev-local-vectorstore':
-        specifier: workspace:*
-        version: link:../../plugins/dev-local-vectorstore
       '@genkit-ai/evaluator':
         specifier: workspace:*
         version: link:../../plugins/evaluators
@@ -1499,18 +1487,9 @@ importers:
       genkit:
         specifier: workspace:*
         version: link:../../genkit
-      genkitx-chromadb:
-        specifier: workspace:*
-        version: link:../../plugins/chroma
-      genkitx-cloud-sql-pg:
-        specifier: workspace:*
-        version: link:../../plugins/cloud-sql-pg
       genkitx-ollama:
         specifier: workspace:*
         version: link:../../plugins/ollama
-      genkitx-pinecone:
-        specifier: workspace:*
-        version: link:../../plugins/pinecone
     devDependencies:
       genkit-cli:
         specifier: link:../../../genkit-tools/cli
@@ -1527,9 +1506,6 @@ importers:
 
   testapps/evals:
     dependencies:
-      '@genkit-ai/dev-local-vectorstore':
-        specifier: workspace:*
-        version: link:../../plugins/dev-local-vectorstore
       '@genkit-ai/evaluator':
         specifier: workspace:*
         version: link:../../plugins/evaluators
@@ -1548,6 +1524,9 @@ importers:
       pdfjs-dist-legacy:
         specifier: ^1.0.1
         version: 1.0.1
+      vectra:
+        specifier: ^0.15.0
+        version: 0.15.0(ws@8.20.1)(zod@4.6.7)
     devDependencies:
       genkit-cli:
         specifier: link:../../../genkit-tools/cli
@@ -1747,15 +1726,15 @@ importers:
 
   testapps/menu:
     dependencies:
-      '@genkit-ai/dev-local-vectorstore':
-        specifier: workspace:*
-        version: link:../../plugins/dev-local-vectorstore
       '@genkit-ai/google-genai':
         specifier: workspace:*
         version: link:../../plugins/google-genai
       genkit:
         specifier: workspace:*
         version: link:../../genkit
+      vectra:
+        specifier: ^0.15.0
+        version: 0.15.0(ws@8.20.1)(zod@4.6.7)
     devDependencies:
       genkit-cli:
         specifier: link:../../../genkit-tools/cli
@@ -1850,9 +1829,6 @@ importers:
 
   testapps/multimodal:
     dependencies:
-      '@genkit-ai/dev-local-vectorstore':
-        specifier: workspace:*
-        version: link:../../plugins/dev-local-vectorstore
       '@genkit-ai/google-genai':
         specifier: workspace:*
         version: link:../../plugins/google-genai
@@ -1862,15 +1838,6 @@ importers:
       genkit:
         specifier: workspace:*
         version: link:../../genkit
-      genkitx-chromadb:
-        specifier: workspace:*
-        version: link:../../plugins/chroma
-      genkitx-pinecone:
-        specifier: workspace:*
-        version: link:../../plugins/pinecone
-      google-auth-library:
-        specifier: ^9.14.2
-        version: 9.15.1(encoding@0.1.13)
       llm-chunk:
         specifier: ^0.0.1
         version: 0.0.1
@@ -1880,6 +1847,9 @@ importers:
       pdf-parse:
         specifier: ^1.1.1
         version: 1.1.4
+      vectra:
+        specifier: ^0.15.0
+        version: 0.15.0(ws@8.20.1)(zod@4.6.7)
     devDependencies:
       '@types/pdf-parse':
         specifier: ^1.1.4
@@ -1981,9 +1951,6 @@ importers:
 
   testapps/rag:
     dependencies:
-      '@genkit-ai/dev-local-vectorstore':
-        specifier: workspace:*
-        version: link:../../plugins/dev-local-vectorstore
       '@genkit-ai/evaluator':
         specifier: workspace:*
         version: link:../../plugins/evaluators
@@ -2002,21 +1969,15 @@ importers:
       genkit:
         specifier: workspace:*
         version: link:../../genkit
-      genkitx-chromadb:
-        specifier: workspace:*
-        version: link:../../plugins/chroma
-      genkitx-pinecone:
-        specifier: workspace:*
-        version: link:../../plugins/pinecone
-      google-auth-library:
-        specifier: ^9.14.2
-        version: 9.15.1(encoding@0.1.13)
       llm-chunk:
         specifier: ^0.0.1
         version: 0.0.1
       pdf-parse:
         specifier: ^1.1.1
         version: 1.1.4
+      vectra:
+        specifier: ^0.15.0
+        version: 0.15.0(ws@8.20.1)(zod@4.6.7)
     devDependencies:
       '@types/pdf-parse':
         specifier: ^1.1.4
@@ -2174,100 +2135,6 @@ importers:
       genkit-cli:
         specifier: link:../../../genkit-tools/cli
         version: link:../../../genkit-tools/cli
-      tsx:
-        specifier: ^4.21.0
-        version: 4.21.0
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-
-  testapps/vertexai-reranker:
-    dependencies:
-      '@genkit-ai/vertexai':
-        specifier: workspace:*
-        version: link:../../plugins/vertexai
-      dotenv:
-        specifier: ^18.0.8
-        version: 18.0.8
-      genkit:
-        specifier: workspace:*
-        version: link:../../genkit
-    devDependencies:
-      genkit-cli:
-        specifier: link:../../../genkit-tools/cli
-        version: link:../../../genkit-tools/cli
-      rimraf:
-        specifier: ^6.0.1
-        version: 6.1.3
-      tsx:
-        specifier: ^4.21.0
-        version: 4.21.0
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-
-  testapps/vertexai-vector-search-bigquery:
-    dependencies:
-      '@genkit-ai/vertexai':
-        specifier: workspace:*
-        version: link:../../plugins/vertexai
-      '@google-cloud/bigquery':
-        specifier: ^7.8.0
-        version: 7.9.4(encoding@0.1.13)
-      dotenv:
-        specifier: ^18.0.8
-        version: 18.0.8
-      genkit:
-        specifier: workspace:*
-        version: link:../../genkit
-    devDependencies:
-      rimraf:
-        specifier: ^6.0.1
-        version: 6.1.3
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-
-  testapps/vertexai-vector-search-custom:
-    dependencies:
-      '@genkit-ai/vertexai':
-        specifier: workspace:*
-        version: link:../../plugins/vertexai
-      dotenv:
-        specifier: ^18.0.8
-        version: 18.0.8
-      genkit:
-        specifier: workspace:*
-        version: link:../../genkit
-    devDependencies:
-      rimraf:
-        specifier: ^6.0.1
-        version: 6.1.3
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-
-  testapps/vertexai-vector-search-firestore:
-    dependencies:
-      '@genkit-ai/vertexai':
-        specifier: workspace:*
-        version: link:../../plugins/vertexai
-      dotenv:
-        specifier: ^18.0.8
-        version: 18.0.8
-      firebase-admin:
-        specifier: ^13.8.0
-        version: 13.8.0(encoding@0.1.13)
-      genkit:
-        specifier: workspace:*
-        version: link:../../genkit
-    devDependencies:
-      genkit-cli:
-        specifier: link:../../../genkit-tools/cli
-        version: link:../../../genkit-tools/cli
-      rimraf:
-        specifier: ^6.0.1
-        version: 6.1.3
       tsx:
         specifier: ^4.21.0
         version: 4.21.0
@@ -4245,6 +4112,9 @@ packages:
 
   '@mistralai/mistralai-gcp@1.7.0':
     resolution: {integrity: sha512-0RsClXspFiPUE4/9aBQXxNVjXDYFxkASXR/pxnX+2N689DF1d5Fx6Ax+tXH/n3K87iSevO2qBTprvUOwmF/ApQ==}
+
+  '@mixmark-io/domino@2.2.0':
+    resolution: {integrity: sha512-Y28PR25bHXUg88kCV7nivXrP2Nj2RueZ3/l/jdx6J9f8J4nsEGcgX0Qe6lt7Pa+J79+kPiJU3LguR6O/6zrLOw==}
 
   '@modelcontextprotocol/sdk@1.29.0':
     resolution: {integrity: sha512-zo37mZA9hJWpULgkRpowewez1y6ML5GsXJPY8FI0tBBCd77HEvza4jDqRKOXgHNn867PVGCyTdzqpz0izu5ZjQ==}
@@ -7538,6 +7408,13 @@ packages:
     engines: {node: '>=8.3.0'}
     hasBin: true
 
+  cheerio-select@2.1.0:
+    resolution: {integrity: sha512-9v9kG0LvzrlcungtnJtpGNxY+fzECQKhK4EGJX2vByejiMX84MFNQw4UxPJl3bFbTMw+Dfs37XaIkCwTZfLh4g==}
+
+  cheerio@1.2.0:
+    resolution: {integrity: sha512-WDrybc/gKFpTYQutKIK6UvfcuxijIZfMfXaYm8NMsPQxSYvf+13fXUJ4rztGGbJcBQ/GF55gvrZ0Bc0bj/mqvg==}
+    engines: {node: '>=20.18.1'}
+
   chokidar@3.6.0:
     resolution: {integrity: sha512-7VT13fmjotKpGipCW9JEQAusEPE+Ei8nl6/g4FBAmIm0GOOLMua9NDDo/DWp0ZAxCr3cPq5ZpBqmPAQgDda2Pw==}
     engines: {node: '>= 8.10.0'}
@@ -7867,8 +7744,15 @@ packages:
     resolution: {integrity: sha512-v1plID3y9r/lPhviJ1wrXpLeyUIGAZ2SHNYTEapm7/8A9nLPoyvVp3RK/EPFqn5kEznyWgYZNsRtYYIWbuG8KA==}
     engines: {node: '>=8'}
 
+  css-select@5.2.2:
+    resolution: {integrity: sha512-TizTzUddG/xYLA3NXodFM0fSbNizXjOKhqiQQwvhlspadZokn1KDy0NZFS0wuEubIYAV5/c1/lAr0TaaFXEXzw==}
+
   css-select@6.0.0:
     resolution: {integrity: sha512-rZZVSLle8v0+EY8QAkDWrKhpgt6SA5OtHsgBnsj6ZaLb5dmDVOWUDtQitd9ydxxvEjhewNudS6eTVU7uOyzvXw==}
+
+  css-what@6.2.2:
+    resolution: {integrity: sha512-u/O3vwbptzhMs3L1fQE82ZSLHQQfto5gyZzwteVIEyeaY5Fc7R4dapF/BvRoSYFeqfBk4m0V1Vafq5Pjv25wvA==}
+    engines: {node: '>= 6'}
 
   css-what@7.0.0:
     resolution: {integrity: sha512-wD5oz5xibMOPHzy13CyGmogB3phdvcDaB5t0W/Nr5Z2O/agcB8YwOz6e2Lsp10pNDzBoDO9nVa3RGs/2BttpHQ==}
@@ -8331,6 +8215,9 @@ packages:
   encodeurl@2.0.0:
     resolution: {integrity: sha512-Q0n9HRi4m6JuGIV1eFlmvJB7ZEVxu93IrMyiMsGC0lrMJMWzRgx6WGquyfQgZVb31vhGgXnfmPNNXmxnOkRBrg==}
     engines: {node: '>= 0.8'}
+
+  encoding-sniffer@0.2.1:
+    resolution: {integrity: sha512-5gvq20T6vfpekVtqrYQsSCFZ1wEg5+wW0/QaZMWkFr6BqD3NfKs0rLCx4rrVlSWJeZb5NBJgVLswK/w2MWU+Gw==}
 
   encoding@0.1.13:
     resolution: {integrity: sha512-ETBauow1T35Y/WZMkio9jiM0Z5xjHHmJ4XmjZOq1l/dXz3lr2sRn87nJy20RupqSh1F2m3HHPSp8ShIPQJrJ3A==}
@@ -9140,6 +9027,9 @@ packages:
     resolution: {integrity: sha512-ZUKRh6/kUFoAiTAtTYPZJ3hw9wNxx+BIBOijnlG9PnrJsCcSjs1wyyD6vJpaYtgnzDrKYRSqf3OO6Rfa93xsRg==}
     engines: {node: '>= 0.4'}
 
+  gpt-tokenizer@3.4.0:
+    resolution: {integrity: sha512-wxFLnhIXTDjYebd9A9pGl3e31ZpSypbpIJSOswbgop5jLte/AsZVDvjlbEuVFlsqZixVKqbcoNmRlFDf6pz/UQ==}
+
   graceful-fs@4.2.10:
     resolution: {integrity: sha512-9ByhssR2fPVsNZj478qUUbKfmL0+t5BDVyjShtyZZLiK7ZDAArFFfopyOTj0M05wE2tJPisA4iTnnXl2YoPvOA==}
 
@@ -9943,6 +9833,9 @@ packages:
 
   json-buffer@3.0.1:
     resolution: {integrity: sha512-4bV5BfR2mqfQTJm+V5tPPdf+ZpuhiIvTuAB5g8kcrXOZpTT/QwwVRWBywX1ozr6lEuPdbHxwaJlm9G6mI2sfSQ==}
+
+  json-colorizer@3.0.1:
+    resolution: {integrity: sha512-4YyRAbD6eHeRnJD9vo0zjiU5fyY9QR6T+iYuH5DpO0XPThKWozpD4MaeY/8nLZIkHC3yEQMFLL+6P94E+JekDw==}
 
   json-parse-even-better-errors@2.3.1:
     resolution: {integrity: sha512-xyFwyhro/JEof6Ghe2iz2NcXoj2sloNsWr/XsERDK/oiPCfaNhl5ONfp+jQdAZRQQ0IJWNzH9zIZF7li91kh2w==}
@@ -11161,6 +11054,26 @@ packages:
       zod:
         optional: true
 
+  openai@6.49.0:
+    resolution: {integrity: sha512-aYCc0C6L864eR6WSYIwQGyXriw/nIyZx0ObvhzOEVuk0zoBDpynjSbrionWI7q65B5H8jJX0DXR9snEzM6bfPg==}
+    peerDependencies:
+      '@aws-sdk/credential-provider-node': '>=3.972.0 <4'
+      '@smithy/hash-node': '>=4.3.0 <5'
+      '@smithy/signature-v4': '>=5.4.0 <6'
+      ws: ^8.18.0
+      zod: ^3.25 || ^4.0
+    peerDependenciesMeta:
+      '@aws-sdk/credential-provider-node':
+        optional: true
+      '@smithy/hash-node':
+        optional: true
+      '@smithy/signature-v4':
+        optional: true
+      ws:
+        optional: true
+      zod:
+        optional: true
+
   openapi3-ts@3.2.0:
     resolution: {integrity: sha512-/ykNWRV5Qs0Nwq7Pc0nJ78fgILvOT/60OxEmB3v7yQ8a8Bwcm43D4diaYazG/KBn6czA+52XYy931WFLMCUeSg==}
 
@@ -11271,6 +11184,12 @@ packages:
 
   parse5-htmlparser2-tree-adapter@6.0.1:
     resolution: {integrity: sha512-qPuWvbLgvDGilKc5BoicRovlT4MtYT6JfJyBOMDsKoiT+GiuP5qyrPCnR9HcPECIJJmZh5jRndyNThnhhb/vlA==}
+
+  parse5-htmlparser2-tree-adapter@7.1.0:
+    resolution: {integrity: sha512-ruw5xyKs6lrpo9x9rCZqZZnIUntICjQAd0Wsmp396Ul9lN/h+ifgVV1x1gZHi8euej6wTfpqX8j+BFQxF0NS/g==}
+
+  parse5-parser-stream@7.1.2:
+    resolution: {integrity: sha512-JyeQc9iwFLn5TbvvqACIF/VXG6abODeB3Fwmv/TGdLk2LfbWkaySGY72at4+Ty7EkPZj854u4CrICqNk2qIbow==}
 
   parse5-sax-parser@8.0.0:
     resolution: {integrity: sha512-/dQ8UzHZwnrzs3EvDj6IkKrD/jIZyTlB+8XrHJvcjNgRdmWruNdN9i9RK/JtxakmlUdPwKubKPTCqvbTgzGhrw==}
@@ -11580,6 +11499,10 @@ packages:
 
   protobufjs@7.5.4:
     resolution: {integrity: sha512-CvexbZtbov6jW2eXAvLukXjXUW1TzFaivC46BpWc/3BpcCysb5Vffu+B3XHMm8lVEuy2Mm4XGex8hBSg1yapPg==}
+    engines: {node: '>=12.0.0'}
+
+  protobufjs@8.8.1:
+    resolution: {integrity: sha512-d9e9179bjXSJdpJ3+R9fP8hzXsnKLyxTjHLG1dUzje8a27pPyXCe6PrcRtgx2rjoM3IZzHd2vAs+6J/BsO1k7Q==}
     engines: {node: '>=12.0.0'}
 
   proxy-addr@2.0.7:
@@ -12740,6 +12663,10 @@ packages:
     resolution: {integrity: sha512-50QV99kCKH5P/Vs4E2Gzp7BopNV+KzTXqWeaxrfu5IQJBOULRsTIS9seSsOVT8ZnGXzCyx55nYWAi4qJzpZKEQ==}
     engines: {node: ^20.17.0 || >=22.9.0}
 
+  turndown@7.2.4:
+    resolution: {integrity: sha512-I8yFsfRzmzK0WV1pNNOA4A7y4RDfFxPRxb3t+e3ui14qSGOxGtiSP6GjeX+Y6CHb7HYaFj7ECUD7VE5kQMZWGQ==}
+    engines: {node: '>=18', npm: '>=9'}
+
   tw-animate-css@1.4.0:
     resolution: {integrity: sha512-7bziOlRqH0hJx80h/3mbicLW7o8qLsH5+RaLR2t+OHM3D0JlWGODQKQ4cxbK7WlvmUxpcj6Kgu6EKqjrGFe3QQ==}
 
@@ -12997,6 +12924,10 @@ packages:
     resolution: {integrity: sha512-0/A9rDy9P7cJ+8w1c9WD9V//9Wj15Ce2MPz8Ri6032usz+NfePxx5AcN3bN+r6ZL6jEo066/yNYB3tn4pQEx+A==}
     hasBin: true
 
+  uuid@13.0.2:
+    resolution: {integrity: sha512-vzi9uRZ926x4XV73S/4qQaTwPXM2JBj6/6lI/byHH1jOpCzb0zDbfytgA9LcN/hzb2l7WQSQnxITOVx5un/wGw==}
+    hasBin: true
+
   uuid@8.3.2:
     resolution: {integrity: sha512-+NYs2QeMWy+GWFOEm9xnn6HCDp0l7QBD7ml8zLUmJ+93Q5NF0NocErnwkTkXVFNiX3/fpC6afS8Dhb/gz7R7eg==}
     deprecated: uuid@10 and below is no longer supported.  For ESM codebases, update to uuid@latest.  For CommonJS codebases, use uuid@11 (but be aware this version will likely be deprecated in 2028).
@@ -13035,6 +12966,16 @@ packages:
   vary@1.1.2:
     resolution: {integrity: sha512-BNGbWLfd0eUPabhkXUVm0j8uuvREyTh5ovRa/dyow/BqAbZJyC+5fU+IzQOzmAKzYqYRAISoRhdQr3eIZ/PXqg==}
     engines: {node: '>= 0.8'}
+
+  vectra@0.15.0:
+    resolution: {integrity: sha512-p2wyITw9v4V7XHdcuNfTprfpLoW5f5vYZr6WKFlqIqWbaVMY296+liAmSf3xIBfGoxdaJhTqeI3DGhJ1TCnIwQ==}
+    engines: {node: '>=22.x'}
+    hasBin: true
+    peerDependencies:
+      '@huggingface/transformers': ^4.0.1
+    peerDependenciesMeta:
+      '@huggingface/transformers':
+        optional: true
 
   vfile-location@5.0.3:
     resolution: {integrity: sha512-5yXvWDEgqeiYiBe1lbxYF7UMAIm/IcopxMHrMQDq3nvKcjPKIhZklUKL+AE7J7uApI4kwe2snsK+eI6UTj9EHg==}
@@ -13218,6 +13159,11 @@ packages:
     resolution: {integrity: sha512-OqedPIGOfsDlo31UNwYbCFMSaO9m9G/0faIHj5/dZFDMFqPTcx6UwqyOy3COEaEOg/9VsGIpdqn62W5KhoKSpg==}
     engines: {node: '>=0.8.0'}
 
+  whatwg-encoding@3.1.1:
+    resolution: {integrity: sha512-6qN4hJdMwfYBtE3YBTTHhoeuUrDBPZmbQaxWAqSALV/MeEnR5z1xd8UKud2RAkFoPkmB+hli1TZSnyi84xz1vQ==}
+    engines: {node: '>=18'}
+    deprecated: Use @exodus/bytes instead for a more spec-conformant and faster implementation
+
   whatwg-fetch@3.6.20:
     resolution: {integrity: sha512-EqhiFU6daOA8kpjOWTL0olhVOF3i7OrFzSYiGsEMB8GcXS+RrzauAERX65xMeNWVqxA6HXH2m69Z9LaKKdisfg==}
 
@@ -13275,6 +13221,37 @@ packages:
   widest-line@3.1.0:
     resolution: {integrity: sha512-NsmoXalsWVDMGupxZ5R08ka9flZjjiLvHVAWYOKtiKM8ujtZWr9cRffak+uSE48+Ob8ObalXpwyeUiyDD6QFgg==}
     engines: {node: '>=8'}
+
+  wink-bm25-text-search@3.1.2:
+    resolution: {integrity: sha512-s+xY0v/yurUhiUop/XZnf9IvO9XVuwI14X+QTW0JqlmQCg+9ZgVXTMudXKqZuQVsnm5J+RjLnqrOflnD5BLApA==}
+
+  wink-distance@2.0.2:
+    resolution: {integrity: sha512-pyEhUB/OKFYcgOC4J6E+c+gwVA/8qg2s5n49mIcUsJZM5iDSa17uOxRQXR4rvfp+gbj55K/I08FwjFBwb6fq3g==}
+
+  wink-eng-lite-web-model@1.8.1:
+    resolution: {integrity: sha512-M2tSOU/rVNkDj8AS8IoKJaM7apJJjS0cN+hE8CPazfnB4A/ojyc9+7RMPk18UOiIdSyWk7MR6w8z9lWix2l5tA==}
+    engines: {node: '>=16.0.0'}
+
+  wink-helpers@2.0.0:
+    resolution: {integrity: sha512-I/ZzXrHcNRXuoeFJmp2vMVqDI6UCK02Tds1WP4kSGAmx520gjL1BObVzF7d2ps24tyHIly9ngdB2jwhlFUjPvg==}
+
+  wink-jaro-distance@2.0.0:
+    resolution: {integrity: sha512-9bcUaXCi9N8iYpGWbFkf83OsBkg17r4hEyxusEzl+nnReLRPqxhB9YNeRn3g54SYnVRNXP029lY3HDsbdxTAuA==}
+
+  wink-nlp-utils@2.1.0:
+    resolution: {integrity: sha512-b7PcRhEBNxQmsmht70jLOkwYUyie3da4/cgEXL+CumYO5b/nwV+W7fuMXToh5BtGq1RABznmc2TGTp1Qf/JUXg==}
+
+  wink-nlp@1.14.3:
+    resolution: {integrity: sha512-lvY5iCs3T8I34F8WKS70+2P0U9dWLn3vdPf/Z+m2VK14N7OmqnPzmHfh3moHdusajoQ37Em39z0IZB9K4x/96A==}
+
+  wink-nlp@2.4.0:
+    resolution: {integrity: sha512-d02inlNJL0LLNTLoYfkxZYGrqnYDSZV4HI4WpeuyIEfpu7UcUqUW1ZYWr+JTFm4ZR6dQdzOW/FtHEQRO+o/zzA==}
+
+  wink-porter2-stemmer@2.0.1:
+    resolution: {integrity: sha512-0g+RkkqhRXFmSpJQStVXW5N/WsshWpJXsoDRW7DwVkGI2uDT6IBCoq3xdH5p6IHLaC6ygk7RWUsUx4alKxoagQ==}
+
+  wink-tokenizer@5.3.0:
+    resolution: {integrity: sha512-O/yAw0g3FmSgeeQuYAJJfP7fVPB4A6ay0018qASh79aWmIOyPYy4j4r9EQT8xBjicja6lCLvgRVAybmEBaATQA==}
 
   winston-transport@4.9.0:
     resolution: {integrity: sha512-8drMJ4rkgaPo1Me4zD/3WLfI/zPdA9o2IipKODunnGDcuqbHwjsbB79ylv04LCGGzU0xQ6vTznOMpQGaLhhm6A==}
@@ -14984,6 +14961,7 @@ snapshots:
     transitivePeerDependencies:
       - encoding
       - supports-color
+    optional: true
 
   '@google-cloud/cloud-sql-connector@1.7.1(encoding@0.1.13)':
     dependencies:
@@ -15009,6 +14987,7 @@ snapshots:
     transitivePeerDependencies:
       - encoding
       - supports-color
+    optional: true
 
   '@google-cloud/firestore@7.11.6(encoding@0.1.13)':
     dependencies:
@@ -15715,6 +15694,8 @@ snapshots:
     transitivePeerDependencies:
       - encoding
       - supports-color
+
+  '@mixmark-io/domino@2.2.0': {}
 
   '@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.6.7)':
     dependencies:
@@ -18873,7 +18854,8 @@ snapshots:
       postcss-media-query-parser: 0.2.3
       postcss-safe-parser: 7.1.0(postcss@8.5.30)
 
-  big.js@6.2.2: {}
+  big.js@6.2.2:
+    optional: true
 
   bignumber.js@9.3.1: {}
 
@@ -19077,6 +19059,29 @@ snapshots:
       object-filter: 1.0.2
       run-parallel: 1.2.0
       semver: 6.3.1
+
+  cheerio-select@2.1.0:
+    dependencies:
+      boolbase: 1.0.0
+      css-select: 5.2.2
+      css-what: 6.2.2
+      domelementtype: 2.3.0
+      domhandler: 5.0.3
+      domutils: 3.2.2
+
+  cheerio@1.2.0:
+    dependencies:
+      cheerio-select: 2.1.0
+      dom-serializer: 2.0.0
+      domhandler: 5.0.3
+      domutils: 3.2.2
+      encoding-sniffer: 0.2.1
+      htmlparser2: 10.1.0
+      parse5: 7.3.0
+      parse5-htmlparser2-tree-adapter: 7.1.0
+      parse5-parser-stream: 7.1.2
+      undici: 7.30.0
+      whatwg-mimetype: 4.0.0
 
   chokidar@3.6.0:
     dependencies:
@@ -19406,6 +19411,14 @@ snapshots:
 
   crypto-random-string@2.0.0: {}
 
+  css-select@5.2.2:
+    dependencies:
+      boolbase: 1.0.0
+      css-what: 6.2.2
+      domhandler: 5.0.3
+      domutils: 3.2.2
+      nth-check: 2.1.1
+
   css-select@6.0.0:
     dependencies:
       boolbase: 1.0.0
@@ -19413,6 +19426,8 @@ snapshots:
       domhandler: 5.0.3
       domutils: 3.2.2
       nth-check: 2.1.1
+
+  css-what@6.2.2: {}
 
   css-what@7.0.0: {}
 
@@ -19847,6 +19862,11 @@ snapshots:
   encodeurl@1.0.2: {}
 
   encodeurl@2.0.0: {}
+
+  encoding-sniffer@0.2.1:
+    dependencies:
+      iconv-lite: 0.6.3
+      whatwg-encoding: 3.1.1
 
   encoding@0.1.13:
     dependencies:
@@ -21234,6 +21254,8 @@ snapshots:
 
   gopd@1.2.0: {}
 
+  gpt-tokenizer@3.4.0: {}
+
   graceful-fs@4.2.10: {}
 
   graceful-fs@4.2.11: {}
@@ -21438,7 +21460,8 @@ snapshots:
     dependencies:
       lru-cache: 11.2.6
 
-  html-entities@2.6.0: {}
+  html-entities@2.6.0:
+    optional: true
 
   html-escaper@2.0.2: {}
 
@@ -21844,7 +21867,8 @@ snapshots:
       ip-regex: 4.3.0
       is-url: 1.2.4
 
-  is@3.3.2: {}
+  is@3.3.2:
+    optional: true
 
   isarray@0.0.1: {}
 
@@ -22274,6 +22298,10 @@ snapshots:
       bignumber.js: 9.3.1
 
   json-buffer@3.0.1: {}
+
+  json-colorizer@3.0.1:
+    dependencies:
+      colorette: 2.0.20
 
   json-parse-even-better-errors@2.3.1: {}
 
@@ -23809,6 +23837,11 @@ snapshots:
     transitivePeerDependencies:
       - encoding
 
+  openai@6.49.0(ws@8.20.1)(zod@4.6.7):
+    optionalDependencies:
+      ws: 8.20.1
+      zod: 4.6.7
+
   openapi3-ts@3.2.0:
     dependencies:
       yaml: 2.8.0
@@ -23980,6 +24013,15 @@ snapshots:
   parse5-htmlparser2-tree-adapter@6.0.1:
     dependencies:
       parse5: 6.0.1
+
+  parse5-htmlparser2-tree-adapter@7.1.0:
+    dependencies:
+      domhandler: 5.0.3
+      parse5: 7.3.0
+
+  parse5-parser-stream@7.1.2:
+    dependencies:
+      parse5: 7.3.0
 
   parse5-sax-parser@8.0.0:
     dependencies:
@@ -24291,6 +24333,11 @@ snapshots:
       '@protobufjs/utf8': 1.1.0
       '@types/node': 20.19.37
       long: 5.3.2
+
+  protobufjs@8.8.1:
+    dependencies:
+      long: 5.3.2
+    optional: true
 
   proxy-addr@2.0.7:
     dependencies:
@@ -25946,6 +25993,10 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  turndown@7.2.4:
+    dependencies:
+      '@mixmark-io/domino': 2.2.0
+
   tw-animate-css@1.4.0: {}
 
   type-check@0.4.0:
@@ -26243,6 +26294,8 @@ snapshots:
 
   uuid@11.1.0: {}
 
+  uuid@13.0.2: {}
+
   uuid@8.3.2: {}
 
   uuid@9.0.1: {}
@@ -26266,6 +26319,30 @@ snapshots:
   validate.io-function@1.0.2: {}
 
   vary@1.1.2: {}
+
+  vectra@0.15.0(ws@8.20.1)(zod@4.6.7):
+    dependencies:
+      '@grpc/grpc-js': 1.14.3
+      '@grpc/proto-loader': 0.8.0
+      buffer: 6.0.3
+      cheerio: 1.2.0
+      dotenv: 17.4.2
+      gpt-tokenizer: 3.4.0
+      json-colorizer: 3.0.1
+      openai: 6.49.0(ws@8.20.1)(zod@4.6.7)
+      turndown: 7.2.4
+      uuid: 13.0.2
+      wink-bm25-text-search: 3.1.2
+      wink-nlp: 2.4.0
+      yargs: 18.0.0
+    optionalDependencies:
+      protobufjs: 8.8.1
+    transitivePeerDependencies:
+      - '@aws-sdk/credential-provider-node'
+      - '@smithy/hash-node'
+      - '@smithy/signature-v4'
+      - ws
+      - zod
 
   vfile-location@5.0.3:
     dependencies:
@@ -26421,6 +26498,10 @@ snapshots:
 
   websocket-extensions@0.1.4: {}
 
+  whatwg-encoding@3.1.1:
+    dependencies:
+      iconv-lite: 0.6.3
+
   whatwg-fetch@3.6.20: {}
 
   whatwg-mimetype@4.0.0: {}
@@ -26498,6 +26579,43 @@ snapshots:
   widest-line@3.1.0:
     dependencies:
       string-width: 4.2.3
+
+  wink-bm25-text-search@3.1.2:
+    dependencies:
+      wink-eng-lite-web-model: 1.8.1
+      wink-helpers: 2.0.0
+      wink-nlp: 1.14.3
+      wink-nlp-utils: 2.1.0
+
+  wink-distance@2.0.2:
+    dependencies:
+      wink-helpers: 2.0.0
+      wink-jaro-distance: 2.0.0
+
+  wink-eng-lite-web-model@1.8.1: {}
+
+  wink-helpers@2.0.0: {}
+
+  wink-jaro-distance@2.0.0: {}
+
+  wink-nlp-utils@2.1.0:
+    dependencies:
+      wink-distance: 2.0.2
+      wink-eng-lite-web-model: 1.8.1
+      wink-helpers: 2.0.0
+      wink-nlp: 1.14.3
+      wink-porter2-stemmer: 2.0.1
+      wink-tokenizer: 5.3.0
+
+  wink-nlp@1.14.3: {}
+
+  wink-nlp@2.4.0: {}
+
+  wink-porter2-stemmer@2.0.1: {}
+
+  wink-tokenizer@5.3.0:
+    dependencies:
+      emoji-regex: 9.2.2
 
   winston-transport@4.9.0:
     dependencies:

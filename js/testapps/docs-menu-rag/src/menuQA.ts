@@ -14,27 +14,21 @@
  * limitations under the License.
  */
 
-import { devLocalRetrieverRef } from '@genkit-ai/dev-local-vectorstore';
 import { vertexAI } from '@genkit-ai/google-genai';
 import { z } from 'genkit';
-import { ai } from './genkit.js';
-
-// Define the retriever reference
-export const menuRetriever = devLocalRetrieverRef('menuQA');
+import { ai, menuStore } from './genkit.js';
 
 export const menuQAFlow = ai.defineFlow(
   { name: 'menuQA', inputSchema: z.string(), outputSchema: z.string() },
   async (input: string) => {
     // retrieve relevant documents
-    const docs = await ai.retrieve({
-      retriever: menuRetriever,
-      query: input,
-      options: { k: 3 },
-    });
+    const docs = await ai.run('retrieve', () =>
+      menuStore.query(input, { k: 3 })
+    );
 
     // generate a response
     const llmResponse = await ai.generate({
-      model: vertexAI.model('gemini-2.5-flash'),
+      model: vertexAI.model('gemini-3.8-flash'),
       prompt: `
     You are acting as a helpful AI assistant that can answer 
     questions about the food available on the menu at Genkit Grub Pub.

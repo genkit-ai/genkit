@@ -14,18 +14,18 @@
  * limitations under the License.
  */
 
-import { devLocalVectorstore } from '@genkit-ai/dev-local-vectorstore';
 import { vertexAI } from '@genkit-ai/google-genai';
 import { genkit } from 'genkit';
+import { vectraStore } from './vector-store.js';
 
 export const ai = genkit({
-  plugins: [
-    vertexAI(),
-    devLocalVectorstore([
-      {
-        indexName: 'menuQA',
-        embedder: vertexAI.embedder('gemini-embedding-001'),
-      },
-    ]),
-  ],
+  plugins: [vertexAI()],
+});
+
+// Local vectra index (.vectra/menuQA, see vector-store.ts), shared by the
+// indexing and QA flows.
+export const menuStore = vectraStore({
+  ai,
+  indexName: 'menuQA',
+  embedder: vertexAI.embedder('gemini-embedding-001'),
 });
