@@ -164,12 +164,27 @@ export function metadataToAttributes(
       key === 'init' ||
       typeof metadata[key] === 'object'
     ) {
-      out[ATTR_PREFIX + ':' + key] = JSON.stringify(metadata[key]);
+      out[ATTR_PREFIX + ':' + key] = stringifyAttribute(metadata[key]);
     } else {
       out[ATTR_PREFIX + ':' + key] = metadata[key] as string;
     }
   });
   return out;
+}
+
+/**
+ * JSON-encodes a span attribute value. Telemetry must never fail the traced
+ * operation, so a value JSON can't encode (a cycle, a BigInt) is recorded as
+ * a JSON string placeholder rather than throwing.
+ */
+function stringifyAttribute(value: unknown): string {
+  try {
+    return JSON.stringify(value);
+  } catch (e) {
+    // The circular-structure message spans several lines; the first is enough.
+    const reason = getErrorMessage(e).split('\n')[0];
+    return JSON.stringify(`[unserializable: ${reason}]`);
+  }
 }
 
 /**
@@ -185,7 +200,7 @@ export function toSpanAttributes(
   const attrs: SpanAttributes = {};
   for (const [k, v] of Object.entries(values)) {
     if (v === undefined || v === null) continue;
-    attrs[k] = isAttributeValue(v) ? v : JSON.stringify(v);
+    attrs[k] = isAttributeValue(v) ? v : stringifyAttribute(v);
   }
   return attrs;
 }

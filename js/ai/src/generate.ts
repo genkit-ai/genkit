@@ -793,6 +793,12 @@ export async function toGenerateActionOptions<
     options.output.format = 'json';
   }
 
+  // `schema` is a live validator object (zod, etc.), not wire data: the
+  // action options carry its JSON Schema form instead. Keeping it would leak
+  // into span input and action output, and a recursive zod v4 schema holds a
+  // real object cycle, so serializing it throws.
+  const { schema: _schema, ...wireOutput } = options.output ?? {};
+
   const params: GenerateActionOptions = {
     model: resolvedModel?.modelAction.__action.name,
     docs: options.docs,
@@ -806,7 +812,7 @@ export async function toGenerateActionOptions<
       ...stripUndefinedOptions(options.config),
     },
     output: options.output && {
-      ...options.output,
+      ...wireOutput,
       format: options.output.format,
       jsonSchema: resolvedSchema,
     },

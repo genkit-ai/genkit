@@ -400,6 +400,41 @@ describe('DirectTelemetryInstrumentation realtime export', () => {
     assert.equal(exported.attributes['genkit:name'], 'attrs');
   });
 
+  it('records an unserializable input without failing the span', async () => {
+    const input: Record<string, unknown> = { q: 'hello' };
+    input.self = input;
+
+    let spanId = '';
+    const result = await runInNewSpan(
+      {
+        metadata: { name: 'cyclic', input },
+        labels: { 'genkit:type': 'flow' },
+      },
+      async (_m, span) => {
+        spanId = span.spanId;
+        span.setMetadata({ 'custom:cyclic': input });
+        return 'done';
+      }
+    );
+    await flushTracing();
+
+    assert.equal(result, 'done');
+    const exported = posted
+      .flatMap((t) => Object.values(t.spans ?? {}))
+      .filter((s: any) => s.spanId === spanId) as any[];
+    // Both the realtime start export and the final export went out.
+    assert.equal(exported.length, 2);
+    for (const span of exported) {
+      const recorded = JSON.parse(span.attributes['genkit:input']);
+      assert.match(recorded, /^\[unserializable: /);
+    }
+    const final = exported.find((s) => s.endTime > 0);
+    assert.match(
+      JSON.parse(final.attributes['custom:cyclic']),
+      /^\[unserializable: /
+    );
+  });
+
   // Runs a failing span and returns the exported exception event attributes.
   async function exportedExceptionFor(err: Error) {
     delete process.env.GENKIT_ENABLE_REALTIME_TELEMETRY;

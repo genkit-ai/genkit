@@ -90,6 +90,15 @@ export class DirectTelemetryInstrumentation
     };
 
     const exportSpan = (final: boolean) => {
+      // Telemetry must never block or fail the operation, and this runs
+      // inline with it (on start, and inside the try/catch around `next`).
+      try {
+        exportSpanUnsafe(final);
+      } catch (e) {
+        logger.debug(`Failed to export span ${spanId} of trace ${traceId}`, e);
+      }
+    };
+    const exportSpanUnsafe = (final: boolean) => {
       // In-progress spans report endTime 0. This matches the old OTel realtime
       // path (an open span's endTime is [0,0], and hrTimeToMilliseconds([0,0])
       // is 0). The telemetry server and Dev UI treat a falsy endTime as "still
