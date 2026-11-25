@@ -75,6 +75,7 @@ const GENERIC_MODEL_INFO = {
     multiturn: true,
     media: true,
     tools: true,
+    toolResponseContent: true,
     toolChoice: true,
     systemRole: true,
     constrained: 'all',
@@ -233,6 +234,7 @@ function defineOllamaModel(
         multiturn: !model.type || model.type === 'chat',
         systemRole: true,
         tools: model.supports?.tools,
+        toolResponseContent: true,
       },
     },
     async (input, { streamingRequested, sendChunk }) => {
@@ -437,16 +439,43 @@ function toOllamaRequest(
         }
       });
       if (toolResponses.length > 0) {
+        // Tool messages only carry text: text content is appended to the
+        // output, images are sent in a user message right after the tool
+        // messages, anything else becomes a text note.
+        const toolImages: string[] = [];
         toolResponses.forEach((t) => {
+          const text: string[] =
+            t.output === undefined
+              ? []
+              : [
+                  typeof t.output === 'string'
+                    ? t.output
+                    : JSON.stringify(t.output),
+                ];
+          for (const p of t.content ?? []) {
+            const image = p.media && toOllamaImage(p.media);
+            if (p.text !== undefined) text.push(p.text);
+            else if (image) toolImages.push(image);
+            else if (p.resource) text.push(`Resource: ${p.resource.uri}`);
+            else if (p.media) {
+              text.push(
+                `[${mediaContentType(p.media) || 'media'} content omitted: not supported by the model]`
+              );
+            } else text.push(JSON.stringify(p.data ?? p));
+          }
           messages.push({
             role,
-            content:
-              typeof t.output === 'string'
-                ? t.output
-                : JSON.stringify(t.output),
+            content: text.join('\n\n'),
             tool_name: t.name,
           });
         });
+        if (toolImages.length > 0) {
+          messages.push({
+            role: 'user',
+            content: 'Images returned by the tool calls above:',
+            images: toolImages,
+          });
+        }
       } else {
         messages.push({
           role: role,
@@ -465,6 +494,24 @@ function toOllamaRequest(
     request.system = getSystemMessage(input);
   }
   return request;
+}
+
+/**
+ * The base64 data of an inline image (Ollama takes images as bare base64), or
+ * undefined for anything else.
+ */
+function toOllamaImage(media: { url: string; contentType?: string }) {
+  if (!media.url.startsWith('data:')) return undefined;
+  if (!mediaContentType(media).startsWith('image/')) return undefined;
+  return media.url.substring(media.url.indexOf(',') + 1);
+}
+
+/** A media part's content type, from `contentType` or its data URL. */
+function mediaContentType(media: { url: string; contentType?: string }) {
+  if (media.contentType) return media.contentType;
+  return media.url.startsWith('data:')
+    ? media.url.substring(5, media.url.indexOf(';'))
+    : '';
 }
 
 function toOllamaRole(role: string) {

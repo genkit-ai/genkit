@@ -42,6 +42,7 @@ describe('gptModel', () => {
     }).toStrictEqual({
       name: 'openai/gpt-4o',
       supports: {
+        toolResponseContent: true,
         multiturn: true,
         tools: true,
         media: true,
@@ -63,6 +64,7 @@ describe('gptModel', () => {
     }).toStrictEqual({
       name: 'openai/gpt-4.1',
       supports: {
+        toolResponseContent: true,
         multiturn: true,
         tools: true,
         media: true,
@@ -82,6 +84,7 @@ describe('gptModel', () => {
     }).toStrictEqual({
       name: 'openai/gpt-4.1-mini',
       supports: {
+        toolResponseContent: true,
         multiturn: true,
         tools: true,
         media: true,
@@ -101,6 +104,7 @@ describe('gptModel', () => {
     }).toStrictEqual({
       name: 'openai/gpt-4.1-nano',
       supports: {
+        toolResponseContent: true,
         multiturn: true,
         tools: true,
         media: true,
@@ -122,6 +126,7 @@ describe('gptModel', () => {
     }).toStrictEqual({
       name: 'openai/gpt-5',
       supports: {
+        toolResponseContent: true,
         multiturn: true,
         tools: true,
         media: true,
@@ -160,7 +165,7 @@ describe('gpt-6-astra', () => {
       supports: model.__action.metadata?.model.supports,
     }).toStrictEqual({
       name: 'openai/gpt-6-astra',
-      supports: expectedSupports,
+      supports: { toolResponseContent: true, ...expectedSupports },
     });
   });
 });

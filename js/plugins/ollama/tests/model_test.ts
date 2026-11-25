@@ -99,6 +99,62 @@ describe('ollama models', () => {
     assert.ok(result.text === 'The weather is sunny');
   });
 
+  it('sends multipart tool responses as text and an image message', async () => {
+    const bodies: any[] = [];
+    const originalFetch = global.fetch;
+    global.fetch = async (_input: RequestInfo | URL, init?: RequestInit) => {
+      bodies.push(JSON.parse(init!.body as string));
+      return new Response(
+        JSON.stringify(
+          bodies.length === 1 ? MOCK_TOOL_CALL_RESPONSE : MOCK_END_RESPONSE
+        )
+      );
+    };
+    try {
+      const get_current_weather = ai.defineTool(
+        {
+          name: 'get_current_weather',
+          description: 'gets weather',
+          inputSchema: z.object({ format: z.string(), location: z.string() }),
+          multipart: true,
+        },
+        async () => ({
+          output: 'sunny',
+          content: [
+            { text: 'map attached' },
+            {
+              media: {
+                url: 'data:image/png;base64,AAA',
+                contentType: 'image/png',
+              },
+            },
+            { media: { url: 'data:application/pdf;base64,JVBERi0=' } },
+          ],
+        })
+      );
+      await ai.generate({
+        model: 'ollama/test-model',
+        prompt: 'Hello',
+        tools: [get_current_weather],
+      });
+    } finally {
+      global.fetch = originalFetch;
+    }
+    assert.deepStrictEqual(bodies[1].messages.slice(-2), [
+      {
+        role: 'tool',
+        content:
+          'sunny\n\nmap attached\n\n[application/pdf content omitted: not supported by the model]',
+        tool_name: 'get_current_weather',
+      },
+      {
+        role: 'user',
+        content: 'Images returned by the tool calls above:',
+        images: ['AAA'],
+      },
+    ]);
+  });
+
   it('should throw for primitive tools', async () => {
     const get_current_weather = ai.defineTool(
       {
