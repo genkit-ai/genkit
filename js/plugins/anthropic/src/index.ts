@@ -168,7 +168,7 @@ export type AnthropicPlugin = {
 
 /**
  * Anthropic AI plugin for Genkit.
- * Includes Claude models (3, 3.5, and 4 series).
+ * Includes the current Claude models.
  */
 export const anthropic = anthropicPlugin as AnthropicPlugin;
 (anthropic as any).model = (

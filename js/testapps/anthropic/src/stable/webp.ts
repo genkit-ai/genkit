@@ -32,7 +32,7 @@ ai.defineFlow('stable-webp-matching', async () => {
     'data:image/webp;base64,UklGRiQAAABXRUJQVlA4IBgAAAAwAQCdASoBAAEAAwA0JaQAA3AA/vuUAAA=';
 
   const { text } = await ai.generate({
-    model: anthropic.model('claude-sonnet-4-5'),
+    model: anthropic.model('claude-sonnet-5-5'),
     messages: [
       {
         role: 'user',
@@ -67,7 +67,7 @@ ai.defineFlow('stable-webp-mismatched', async () => {
     'data:image/webp;base64,UklGRiQAAABXRUJQVlA4IBgAAAAwAQCdASoBAAEAAwA0JaQAA3AA/vuUAAA=';
 
   const { text } = await ai.generate({
-    model: anthropic.model('claude-sonnet-4-5'),
+    model: anthropic.model('claude-sonnet-5-5'),
     messages: [
       {
         role: 'user',

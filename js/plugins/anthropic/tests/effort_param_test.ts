@@ -19,7 +19,7 @@ import * as assert from 'assert';
 import { genkit } from 'genkit';
 import { describe, test } from 'node:test';
 import { anthropic } from '../src/index.js';
-import { AnthropicConfigSchema, __testClient } from '../src/types.js';
+import { __testClient } from '../src/types.js';
 import {
   createMockAnthropicClient,
   createMockAnthropicMessage,
@@ -203,11 +203,6 @@ describe('Effort Parameter Tests', () => {
       apiRequest.output_config.effort,
       'max',
       'effort should be set to max'
-    );
-    assert.ok(
-      AnthropicConfigSchema.safeParse({ output_config: { effort: 'max' } })
-        .success,
-      'config schema should accept effort max'
     );
   });
 

@@ -76,7 +76,7 @@ describe('Live Anthropic API Tests', { skip: !API_KEY }, () => {
     });
 
     const result = await ai.generate({
-      model: 'anthropic/claude-sonnet-4-5',
+      model: 'anthropic/claude-sonnet-5-5',
       prompt:
         'Generate a fictional person with name "Alice", age 30, and city "New York". Return only the JSON.',
       output: { schema, format: 'json', constrained: true },
@@ -111,7 +111,7 @@ describe('Live Anthropic API Tests', { skip: !API_KEY }, () => {
     });
 
     const result = await ai.generate({
-      model: anthropic.model('claude-sonnet-4-5'),
+      model: anthropic.model('claude-sonnet-5-5'),
       messages: [
         {
           role: 'user',
@@ -170,7 +170,7 @@ describe('Live Anthropic API Tests', { skip: !API_KEY }, () => {
     const streamedChunks: string[] = [];
 
     const result = await ai.generate({
-      model: anthropic.model('claude-sonnet-4-5'),
+      model: anthropic.model('claude-sonnet-5-5'),
       messages: [
         {
           role: 'user',
@@ -218,7 +218,7 @@ describe('Live Anthropic API Tests', { skip: !API_KEY }, () => {
     });
 
     const result = await ai.generate({
-      model: anthropic.model('claude-sonnet-4-5'),
+      model: anthropic.model('claude-sonnet-5-5'),
       messages: [
         {
           role: 'user',
@@ -270,7 +270,7 @@ describe('Live Anthropic API Tests', { skip: !API_KEY }, () => {
     });
 
     const result = await ai.generate({
-      model: anthropic.model('claude-sonnet-4-5'),
+      model: anthropic.model('claude-sonnet-5-5'),
       messages: [
         {
           role: 'user',
@@ -363,7 +363,7 @@ describe('Live Anthropic API Tests', { skip: !API_KEY }, () => {
     });
 
     const result = await ai.generate({
-      model: anthropic.model('claude-sonnet-4-5'),
+      model: anthropic.model('claude-sonnet-5-5'),
       messages: [
         {
           role: 'user',
@@ -478,7 +478,7 @@ describe('Live Anthropic API Tests', { skip: !API_KEY }, () => {
     await assert.rejects(
       async () => {
         await ai.generate({
-          model: anthropic.model('claude-sonnet-4-5'),
+          model: anthropic.model('claude-sonnet-5-5'),
           messages: [
             {
               role: 'user',
@@ -537,7 +537,7 @@ describe('Live Anthropic API Tests', { skip: !API_KEY }, () => {
       'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
 
     const result = await ai.generate({
-      model: anthropic.model('claude-sonnet-4-5'),
+      model: anthropic.model('claude-sonnet-5-5'),
       messages: [
         {
           role: 'user',

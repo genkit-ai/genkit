@@ -33,7 +33,7 @@ ai.defineFlow('caching system prompt', async () => {
   const longText = longTextBuffer.toString('utf-8');
 
   const response = await ai.generate({
-    model: anthropic.model('claude-sonnet-4-5'),
+    model: anthropic.model('claude-sonnet-5-5'),
     system: {
       text: `You are a friendly Claude assistant. Greet the user briefly. You will be given a long text to read and answer questions about it.
       ${longText}`,
@@ -58,7 +58,7 @@ ai.defineFlow('caching user prompt', async () => {
   const longText = longTextBuffer.toString('utf-8');
 
   const response = await ai.generate({
-    model: anthropic.model('claude-sonnet-4-5'),
+    model: anthropic.model('claude-sonnet-5-5'),
     system: {
       text: 'You are a friendly Claude assistant. Greet the user briefly. You will be given a long text to read and answer questions about it.',
     },
@@ -90,7 +90,7 @@ ai.defineFlow('caching image prompt', async () => {
   const longText = longTextBuffer.toString('utf-8');
 
   const response = await ai.generate({
-    model: anthropic.model('claude-sonnet-4-5'),
+    model: anthropic.model('claude-sonnet-5-5'),
     system: {
       text: 'Does the following text match the image?',
     },
@@ -130,7 +130,7 @@ ai.defineFlow('caching pdf prompt', async () => {
   const pdfBase64 = pdfBuffer.toString('base64');
 
   const response = await ai.generate({
-    model: anthropic.model('claude-sonnet-4-5'),
+    model: anthropic.model('claude-sonnet-5-5'),
     system: {
       text: 'You are a Claude assistant. Analyze the following PDF document and describe what you see briefly.',
     },
@@ -169,7 +169,7 @@ ai.defineFlow('caching with tool call', async () => {
   const longText = longTextBuffer.toString('utf-8');
 
   const response = await ai.generate({
-    model: anthropic.model('claude-sonnet-4-5'),
+    model: anthropic.model('claude-sonnet-5-5'),
     system: {
       text: `You are a friendly Claude assistant. Greet the user briefly. You will be given a long text to read and answer questions about it.
       ${longText}`,

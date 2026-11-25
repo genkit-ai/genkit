@@ -19,7 +19,7 @@ import { genkit, type ActionMetadata } from 'genkit';
 import type { ModelInfo } from 'genkit/model';
 import { describe, it } from 'node:test';
 import anthropic from '../src/index.js';
-import { TEST_ONLY } from '../src/models.js';
+import { TEST_ONLY, type KnownClaudeModels } from '../src/models.js';
 import { PluginOptions, __testClient } from '../src/types.js';
 
 import { createMockAnthropicClient } from './mocks/anthropic-client.js';
@@ -133,7 +133,7 @@ describe('Anthropic Plugin', () => {
           id: 'claude-haiku-4-5-latest',
           display_name: 'Claude 4.5 Haiku Latest',
         },
-        { id: 'claude-sonnet-4-5', display_name: 'Claude 4.5 Sonnet' },
+        { id: 'claude-sonnet-4-6', display_name: 'Claude Sonnet 4.6' },
         { id: 'claude-opus-5-5', display_name: 'Claude Opus 5.5' },
         { id: 'claude-new-5-20251212', display_name: 'Claude New 5' },
         { id: 'claude-experimental-latest' },
@@ -159,8 +159,8 @@ describe('Anthropic Plugin', () => {
       'Latest variant should be listed separately'
     );
     assert.ok(
-      names.includes('anthropic/claude-sonnet-4-5'),
-      'Known Claude Sonnet 4.5 model should be listed with full model ID'
+      names.includes('anthropic/claude-sonnet-4-6'),
+      'Known Claude Sonnet 4.6 model should be listed with full model ID'
     );
     assert.ok(
       names.includes('anthropic/claude-opus-5-5'),
@@ -242,7 +242,7 @@ describe('Anthropic Plugin', () => {
 });
 
 describe('Known model list', () => {
-  const CURRENT_MODELS = [
+  const CURRENT_MODELS: KnownClaudeModels[] = [
     'claude-fable-5-2',
     'claude-fable-5-1',
     'claude-fable-5',
@@ -258,24 +258,12 @@ describe('Known model list', () => {
     'claude-haiku-5-5',
     'claude-haiku-4-5',
   ];
-  const DEPRECATED_MODELS = ['claude-sonnet-4-5'];
 
-  it('lists exactly the current and deprecated models', () => {
+  it('lists exactly the current models', () => {
     assert.deepStrictEqual(
       Object.keys(KNOWN_MODELS).sort(),
-      [...CURRENT_MODELS, ...DEPRECATED_MODELS].sort()
+      [...CURRENT_MODELS].sort()
     );
-  });
-
-  it('marks deprecated models with the deprecated stage', () => {
-    for (const name of DEPRECATED_MODELS) {
-      const info = KNOWN_MODELS[name as keyof typeof KNOWN_MODELS].info;
-      assert.strictEqual(info?.stage, 'deprecated', name);
-    }
-    for (const name of CURRENT_MODELS) {
-      const info = KNOWN_MODELS[name as keyof typeof KNOWN_MODELS].info;
-      assert.strictEqual(info?.stage, undefined, name);
-    }
   });
 });
 

@@ -23,18 +23,18 @@ organizations, aren't listed; you can still use them by ID.)
 | ------ | --------- |
 | Claude Fable | `claude-fable-5-2`, `claude-fable-5-1`, `claude-fable-5` |
 | Claude Opus | `claude-opus-5-5`, `claude-opus-5`, `claude-opus-4-8`, `claude-opus-4-7`, `claude-opus-4-6`, `claude-opus-4-5` |
-| Claude Sonnet | `claude-sonnet-5-5`, `claude-sonnet-5`, `claude-sonnet-4-6`, `claude-sonnet-4-5` (deprecated, retires 2026-11-30) |
+| Claude Sonnet | `claude-sonnet-5-5`, `claude-sonnet-5`, `claude-sonnet-4-6` |
 | Claude Haiku | `claude-haiku-5-5`, `claude-haiku-4-5` |
 
 All of them accept text and image input, tools, system prompts and multi-turn
 conversations. Native structured (JSON) output needs the beta API surface
 (`apiVersion: 'beta'`); on the stable surface, asking a listed model for JSON or
-schema output throws an error. Deprecated models are marked with
-`stage: 'deprecated'` in their model info.
+schema output throws an error.
 
-Retired models (Claude Opus 4.1, Claude Opus 4, Claude Sonnet 4 and older) are
-no longer listed. You can still pass any other model ID, for example
-`anthropic.model("claude-some-new-model")`; IDs the plugin doesn't know are
+Retired models (Claude Sonnet 4.5, Claude Opus 4.1, Claude Opus 4, Claude
+Sonnet 4 and older) are no longer listed. You can still pass any other model
+ID, for example `anthropic.model("claude-some-new-model")`; IDs the plugin
+doesn't know are
 treated as text-only, so schema output for them is done through prompt
 instructions. See
 [model deprecations](https://platform.claude.com/docs/en/about-claude/model-deprecations#model-status)
@@ -95,9 +95,7 @@ console.log(response.text);
 Claude models can expose a summary of their reasoning. On current models
 (Claude Opus 4.6 and later, Claude Sonnet 4.6 and later, the Fable models and
 Claude Haiku 5.5), use adaptive thinking and steer how much the model thinks
-with `output_config.effort`: `low`, `medium`, `high` or `max`, plus `xhigh`
-on Claude Opus 4.7 and later, Claude Sonnet 5 and later, the Fable models and
-Claude Haiku 5.5. See
+with `output_config.effort`: `low`, `medium`, `high`, `xhigh` or `max`. See
 [effort](https://platform.claude.com/docs/en/build-with-claude/effort) for
 per-model support.
 
@@ -117,7 +115,7 @@ console.log(response.text); // Final assistant answer
 console.log(response.reasoning); // Summarized thinking steps
 ```
 
-Older models (Claude Sonnet 4.5, Claude Haiku 4.5, Claude Opus 4.5) use a
+Older models (Claude Haiku 4.5, Claude Opus 4.5) use a
 fixed thinking budget instead: `thinking: { enabled: true, budgetTokens: 2048 }`
 (at least 1024 and less than `max_tokens`). Claude Opus 4.7, Claude Sonnet 5
 and every later model reject `budgetTokens`.

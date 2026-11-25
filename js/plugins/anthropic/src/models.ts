@@ -61,21 +61,6 @@ function parseRetryAfterMs(value: string): number | undefined {
 type ConfigSchemaType = AnthropicConfigSchemaType;
 
 /**
- * Model info for the models in KNOWN_MODELS: text and image input, tool use,
- * system prompts, multi-turn, and native structured (JSON) output.
- */
-export const ADVANCED_MODEL_INFO: ModelInfo = {
-  supports: {
-    multiturn: true,
-    tools: true,
-    media: true,
-    systemRole: true,
-    output: ['text', 'json'],
-    constrained: 'all',
-  },
-};
-
-/**
  * Model info for model names that are not in KNOWN_MODELS. Output is text
  * only, so Genkit puts any output schema into the prompt as instructions.
  */
@@ -90,11 +75,18 @@ export const GENERIC_MODEL_INFO: ModelInfo = {
 };
 
 /**
- * Model info for models that are deprecated but not yet retired.
+ * Model info for the models in KNOWN_MODELS: text and image input, tool use,
+ * system prompts, multi-turn, and native structured (JSON) output.
  */
-const DEPRECATED_MODEL_INFO: ModelInfo = {
-  supports: { ...ADVANCED_MODEL_INFO.supports },
-  stage: 'deprecated',
+export const ADVANCED_MODEL_INFO: ModelInfo = {
+  supports: {
+    multiturn: true,
+    tools: true,
+    media: true,
+    systemRole: true,
+    output: ['text', 'json'],
+    constrained: 'all',
+  },
 };
 
 /**
@@ -125,8 +117,6 @@ const KNOWN_MODELS = {
   'claude-sonnet-5-5': commonRef('claude-sonnet-5-5', ADVANCED_MODEL_INFO),
   'claude-sonnet-5': commonRef('claude-sonnet-5', ADVANCED_MODEL_INFO),
   'claude-sonnet-4-6': commonRef('claude-sonnet-4-6', ADVANCED_MODEL_INFO),
-  // Deprecated 2026-09-30, retires 2026-11-30. Replacement: claude-sonnet-5-5.
-  'claude-sonnet-4-5': commonRef('claude-sonnet-4-5', DEPRECATED_MODEL_INFO),
   'claude-haiku-5-5': commonRef('claude-haiku-5-5', ADVANCED_MODEL_INFO),
   'claude-haiku-4-5': commonRef('claude-haiku-4-5', ADVANCED_MODEL_INFO),
 } as const;

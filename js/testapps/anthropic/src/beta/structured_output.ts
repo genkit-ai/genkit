@@ -27,14 +27,13 @@ const ai = genkit({
   ],
 });
 
-const betaSonnet = anthropic.model('claude-sonnet-4-5', { apiVersion: 'beta' });
+const betaSonnet = anthropic.model('claude-sonnet-5-5', { apiVersion: 'beta' });
 
 ai.defineFlow('anthropic-beta-generate-person-json', async () => {
   const { text } = await ai.generate({
     model: betaSonnet,
     prompt:
       'Generate a fictional person with a random name, random age, and random city.',
-    config: { temperature: 0.6 },
     output: {
       schema: z.object({
         name: z.string(),
@@ -59,7 +58,6 @@ ai.defineFlow(
           text: 'Generate a fictional person with a random name, random age, and random city.',
         },
       ],
-      config: { temperature: 0.6 },
       output: {
         schema: z.object({
           name: z.string(),
