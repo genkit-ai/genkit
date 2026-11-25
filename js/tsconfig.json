@@ -1,22 +1,24 @@
 {
   "compilerOptions": {
-    // Please do not turn on helper settings like esModuleInterop because
-    // customers either need to use the same helper settings or turn on
-    // skipLibCheck.
+    // Shared by all published packages: `tsc` emits ESM .js, .d.ts and source
+    // maps from <pkg>/src into <pkg>/lib. Packages are ESM-only ("type":
+    // "module"); CommonJS consumers load them via require(esm).
+    // Keep skipLibCheck off so tsc validates emitted .d.ts files across
+    // workspace packages.
     "declaration": true,
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "allowSyntheticDefaultImports": true,
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "target": "es2022",
+    "lib": ["es2022", "DOM"],
+    "types": ["node"],
+    "strict": true,
     "noImplicitReturns": true,
     "noImplicitAny": true,
     "noUnusedLocals": true,
     "resolveJsonModule": true,
     "sourceMap": true,
-    "esModuleInterop": false,
-    "strict": true,
-    "target": "es2022",
-    "lib": ["es2022", "DOM"],
-    "noEmit": true
+    "rootDir": "${configDir}/src",
+    "outDir": "${configDir}/lib"
   },
   "files": ["./handlebars-cjs.d.ts"],
   "compileOnSave": true

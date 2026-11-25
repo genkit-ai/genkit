@@ -17,7 +17,7 @@
     "generative-ai"
   ],
   "version": "0.7.0",
-  "type": "commonjs",
+  "type": "module",
   "engines": {
     "node": ">=22.12"
   },
@@ -39,16 +39,14 @@
     "check-node-version": "^4.2.1",
     "genkit": "workspace:*",
     "rimraf": "^6.0.1",
-    "tsup": "^8.3.5",
     "tsx": "^4.19.2",
     "typescript": "^5.9.3"
   },
+  "main": "./lib/index.js",
   "types": "./lib/index.d.ts",
   "exports": {
     ".": {
       "types": "./lib/index.d.ts",
-      "require": "./lib/index.js",
-      "import": "./lib/index.mjs",
       "default": "./lib/index.js"
     }
   },
@@ -60,11 +58,11 @@
     "access": "public"
   },
   "scripts": {
-    "check": "tsc",
-    "compile": "tsup-node",
+    "check": "tsc --noEmit",
+    "compile": "tsc",
     "build:clean": "rimraf ./lib",
-    "build": "pnpm build:clean && pnpm check && pnpm compile",
-    "build:watch": "tsup-node --watch",
+    "build": "rimraf ./lib && tsc",
+    "build:watch": "tsc --watch",
     "test": "tsx --test tests/*_test.ts",
     "test:file": "tsx --test",
     "test:live": "tsx --test tests/live_test.ts",

@@ -12,7 +12,7 @@
     "generative-ai"
   ],
   "version": "1.44.0",
-  "type": "commonjs",
+  "type": "module",
   "engines": {
     "node": ">=22.12"
   },
@@ -31,34 +31,26 @@
   },
   "devDependencies": {
     "@types/node": "^22.15.3",
-    "tsup": "^8.0.2",
     "typescript": "^5.9.3",
     "rimraf": "^6.0.1",
     "vitest": "^4.1.0"
   },
+  "main": "./lib/index.js",
   "types": "./lib/index.d.ts",
   "exports": {
     ".": {
-      "require": "./lib/index.js",
-      "import": "./lib/index.mjs",
       "types": "./lib/index.d.ts",
       "default": "./lib/index.js"
     },
     "./openai": {
-      "require": "./lib/openai/index.js",
-      "import": "./lib/openai/index.mjs",
       "types": "./lib/openai/index.d.ts",
       "default": "./lib/openai/index.js"
     },
     "./deepseek": {
-      "require": "./lib/deepseek/index.js",
-      "import": "./lib/deepseek/index.mjs",
       "types": "./lib/deepseek/index.d.ts",
       "default": "./lib/deepseek/index.js"
     },
     "./xai": {
-      "require": "./lib/xai/index.js",
-      "import": "./lib/xai/index.mjs",
       "types": "./lib/xai/index.d.ts",
       "default": "./lib/xai/index.js"
     }
@@ -66,13 +58,13 @@
   "typesVersions": {
     "*": {
       "openai": [
-        "lib/openai"
+        "lib/openai/index.d.ts"
       ],
       "deepseek": [
-        "lib/deepseek"
+        "lib/deepseek/index.d.ts"
       ],
       "xai": [
-        "lib/xai"
+        "lib/xai/index.d.ts"
       ]
     }
   },
@@ -84,11 +76,11 @@
     "access": "public"
   },
   "scripts": {
-    "check": "tsc",
-    "compile": "tsup-node",
+    "check": "tsc --noEmit",
+    "compile": "tsc",
     "build:clean": "rimraf ./lib",
-    "build": "pnpm build:clean && pnpm check && pnpm compile",
-    "build:watch": "tsup-node --watch",
+    "build": "rimraf ./lib && tsc",
+    "build:watch": "tsc --watch",
     "test": "vitest run"
   }
 }

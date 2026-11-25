@@ -1,5 +1,4 @@
 node_modules
 tsconfig.json
 tsconfig.test.json
-tsup.config.ts
 typings.d.ts

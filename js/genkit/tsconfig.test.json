@@ -2,6 +2,8 @@
   "extends": "./tsconfig.json",
   "include": ["src", "tests"],
   "compilerOptions": {
+    "rootDir": "${configDir}/..",
+    "noEmit": true,
     "incremental": true,
     "tsBuildInfoFile": "./node_modules/.cache/tsconfig.test.tsbuildinfo"
   }

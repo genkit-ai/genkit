@@ -8,18 +8,17 @@
     "generative-ai"
   ],
   "version": "1.44.0",
-  "type": "commonjs",
+  "type": "module",
   "engines": {
     "node": ">=22.12"
   },
-  "main": "./lib/cjs/index.js",
   "scripts": {
     "check": "tsc -p tsconfig.test.json",
-    "compile": "tsup-node",
+    "compile": "tsc",
     "build:clean": "rimraf ./lib",
-    "build": "pnpm build:clean && pnpm check && pnpm compile",
-    "build:watch": "tsup-node --watch",
-    "test": "node --import tsx --test tests/*_test.ts",
+    "build": "rimraf ./lib && tsc",
+    "build:watch": "tsc --watch",
+    "test": "tsc -p tsconfig.test.json && node --import tsx --test tests/*_test.ts",
     "test:watch": "node --watch --import tsx --test tests/*_test.ts"
   },
   "homepage": "https://genkit.dev",
@@ -46,7 +45,6 @@
     "@valibot/to-json-schema": "^1.8.0",
     "arktype": "^2.2.9",
     "rimraf": "^6.0.1",
-    "tsup": "^8.3.5",
     "tsx": "^4.19.2",
     "typescript": "^5.9.3",
     "valibot": "^1.5.0",
@@ -58,184 +56,141 @@
     "src",
     "*"
   ],
-  "types": "lib/index.d.ts",
+  "main": "./lib/index.js",
+  "types": "./lib/index.d.ts",
   "exports": {
     ".": {
       "types": "./lib/index.d.ts",
-      "require": "./lib/index.js",
-      "import": "./lib/index.mjs",
       "default": "./lib/index.js"
     },
     "./registry": {
       "types": "./lib/registry.d.ts",
-      "require": "./lib/registry.js",
-      "import": "./lib/registry.mjs",
       "default": "./lib/registry.js"
     },
     "./beta": {
       "types": "./lib/beta.d.ts",
-      "require": "./lib/beta.js",
-      "import": "./lib/beta.mjs",
       "default": "./lib/beta.js"
     },
     "./tracing": {
       "types": "./lib/tracing.d.ts",
-      "require": "./lib/tracing.js",
-      "import": "./lib/tracing.mjs",
       "default": "./lib/tracing.js"
     },
     "./logging": {
       "types": "./lib/logging.d.ts",
-      "require": "./lib/logging.js",
-      "import": "./lib/logging.mjs",
       "default": "./lib/logging.js"
     },
     "./schema": {
       "types": "./lib/schema.d.ts",
-      "require": "./lib/schema.js",
-      "import": "./lib/schema.mjs",
       "default": "./lib/schema.js"
     },
     "./formats": {
       "types": "./lib/formats.d.ts",
-      "require": "./lib/formats.js",
-      "import": "./lib/formats.mjs",
       "default": "./lib/formats.js"
     },
     "./retriever": {
       "types": "./lib/retriever.d.ts",
-      "require": "./lib/retriever.js",
-      "import": "./lib/retriever.mjs",
       "default": "./lib/retriever.js"
     },
     "./reranker": {
       "types": "./lib/reranker.d.ts",
-      "require": "./lib/reranker.js",
-      "import": "./lib/reranker.mjs",
       "default": "./lib/reranker.js"
     },
     "./embedder": {
       "types": "./lib/embedder.d.ts",
-      "require": "./lib/embedder.js",
-      "import": "./lib/embedder.mjs",
       "default": "./lib/embedder.js"
     },
     "./evaluator": {
       "types": "./lib/evaluator.d.ts",
-      "require": "./lib/evaluator.js",
-      "import": "./lib/evaluator.mjs",
       "default": "./lib/evaluator.js"
     },
     "./model": {
       "types": "./lib/model.d.ts",
-      "require": "./lib/model.js",
-      "import": "./lib/model.mjs",
       "default": "./lib/model.js"
     },
     "./model/middleware": {
       "types": "./lib/middleware.d.ts",
-      "require": "./lib/middleware.js",
-      "import": "./lib/middleware.mjs",
       "default": "./lib/middleware.js"
     },
     "./extract": {
       "types": "./lib/extract.d.ts",
-      "require": "./lib/extract.js",
-      "import": "./lib/extract.mjs",
       "default": "./lib/extract.js"
     },
     "./testing": {
       "types": "./lib/testing.d.ts",
-      "require": "./lib/testing.js",
-      "import": "./lib/testing.mjs",
       "default": "./lib/testing.js"
     },
     "./tool": {
       "types": "./lib/tool.d.ts",
-      "require": "./lib/tool.js",
-      "import": "./lib/tool.mjs",
       "default": "./lib/tool.js"
     },
     "./plugin": {
       "types": "./lib/plugin.d.ts",
-      "require": "./lib/plugin.js",
-      "import": "./lib/plugin.mjs",
       "default": "./lib/plugin.js"
     },
     "./beta/client": {
       "types": "./lib/client/index.d.ts",
-      "require": "./lib/client/index.js",
-      "import": "./lib/client/index.mjs",
       "default": "./lib/client/index.js"
     },
     "./context": {
       "types": "./lib/context.d.ts",
-      "require": "./lib/context.js",
-      "import": "./lib/context.mjs",
       "default": "./lib/context.js"
     }
   },
   "typesVersions": {
     "*": {
-      "metrics": [
-        "lib/metrics"
+      "registry": [
+        "lib/registry.d.ts"
       ],
       "beta": [
-        "lib/beta"
-      ],
-      "registry": [
-        "lib/registry"
+        "lib/beta.d.ts"
       ],
       "tracing": [
-        "lib/tracing"
+        "lib/tracing.d.ts"
       ],
       "logging": [
-        "lib/logging"
-      ],
-      "config": [
-        "lib/config"
-      ],
-      "runtime": [
-        "lib/runtime"
+        "lib/logging.d.ts"
       ],
       "schema": [
-        "lib/schema"
+        "lib/schema.d.ts"
       ],
       "formats": [
-        "lib/formats"
+        "lib/formats.d.ts"
       ],
       "retriever": [
-        "lib/retriever"
+        "lib/retriever.d.ts"
+      ],
+      "reranker": [
+        "lib/reranker.d.ts"
       ],
       "embedder": [
-        "lib/embedder"
+        "lib/embedder.d.ts"
       ],
       "evaluator": [
-        "lib/evaluator"
+        "lib/evaluator.d.ts"
       ],
       "model": [
-        "lib/model"
+        "lib/model.d.ts"
       ],
       "model/middleware": [
-        "lib/middleware"
+        "lib/middleware.d.ts"
       ],
       "extract": [
-        "lib/extract"
+        "lib/extract.d.ts"
       ],
       "testing": [
-        "lib/testing"
+        "lib/testing.d.ts"
       ],
       "tool": [
-        "lib/tool"
+        "lib/tool.d.ts"
       ],
       "plugin": [
-        "lib/plugin"
+        "lib/plugin.d.ts"
       ],
       "beta/client": [
-        "lib/client/index"
+        "lib/client/index.d.ts"
       ],
       "context": [
-        "lib/context"
+        "lib/context.d.ts"
       ]
     }
   }
