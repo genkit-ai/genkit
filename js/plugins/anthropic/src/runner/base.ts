@@ -344,11 +344,15 @@ export abstract class BaseRunner<ApiTypes extends RunnerTypes> {
       } as RunnerToolResponseContent<ApiTypes>;
     }
     if (contentType.startsWith('text/') && inline) {
-      return text(
-        new TextDecoder().decode(
-          Uint8Array.from(atob(inline.data), (c) => c.charCodeAt(0))
-        )
-      );
+      try {
+        return text(
+          new TextDecoder().decode(
+            Uint8Array.from(atob(inline.data), (c) => c.charCodeAt(0))
+          )
+        );
+      } catch {
+        // Malformed base64: fall through to the note below.
+      }
     }
     return text(
       `[${contentType || 'media'} content omitted: not supported by the model]`
