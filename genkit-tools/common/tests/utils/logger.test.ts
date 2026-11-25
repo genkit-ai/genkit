@@ -137,6 +137,7 @@ describe('logger', () => {
       });
       expect(stderrSpy).toHaveBeenCalledTimes(2);
     } finally {
+      debugToFile(null);
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });

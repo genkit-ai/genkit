@@ -30,7 +30,11 @@ const LEVEL_PRIORITY: Record<LogLevel, number> = {
 
 let debugFilePath: string | undefined;
 
-export function debugToFile(dirPath?: string) {
+export function debugToFile(dirPath?: string | null) {
+  if (dirPath === null) {
+    debugFilePath = undefined;
+    return;
+  }
   debugFilePath = dirPath
     ? path.join(dirPath, 'genkit-debug.log')
     : 'genkit-debug.log';
@@ -39,7 +43,8 @@ export function debugToFile(dirPath?: string) {
 
 function shouldLog(currentLevel: string, targetLevel: LogLevel): boolean {
   const currentPriority =
-    LEVEL_PRIORITY[currentLevel as LogLevel] ?? LEVEL_PRIORITY.info;
+    LEVEL_PRIORITY[currentLevel.toLowerCase() as LogLevel] ??
+    LEVEL_PRIORITY.info;
   return currentPriority <= LEVEL_PRIORITY[targetLevel];
 }
 
@@ -51,22 +56,14 @@ function formatArgs(args: unknown[]): string {
 }
 
 function formatLine(level: LogLevel, message: string): string {
-  let levelColor: clc.Color;
-  switch (level) {
-    case 'error':
-      levelColor = clc.red;
-      break;
-    case 'warn':
-      levelColor = clc.yellow;
-      break;
-    case 'debug':
-    case 'info':
-      levelColor = (text) => text.toString();
-      break;
+  let label = level.charAt(0).toUpperCase() + level.slice(1);
+  if (level === 'error') {
+    label = clc.red(label);
+  } else if (level === 'warn') {
+    label = clc.yellow(label);
   }
 
-  const label = level.charAt(0).toUpperCase() + level.slice(1);
-  return `${clc.bold(levelColor(label))}: ${message}`;
+  return `${clc.bold(label)}: ${message}`;
 }
 
 function emit(level: LogLevel, args: unknown[]): void {
