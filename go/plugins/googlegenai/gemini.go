@@ -113,6 +113,11 @@ func newModel(client *genai.Client, id string, opts ai.ModelOptions) *ai.ModelAc
 
 	return ai.NewModelAction(api.NewName(provider, id), &opts,
 		func(ctx context.Context, input *ai.ModelRequest, config genai.GenerateContentConfig, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			// A decision model fails before the media is downloaded.
+			if name := modelID(id); isDecisionModel(name) {
+				return nil, status.Errorf(status.ErrInvalidArgument,
+					"%s is a decision model, which generateContent does not serve; register systemonex.GoogleAI() from github.com/firebase/genkit/go/plugins/systemone/exp and use googleai-decisions/%s", id, name)
+			}
 			// The middleware wraps per call because it must run over the
 			// request while generate needs the per-request typed config.
 			if download != nil {
@@ -156,10 +161,6 @@ func generate(
 ) (*ai.ModelResponse, error) {
 	if model == "" {
 		return nil, status.Errorf(status.ErrInvalidArgument, "model not provided")
-	}
-	if isDecisionModel(model) {
-		return nil, status.Errorf(status.ErrInvalidArgument,
-			"%s is a decision model, which generateContent does not serve; register systemonex.GoogleAI() from github.com/firebase/genkit/go/plugins/systemone/exp and use googleai-decisions/%s", model, model)
 	}
 	model = resolveVertexModelName(client, model)
 

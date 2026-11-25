@@ -148,7 +148,7 @@ func TestNewlyRegisteredModels(t *testing.T) {
 func TestListGenaiModelsSkipsDecisionModels(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"models":[{"name":"models/gemini-decision-1"},{"name":"models/gemini-flash-latest"}]}`)
+		fmt.Fprint(w, `{"models":[{"name":"models/gemini-decision-1"},{"name":"gemini-decision-2"},{"name":"models/gemini-flash-latest"}]}`)
 	}))
 	defer srv.Close()
 	models, err := listGenaiModels(t.Context(), newTestClient(t, srv.URL))
