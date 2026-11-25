@@ -18,6 +18,7 @@ import type { RuntimeError } from '../../types/error.js';
 import type {
   NestedSpanData,
   Part,
+  SpanData,
   ToolRequestPart,
   ToolResponsePart,
   TrajectoryAction,
@@ -99,7 +100,7 @@ export function collectToolResponses(
   return responses;
 }
 
-function isToolV2Span(span: NestedSpanData): boolean {
+function isToolV2Span(span: SpanData): boolean {
   const attrs = span.attributes;
   return (
     attrs?.['genkit:metadata:subtype'] === 'tool.v2' ||
@@ -108,7 +109,8 @@ function isToolV2Span(span: NestedSpanData): boolean {
   );
 }
 
-function parseToolSpanResult(span?: NestedSpanData): {
+/** Parses `output` and optional `content` parts from a tool execution span. */
+export function parseToolSpanResult(span?: SpanData): {
   output?: unknown;
   content?: Part[];
 } {

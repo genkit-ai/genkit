@@ -20,6 +20,7 @@ import { extractTrajectoryFromTraces } from '../../../src/utils/index.js';
 import {
   makeAgentSpan,
   makeModelSpan,
+  makeSpan,
   makeToolSpan,
   makeTrace,
   makeTurnSpan,
@@ -276,6 +277,343 @@ describe('extractTrajectoryFromTraces', () => {
         'sub-helper': {
           parentTrajectoryId: 'trace-1',
           agentName: 'helper',
+        },
+      },
+    });
+  });
+
+  it('pairs cross-trace respond HITL resume decisions onto earlier interrupted actions', () => {
+    const interruptTrace = makeTrace(
+      [
+        makeAgentSpan({
+          spanId: 'agent-1',
+          name: 'bankingAgent',
+          sessionId: 'sess-hitl-cross',
+          startTime: 100,
+          endTime: 300,
+          output: { finishReason: 'interrupted' },
+        }),
+        makeTurnSpan({
+          spanId: 'turn-1',
+          parentSpanId: 'agent-1',
+          turn: 1,
+          startTime: 105,
+          endTime: 295,
+        }),
+        makeSpan({
+          spanId: 'gen-1',
+          parentSpanId: 'turn-1',
+          displayName: 'generate',
+          startTime: 108,
+          endTime: 290,
+          attributes: {
+            'genkit:type': 'util',
+            'genkit:name': 'generate',
+            'genkit:output': JSON.stringify({
+              finishReason: 'interrupted',
+              message: {
+                role: 'model',
+                content: [
+                  {
+                    toolRequest: {
+                      name: 'userApproval',
+                      ref: 'call_373433',
+                      input: { action: 'Transfer Money' },
+                    },
+                    metadata: { interrupt: true },
+                  },
+                ],
+              },
+            }),
+          },
+        }),
+        makeModelSpan({
+          spanId: 'm1',
+          parentSpanId: 'gen-1',
+          startTime: 110,
+          endTime: 250,
+          messages: [{ role: 'user', content: [{ text: 'Transfer $10,000' }] }],
+          outputMessage: {
+            role: 'model',
+            content: [
+              {
+                toolRequest: {
+                  name: 'userApproval',
+                  ref: 'call_373433',
+                  input: { action: 'Transfer Money' },
+                },
+              },
+            ],
+          },
+        }),
+        makeToolSpan({
+          spanId: 'tool-1',
+          parentSpanId: 'gen-1',
+          name: 'userApproval',
+          startTime: 255,
+          endTime: 260,
+          input: { action: 'Transfer Money' },
+          status: { code: 2, message: '' },
+          attributes: {
+            'genkit:state': 'error',
+            'genkit:isFailureSource': true,
+          },
+        }),
+      ],
+      { traceId: 'trace-int', startTime: 100, endTime: 300 }
+    );
+
+    const resumeTrace = makeTrace(
+      [
+        makeAgentSpan({
+          spanId: 'agent-2',
+          name: 'bankingAgent',
+          sessionId: 'sess-hitl-cross',
+          startTime: 500,
+          endTime: 700,
+          input: {
+            resume: {
+              respond: [
+                {
+                  toolResponse: {
+                    name: 'userApproval',
+                    ref: 'call_373433',
+                    output: { approved: false },
+                  },
+                },
+              ],
+            },
+          },
+          output: { finishReason: 'stop' },
+        }),
+        makeTurnSpan({
+          spanId: 'turn-1-r',
+          parentSpanId: 'agent-2',
+          turn: 1,
+          startTime: 505,
+          endTime: 695,
+          input: {
+            resume: {
+              respond: [
+                {
+                  toolResponse: {
+                    name: 'userApproval',
+                    ref: 'call_373433',
+                    output: { approved: false },
+                  },
+                },
+              ],
+            },
+          },
+        }),
+        makeModelSpan({
+          spanId: 'm2',
+          parentSpanId: 'turn-1-r',
+          startTime: 510,
+          endTime: 680,
+          messages: [
+            { role: 'user', content: [{ text: 'Transfer $10,000' }] },
+            {
+              role: 'tool',
+              content: [
+                {
+                  toolResponse: {
+                    name: 'userApproval',
+                    ref: 'call_373433',
+                    output: { approved: false },
+                  },
+                },
+              ],
+              metadata: { resumed: true },
+            },
+          ],
+          outputMessage: {
+            role: 'model',
+            content: [{ text: 'Transfer cancelled.' }],
+          },
+        }),
+      ],
+      { traceId: 'trace-res', startTime: 500, endTime: 700 }
+    );
+
+    const bundle = extractTrajectoryFromTraces([interruptTrace, resumeTrace]);
+
+    expect(TrajectoryBundleSchema.parse(bundle)).toMatchObject({
+      rootTrajectoryId: 'trace-int',
+      sessionId: 'sess-hitl-cross',
+      trajectories: {
+        'trace-int': {
+          status: 'success',
+          finishReason: 'stop',
+          steps: [
+            { traceId: 'trace-int', source: 'user' },
+            {
+              traceId: 'trace-int',
+              finishReason: 'interrupted',
+              actions: [
+                {
+                  actionId: 'call_373433',
+                  name: 'userApproval',
+                  status: 'interrupted',
+                  interrupt: true,
+                  output: { approved: false },
+                  resume: {
+                    strategy: 'respond',
+                    payload: { approved: false },
+                  },
+                },
+              ],
+            },
+            {
+              traceId: 'trace-res',
+              finishReason: 'stop',
+              content: [{ text: 'Transfer cancelled.' }],
+            },
+          ],
+        },
+      },
+    });
+  });
+
+  it('pairs cross-trace restart HITL resume decisions and restarted tool span outputs', () => {
+    const interruptTrace = makeTrace(
+      [
+        makeAgentSpan({
+          spanId: 'agent-1',
+          name: 'travelAgent',
+          sessionId: 'sess-restart',
+          startTime: 100,
+          endTime: 300,
+          output: { finishReason: 'interrupted' },
+        }),
+        makeTurnSpan({
+          spanId: 'turn-1',
+          parentSpanId: 'agent-1',
+          turn: 1,
+          startTime: 105,
+          endTime: 295,
+        }),
+        makeModelSpan({
+          spanId: 'm1',
+          parentSpanId: 'turn-1',
+          startTime: 110,
+          endTime: 200,
+          messages: [{ role: 'user', content: [{ text: 'Book flight' }] }],
+          outputMessage: {
+            role: 'model',
+            content: [
+              {
+                toolRequest: {
+                  ref: 'flt-1',
+                  name: 'bookFlight',
+                  input: { dest: 'SEA' },
+                },
+              },
+            ],
+          },
+        }),
+        makeToolSpan({
+          spanId: 'flt-span-1',
+          parentSpanId: 'turn-1',
+          name: 'bookFlight',
+          startTime: 210,
+          endTime: 240,
+          interrupt: { seatNeeded: true },
+          status: { code: 2, message: 'ToolInterruptError' },
+        }),
+      ],
+      { traceId: 'trace-int-r', startTime: 100, endTime: 300 }
+    );
+
+    const resumeTrace = makeTrace(
+      [
+        makeAgentSpan({
+          spanId: 'agent-2',
+          name: 'travelAgent',
+          sessionId: 'sess-restart',
+          startTime: 400,
+          endTime: 700,
+          input: {
+            resume: {
+              restart: [
+                {
+                  toolRequest: {
+                    ref: 'flt-1',
+                    name: 'bookFlight',
+                    input: { dest: 'SEA' },
+                  },
+                  metadata: { resumed: { seat: '14C' } },
+                },
+              ],
+            },
+          },
+          output: { finishReason: 'stop' },
+        }),
+        makeTurnSpan({
+          spanId: 'turn-1-r',
+          parentSpanId: 'agent-2',
+          turn: 1,
+          startTime: 405,
+          endTime: 695,
+        }),
+        makeToolSpan({
+          spanId: 'flt-span-2',
+          parentSpanId: 'turn-1-r',
+          name: 'bookFlight',
+          startTime: 410,
+          endTime: 500,
+          resumed: { seat: '14C' },
+          attributes: { 'genkit:metadata:tool:callId': 'flt-1' },
+          output: { pnr: 'ABC123', seat: '14C' },
+        }),
+        makeModelSpan({
+          spanId: 'm2',
+          parentSpanId: 'turn-1-r',
+          startTime: 510,
+          endTime: 650,
+          messages: [
+            {
+              role: 'user',
+              content: [{ text: 'Book flight' }],
+              metadata: { _genkit_history: true },
+            },
+          ],
+          outputMessage: {
+            role: 'model',
+            content: [{ text: 'Booked seat 14C.' }],
+          },
+        }),
+      ],
+      { traceId: 'trace-res-r', startTime: 400, endTime: 700 }
+    );
+
+    const bundle = extractTrajectoryFromTraces([interruptTrace, resumeTrace]);
+
+    expect(TrajectoryBundleSchema.parse(bundle)).toMatchObject({
+      rootTrajectoryId: 'trace-int-r',
+      trajectories: {
+        'trace-int-r': {
+          status: 'success',
+          finishReason: 'stop',
+          steps: [
+            {},
+            {
+              actions: [
+                {
+                  actionId: 'flt-1',
+                  name: 'bookFlight',
+                  status: 'interrupted',
+                  interrupt: { seatNeeded: true },
+                  output: { pnr: 'ABC123', seat: '14C' },
+                  resume: { strategy: 'restart', payload: { seat: '14C' } },
+                },
+              ],
+            },
+            {
+              traceId: 'trace-res-r',
+              content: [{ text: 'Booked seat 14C.' }],
+            },
+          ],
         },
       },
     });

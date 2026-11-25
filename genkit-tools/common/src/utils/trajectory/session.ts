@@ -15,14 +15,27 @@
  */
 
 import type {
+  NestedSpanData,
   ToolDefinition,
   TraceData,
   Trajectory,
+  TrajectoryAction,
   TrajectoryBundle,
   TrajectoryStep,
 } from '../../types/index.js';
+import { isToolSpan, shortToolName } from '../trace.js';
 import { extractTrajectoryFromTrace } from './extract.js';
-import { aggregateUsage } from './span-parser.js';
+import {
+  collectScopeResumeDecisions,
+  resolveInTraceInterruptResume,
+} from './interrupts.js';
+import {
+  aggregateUsage,
+  isExcludedFromTrajectory,
+  parseSpanObject,
+  type ParsedSpanInput,
+} from './span-parser.js';
+import { parseToolSpanResult } from './tool-pairing.js';
 
 function deduplicateTools(roots: Trajectory[]): ToolDefinition[] {
   const seen = new Set<string>();
@@ -175,6 +188,115 @@ export function mergeTrajectoryBundles(
   };
 }
 
+function pairCrossTraceInterruptResumes(
+  sortedTraces: TraceData[],
+  bundle: TrajectoryBundle
+): TrajectoryBundle {
+  const traceOrder = new Map(sortedTraces.map((t, idx) => [t.traceId, idx]));
+  const trajectories = { ...bundle.trajectories };
+
+  for (let traceIdx = 1; traceIdx < sortedTraces.length; traceIdx++) {
+    const trace = sortedTraces[traceIdx];
+    const spans = Object.values(trace.spans ?? {}).filter(
+      (s) => !isExcludedFromTrajectory(s)
+    );
+    const inputs = spans
+      .map((s) =>
+        parseSpanObject<ParsedSpanInput>(s.attributes?.['genkit:input'])
+      )
+      .filter((i): i is ParsedSpanInput => i !== undefined);
+    const resumeDecisions = collectScopeResumeDecisions(inputs);
+    if (resumeDecisions.length === 0) continue;
+
+    const restartedToolSpans = spans.filter(
+      (s) =>
+        isToolSpan(s) && s.attributes?.['genkit:metadata:resumed'] !== undefined
+    ) as NestedSpanData[];
+    const claimedToolSpanIds = new Set<string>();
+
+    for (const [trajId, traj] of Object.entries(trajectories)) {
+      let trajChanged = false;
+      const updatedSteps = traj.steps.map((step) => {
+        const stepOrder = step.traceId
+          ? (traceOrder.get(step.traceId) ?? -1)
+          : -1;
+        if (stepOrder < 0 || stepOrder >= traceIdx) return step;
+
+        let stepChanged = false;
+        const updatedActions: TrajectoryAction[] = step.actions.map(
+          (action) => {
+            if (
+              action.status !== 'interrupted' ||
+              action.resume !== undefined
+            ) {
+              return action;
+            }
+            const resolved = resolveInTraceInterruptResume({
+              reqRef: action.actionId,
+              reqShortName: shortToolName(action.name),
+              resumeDecisions,
+              toolSpans: restartedToolSpans,
+              claimedToolSpanIds,
+              actionOutput: action.output,
+              actionContent: action.content,
+            });
+            if (!resolved.resumeInfo) return action;
+
+            stepChanged = true;
+            let resolvedOutput = resolved.resolvedOutput;
+            let resolvedContent = resolved.resolvedContent;
+            if (resolved.restartedSpan) {
+              const restarted = parseToolSpanResult(resolved.restartedSpan);
+              resolvedOutput ??= restarted.output;
+              resolvedContent ??= restarted.content;
+            }
+            return {
+              ...action,
+              ...(resolvedOutput !== undefined
+                ? { output: resolvedOutput }
+                : {}),
+              ...(resolvedContent ? { content: resolvedContent } : {}),
+              resume: resolved.resumeInfo,
+            };
+          }
+        );
+
+        if (!stepChanged) return step;
+        trajChanged = true;
+        return { ...step, actions: updatedActions };
+      });
+
+      if (trajChanged) {
+        trajectories[trajId] = { ...traj, steps: updatedSteps };
+      }
+    }
+  }
+
+  const root = trajectories[bundle.rootTrajectoryId];
+  if (root) {
+    const latestTraceId = sortedTraces[sortedTraces.length - 1].traceId;
+    const latestStep = root.steps.at(-1);
+    const hasUnresumedInterrupt = root.steps.some((s) =>
+      s.actions.some((a) => a.status === 'interrupted' && !a.resume)
+    );
+    if (
+      !hasUnresumedInterrupt &&
+      root.status === 'interrupted' &&
+      latestStep?.traceId === latestTraceId &&
+      latestStep.finishReason &&
+      latestStep.finishReason !== 'interrupted'
+    ) {
+      trajectories[bundle.rootTrajectoryId] = {
+        ...root,
+        status: latestStep.finishReason === 'failed' ? 'error' : 'success',
+        finishReason: latestStep.finishReason === 'failed' ? 'failed' : 'stop',
+      };
+    }
+  }
+
+  return { ...bundle, trajectories };
+}
+
 /**
  * Extracts and merges multiple `TraceData` objects from the same session into
  * a single chronological `TrajectoryBundle`.
@@ -188,5 +310,8 @@ export function extractTrajectoryFromTraces(
   const sortedTraces = [...traces].sort(
     (a, b) => (a.startTime ?? 0) - (b.startTime ?? 0)
   );
-  return mergeTrajectoryBundles(sortedTraces.map(extractTrajectoryFromTrace));
+  const merged = mergeTrajectoryBundles(
+    sortedTraces.map(extractTrajectoryFromTrace)
+  );
+  return pairCrossTraceInterruptResumes(sortedTraces, merged);
 }
