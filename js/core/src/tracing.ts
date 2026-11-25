@@ -50,6 +50,60 @@ export async function ensureBasicTelemetryInstrumentation() {
   }
 }
 
+const FIREBASE_PLUGIN_MODULE = '@genkit-ai/firebase';
+
+function isModuleNotFoundError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') {
+    return false;
+  }
+  const code = (err as { code?: unknown }).code;
+  return code === 'ERR_MODULE_NOT_FOUND' || code === 'MODULE_NOT_FOUND';
+}
+
+async function importFirebasePlugin(): Promise<{
+  enableFirebaseTelemetry?: () => unknown;
+  default?: { enableFirebaseTelemetry?: () => unknown };
+}> {
+  // Keep the specifier typed as `string` so TypeScript does not statically
+  // require the optional peer dependency and bundlers leave it dynamic.
+  const moduleName: string = FIREBASE_PLUGIN_MODULE;
+  try {
+    return await import(moduleName);
+  } catch (err) {
+    if (
+      !isModuleNotFoundError(err) ||
+      typeof process === 'undefined' ||
+      typeof process.cwd !== 'function'
+    ) {
+      throw err;
+    }
+    // Fallback for layouts (e.g., workspace symlinks or strict package managers
+    // where an intermediate dependency did not forward the optional peer) where
+    // @genkit-ai/firebase is installed under the app rather than adjacent to
+    // @genkit-ai/core.
+    const [{ createRequire }, path, { pathToFileURL }] = await Promise.all([
+      import('node:module'),
+      import('node:path'),
+      import('node:url'),
+    ]);
+    const searchAnchors = [path.join(process.cwd(), 'package.json')];
+    if (typeof process.argv?.[1] === 'string' && process.argv[1]) {
+      searchAnchors.push(path.resolve(process.argv[1]));
+    }
+    for (const anchor of searchAnchors) {
+      try {
+        const resolved = createRequire(anchor).resolve(moduleName);
+        return await import(pathToFileURL(resolved).href);
+      } catch (fallbackErr) {
+        if (!isModuleNotFoundError(fallbackErr)) {
+          throw fallbackErr;
+        }
+      }
+    }
+    throw err;
+  }
+}
+
 /**
  * Checks to see if the customer is using Firebase Genkit Monitoring
  * auto initialization via environment variable by attempting to resolve
@@ -61,22 +115,33 @@ export async function ensureBasicTelemetryInstrumentation() {
 async function checkFirebaseMonitoringAutoInit() {
   if (
     !global[instrumentationKey] &&
-    process.env.ENABLE_FIREBASE_MONITORING === 'true'
+    typeof process !== 'undefined' &&
+    process.env?.ENABLE_FIREBASE_MONITORING === 'true'
   ) {
+    let firebaseModule: Awaited<ReturnType<typeof importFirebasePlugin>>;
     try {
-      const importModule = new Function(
-        'moduleName',
-        'return import(moduleName)'
-      );
-      const firebaseModule = await importModule('@genkit-ai/firebase');
-
-      firebaseModule.enableFirebaseTelemetry();
+      firebaseModule = await importFirebasePlugin();
     } catch (e) {
       logger.warn(
         "It looks like you're trying to enable firebase monitoring, but " +
           "haven't installed the firebase plugin. Please run " +
           '`npm i --save @genkit-ai/firebase` and redeploy.'
       );
+      return;
+    }
+    try {
+      const enableFirebaseTelemetry =
+        firebaseModule?.enableFirebaseTelemetry ??
+        firebaseModule?.default?.enableFirebaseTelemetry;
+      if (typeof enableFirebaseTelemetry === 'function') {
+        enableFirebaseTelemetry();
+      } else {
+        logger.warn(
+          'Unable to enable firebase monitoring: `@genkit-ai/firebase` does not export `enableFirebaseTelemetry`.'
+        );
+      }
+    } catch (e) {
+      logger.warn('Failed to enable firebase monitoring.', e);
     }
   }
 }

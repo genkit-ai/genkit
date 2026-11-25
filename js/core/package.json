@@ -57,9 +57,16 @@
     "tsx": "^4.19.2",
     "typescript": "^5.9.3"
   },
-  "optionalDependencies": {
-    "@cfworker/json-schema": "^4.1.1",
+  "peerDependencies": {
     "@genkit-ai/firebase": "^1.16.1"
+  },
+  "peerDependenciesMeta": {
+    "@genkit-ai/firebase": {
+      "optional": true
+    }
+  },
+  "optionalDependencies": {
+    "@cfworker/json-schema": "^4.1.1"
   },
   "types": "lib/index.d.ts",
   "exports": {
