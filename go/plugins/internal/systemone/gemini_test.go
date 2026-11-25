@@ -192,3 +192,38 @@ func TestGeminiBlocked(t *testing.T) {
 		t.Errorf("error = %v, want INTERNAL for an unreadable success", err)
 	}
 }
+
+func TestGeminiErrors(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		code int
+		body string
+		want error
+	}{
+		// The Gemini API sends a rejected key as a 400.
+		{"rejected key", 400, `{"error":{"code":400,"message":"API key not valid.","status":"INVALID_ARGUMENT","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"API_KEY_INVALID"}]}}`, status.ErrUnauthenticated},
+		{"status wins over the HTTP code", 400, `{"error":{"code":400,"message":"Billing not enabled.","status":"FAILED_PRECONDITION"}}`, status.ErrFailedPrecondition},
+		{"no status", 404, `{"error":{"message":"Not found."}}`, status.ErrNotFound},
+		// The SDK reads the body after the response arrives, so a dropped
+		// connection surfaces as a short read rather than a url.Error.
+		{"connection dropped mid-body", 200, "", status.ErrUnavailable},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := &recorder{respond: func(w http.ResponseWriter, _ int) {
+				w.Header().Set("Content-Type", "application/json")
+				if tt.body == "" {
+					w.Header().Set("Content-Length", "100")
+					w.WriteHeader(tt.code)
+					_, _ = io.WriteString(w, `{"answers":`)
+					return
+				}
+				w.WriteHeader(tt.code)
+				_, _ = io.WriteString(w, tt.body)
+			}}
+			_, err := newGemini(t, rec).Decide(t.Context(), "gemini-decision-1", &Request{State: "hi", Questions: testQuestions})
+			if !errors.Is(err, tt.want) {
+				t.Errorf("error = %v, want %v", err, tt.want)
+			}
+		})
+	}
+}

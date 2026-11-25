@@ -17,12 +17,13 @@
 package systemone
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
-	"net/url"
 	"strings"
 
 	"github.com/firebase/genkit/go/core/status"
@@ -92,12 +93,12 @@ func (g *Gemini) Decide(ctx context.Context, model string, r *Request) (*Respons
 
 // failure maps an SDK error onto a Genkit status, after the SDK has
 // retried what was worth retrying. An input the API refused as unsafe is a
-// blocked response, not an error. Any other error response is mapped as it
-// is on the native wire; a response the SDK could not read, such as a
-// success that is not JSON, is INTERNAL, as a failure to reach the API is
-// UNAVAILABLE; and anything else the SDK refuses, such as a request it
-// cannot encode, is INTERNAL, since it fails the same way every time. A
-// context that ended is reported as such.
+// blocked response, not an error. Any other error response is mapped by
+// [geminiError]; a response the SDK could not read, such as a success that
+// is not JSON, is INTERNAL, as a connection that fails before or during the
+// response is UNAVAILABLE; and anything else the SDK refuses, such as a
+// request it cannot encode, is INTERNAL, since it fails the same way every
+// time. A context that ended is reported as such.
 func (g *Gemini) failure(ctx context.Context, model string, err error) (*Response, error) {
 	if ctx.Err() != nil {
 		return nil, stopped(ctx, err)
@@ -108,15 +109,43 @@ func (g *Gemini) failure(ctx context.Context, model string, err error) (*Respons
 			return &Response{Info: Info{Model: model}, Blocked: block}, nil
 		}
 		if apiErr.StatusCode >= 400 {
-			return nil, httpError(g.Name, apiErr.StatusCode, []byte(apiErr.Body))
+			return nil, geminiError(g.Name, apiErr.StatusCode, []byte(apiErr.Body))
 		}
 		return nil, status.Errorf(status.ErrInternal, "%s: HTTP %d: %s", g.Name, apiErr.StatusCode, apiErr.Message)
 	}
-	var urlErr *url.Error
-	if errors.As(err, &urlErr) {
+	// A connection that fails while the SDK reads the body is as transient
+	// as one that fails before the response.
+	var netErr net.Error
+	if errors.As(err, &netErr) || errors.Is(err, io.ErrUnexpectedEOF) {
 		return nil, status.Errorf(status.ErrUnavailable, "%s: %w", g.Name, err)
 	}
 	return nil, status.Errorf(status.ErrInternal, "%s: %w", g.Name, err)
+}
+
+// geminiError maps an error response as the googlegenai plugin does: the
+// google.rpc status the body names wins over the HTTP code, and a rejected
+// key is UNAUTHENTICATED, though the API sends it as INVALID_ARGUMENT.
+func geminiError(endpoint string, code int, body []byte) error {
+	var envelope struct {
+		Error struct {
+			Status  string `json:"status"`
+			Details []struct {
+				Type   string `json:"@type"`
+				Reason string `json:"reason"`
+			} `json:"details"`
+		} `json:"error"`
+	}
+	_ = json.Unmarshal(body, &envelope)
+	name := status.Name(envelope.Error.Status)
+	for _, d := range envelope.Error.Details {
+		if strings.HasSuffix(d.Type, "google.rpc.ErrorInfo") && d.Reason == "API_KEY_INVALID" {
+			name = status.Unauthenticated
+		}
+	}
+	if !name.IsValid() {
+		return httpError(endpoint, code, body)
+	}
+	return status.Errorf(status.Base(name), "%s: HTTP %d: %s", endpoint, code, cmp.Or(ErrorMessage(body), http.StatusText(code)))
 }
 
 // geminiRequest builds a Decisions request.
