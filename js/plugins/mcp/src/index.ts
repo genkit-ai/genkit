@@ -28,6 +28,7 @@ import {
   McpHostOptionsWithCache,
 } from './client/index.js';
 import { GenkitMcpServer } from './server.js';
+export { type McpToolResponseMode } from './util/tools.js';
 export {
   GenkitMcpClient,
   GenkitMcpHost,
@@ -70,10 +71,8 @@ export interface McpServerOptions {
  * @param options Configuration for the MCP Client Host, including the definitions of MCP servers to connect to.
  * @returns A new instance of GenkitMcpHost.
  */
-export function createMcpHost<M extends boolean = false>(
-  options: McpHostOptions<M>
-) {
-  return new GenkitMcpHost<M>(options);
+export function createMcpHost(options: McpHostOptions) {
+  return new GenkitMcpHost(options);
 }
 
 /**
@@ -99,11 +98,8 @@ export function createMcpHost<M extends boolean = false>(
  * @param options Configuration for the MCP Client Host, including the definitions of MCP servers to connect to.
  * @returns A new instance of GenkitMcpHost.
  */
-export function defineMcpHost<M extends boolean = false>(
-  ai: Genkit,
-  options: McpHostOptionsWithCache<M>
-) {
-  const mcpHost = new GenkitMcpHost<M>(options);
+export function defineMcpHost(ai: Genkit, options: McpHostOptionsWithCache) {
+  const mcpHost = new GenkitMcpHost(options);
   const dap = ai.defineDynamicActionProvider(
     {
       name: options.name,
@@ -140,10 +136,8 @@ export function defineMcpHost<M extends boolean = false>(
  *                to the MCP server and its behavior.
  * @returns A new instance of GenkitMcpClient.
  */
-export function createMcpClient<M extends boolean = false>(
-  options: McpClientOptions<M>
-) {
-  return new GenkitMcpClient<M>(options);
+export function createMcpClient(options: McpClientOptions) {
+  return new GenkitMcpClient(options);
 }
 
 /**
@@ -172,11 +166,11 @@ export function createMcpClient<M extends boolean = false>(
  *                to the MCP server and its behavior.
  * @returns A new instance of GenkitMcpClient.
  */
-export function defineMcpClient<M extends boolean = false>(
+export function defineMcpClient(
   ai: Genkit,
-  options: McpClientOptionsWithCache<M>
+  options: McpClientOptionsWithCache
 ) {
-  const mcpClient = new GenkitMcpClient<M>(options);
+  const mcpClient = new GenkitMcpClient(options);
   const dap = ai.defineDynamicActionProvider(
     {
       name: options.name,

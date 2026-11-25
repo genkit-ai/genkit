@@ -57,13 +57,16 @@ describe('registerAllTools', () => {
       { context: { mcp: { _meta: { progressToken: 'token-123' } } } }
     );
 
-    // The fake transport appends the _meta object to the result content
+    // The fake transport echoes _meta as an extra text block.
     assert.deepStrictEqual(result, {
-      output: 'response{"progressToken":"token-123"}',
+      content: [
+        { text: 'response' },
+        { text: '{"progressToken":"token-123"}' },
+      ],
     });
   });
 
-  it('should pass _meta from context to callTool request for multipart tools', async () => {
+  it('should pass _meta from context to callTool request in raw mode', async () => {
     const ai = genkit({});
     const transport = new FakeTransport();
     transport.tools.push({
@@ -86,7 +89,7 @@ describe('registerAllTools', () => {
     await registerAllTools(ai, client, {
       name: 'test-host',
       serverName: 'test-server',
-      multipart: true,
+      toolResponseMode: 'raw',
     });
 
     const action = await ai.registry.lookupAction(
@@ -100,12 +103,16 @@ describe('registerAllTools', () => {
     );
 
     assert.deepStrictEqual(result, {
-      output: 'response{"progressToken":"token-multipart"}',
-      metadata: undefined,
+      output: {
+        content: [
+          { type: 'text', text: 'response' },
+          { type: 'text', text: '{"progressToken":"token-multipart"}' },
+        ],
+      },
     });
   });
 
-  it('should return structuredContent as output', async () => {
+  it('should return structuredContent as output in structured mode', async () => {
     const ai = genkit({});
     const transport = new FakeTransport();
     transport.tools.push({
@@ -129,7 +136,7 @@ describe('registerAllTools', () => {
     await registerAllTools(ai, client, {
       name: 'test-host',
       serverName: 'test-server',
-      multipart: true,
+      toolResponseMode: 'structured',
     });
 
     const action = await ai.registry.lookupAction(
@@ -139,9 +146,11 @@ describe('registerAllTools', () => {
 
     const result = await action({}, {});
 
+    // The text block doesn't repeat structuredContent, so it's kept.
     assert.deepStrictEqual(result, {
       output: { foo: 'bar', count: 42 },
-      metadata: undefined,
+      content: [{ text: 'this text is ignored' }],
+      metadata: { mcp: { structuredContent: { foo: 'bar', count: 42 } } },
     });
   });
 
@@ -175,7 +184,6 @@ describe('registerAllTools', () => {
     await registerAllTools(ai, client, {
       name: 'test-host',
       serverName: 'test-server',
-      multipart: true,
     });
 
     const action = await ai.registry.lookupAction(
@@ -197,9 +205,9 @@ describe('registerAllTools', () => {
           resource: {
             uri: 'file:///my-file.txt',
           },
+          metadata: { mcp: { name: 'my-file.txt' } },
         },
       ],
-      metadata: undefined,
     });
   });
 });
