@@ -351,6 +351,7 @@ export const FinishReasonSchema = z.enum([
   'other',
   'unknown',
 ]);
+export type FinishReason = z.infer<typeof FinishReasonSchema>;
 
 /** @deprecated All responses now return a single candidate. Only the first candidate will be used if supplied. */
 export const CandidateSchema = z.object({

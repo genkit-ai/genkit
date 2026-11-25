@@ -19,6 +19,8 @@ import type {
   MessageData,
   SpanData,
   ToolDefinition,
+  TraceData,
+  TrajectoryBundle,
 } from '../../../src/types/index.js';
 import { makeSpan, makeTrace } from '../trace.js';
 
@@ -262,3 +264,208 @@ export function makeToolSpan(options: MakeToolSpanOptions = {}): SpanData {
     },
   });
 }
+
+const WEATHER_PREAMBLE_MESSAGE: MessageData = {
+  role: 'system',
+  content: [{ text: 'You are a helpful weather assistant.' }],
+  metadata: { agentPreamble: true },
+};
+
+const WEATHER_USER_MESSAGE: MessageData = {
+  role: 'user',
+  content: [{ text: 'What is the weather in Seattle?' }],
+};
+
+/** Canonical root agent span (`/agent/weatherAgent`). */
+export const MOCK_SPAN_AGENT: SpanData = makeAgentSpan({
+  spanId: 'root-agent',
+  name: 'weatherAgent',
+  sessionId: 'sess-123',
+  startTime: 100,
+  endTime: 500,
+});
+
+/** Canonical first agent turn span (`runTurn-1`). */
+export const MOCK_SPAN_TURN_1: SpanData = makeTurnSpan({
+  spanId: 'turn-1',
+  turn: 1,
+  parentSpanId: 'root-agent',
+  startTime: 105,
+  endTime: 495,
+});
+
+/** Canonical model span emitting reasoning + `getWeather` `toolRequest`. */
+export const MOCK_SPAN_MODEL_TOOL_REQ: SpanData = makeModelSpan({
+  spanId: 'model-1',
+  parentSpanId: 'turn-1',
+  model: 'googleai/gemini-2.5-pro',
+  startTime: 110,
+  endTime: 250,
+  messages: [WEATHER_PREAMBLE_MESSAGE, WEATHER_USER_MESSAGE],
+  tools: [{ name: 'getWeather', description: 'Gets weather for a city' }],
+  outputMessage: {
+    role: 'model',
+    content: [
+      { reasoning: 'Need to call getWeather for Seattle.' },
+      {
+        toolRequest: {
+          ref: 'call-1',
+          name: 'getWeather',
+          input: { city: 'Seattle' },
+        },
+      },
+    ],
+  },
+  finishReason: 'stop',
+  usage: { inputTokens: 20, outputTokens: 15, totalTokens: 35 },
+});
+
+/** Canonical `getWeather` tool execution span paired with `call-1`. */
+export const MOCK_SPAN_TOOL: SpanData = makeToolSpan({
+  spanId: 'tool-1',
+  parentSpanId: 'turn-1',
+  name: 'getWeather',
+  startTime: 255,
+  endTime: 320,
+  input: { city: 'Seattle' },
+  output: { tempF: 62, condition: 'Rainy' },
+});
+
+/** Canonical follow-up model span summarizing the `getWeather` `toolResponse`. */
+export const MOCK_SPAN_MODEL_REPLY: SpanData = makeModelSpan({
+  spanId: 'model-2',
+  parentSpanId: 'turn-1',
+  model: 'googleai/gemini-2.5-pro',
+  startTime: 330,
+  endTime: 480,
+  messages: [
+    WEATHER_PREAMBLE_MESSAGE,
+    WEATHER_USER_MESSAGE,
+    {
+      role: 'model',
+      content: [
+        {
+          toolRequest: {
+            ref: 'call-1',
+            name: 'getWeather',
+            input: { city: 'Seattle' },
+          },
+        },
+      ],
+    },
+    {
+      role: 'tool',
+      content: [
+        {
+          toolResponse: {
+            ref: 'call-1',
+            name: 'getWeather',
+            output: { tempF: 62, condition: 'Rainy' },
+          },
+        },
+      ],
+    },
+  ],
+  outputMessage: {
+    role: 'model',
+    content: [{ text: 'It is 62°F and rainy in Seattle.' }],
+  },
+  finishReason: 'stop',
+  usage: { inputTokens: 45, outputTokens: 12, totalTokens: 57 },
+});
+
+/** Canonical single-turn agent + tool call + final reply trace (`trace-1`). */
+export const MOCK_AGENT_TOOL_TRACE: TraceData = makeTrace(
+  [
+    MOCK_SPAN_AGENT,
+    MOCK_SPAN_TURN_1,
+    MOCK_SPAN_MODEL_TOOL_REQ,
+    MOCK_SPAN_TOOL,
+    MOCK_SPAN_MODEL_REPLY,
+  ],
+  { traceId: 'trace-1', startTime: 100, endTime: 500 }
+);
+
+/** Expected `TrajectoryBundle` projected from {@link MOCK_AGENT_TOOL_TRACE}. */
+export const MOCK_AGENT_TOOL_TRAJECTORY: TrajectoryBundle = {
+  rootTrajectoryId: 'trace-1',
+  sessionId: 'sess-123',
+  trajectories: {
+    'trace-1': {
+      trajectoryId: 'trace-1',
+      agentName: 'weatherAgent',
+      status: 'success',
+      finishReason: 'stop',
+      startTime: 100,
+      endTime: 500,
+      systemInstructions: 'You are a helpful weather assistant.',
+      tools: [
+        {
+          name: 'getWeather',
+          description: 'Gets weather for a city',
+        },
+      ],
+      usage: {
+        inputTokens: 65,
+        outputTokens: 27,
+        totalTokens: 92,
+      },
+      steps: [
+        {
+          stepId: 'turn-1-1',
+          stepNumber: 1,
+          traceId: 'trace-1',
+          spanId: 'turn-1',
+          turnIndex: 0,
+          source: 'user',
+          startTime: 110,
+          endTime: 110,
+          content: [{ text: 'What is the weather in Seattle?' }],
+          actions: [],
+        },
+        {
+          stepId: 'model-1-1',
+          stepNumber: 2,
+          traceId: 'trace-1',
+          spanId: 'model-1',
+          turnIndex: 0,
+          source: 'agent',
+          startTime: 110,
+          endTime: 320,
+          model: 'googleai/gemini-2.5-pro',
+          content: [{ reasoning: 'Need to call getWeather for Seattle.' }],
+          actions: [
+            {
+              actionId: 'call-1',
+              spanId: 'tool-1',
+              name: 'getWeather',
+              type: 'tool',
+              status: 'success',
+              input: { city: 'Seattle' },
+              output: { tempF: 62, condition: 'Rainy' },
+              startTime: 255,
+              endTime: 320,
+            },
+          ],
+          finishReason: 'stop',
+          usage: { inputTokens: 20, outputTokens: 15, totalTokens: 35 },
+        },
+        {
+          stepId: 'model-2-1',
+          stepNumber: 3,
+          traceId: 'trace-1',
+          spanId: 'model-2',
+          turnIndex: 0,
+          source: 'agent',
+          startTime: 330,
+          endTime: 480,
+          model: 'googleai/gemini-2.5-pro',
+          content: [{ text: 'It is 62°F and rainy in Seattle.' }],
+          actions: [],
+          finishReason: 'stop',
+          usage: { inputTokens: 45, outputTokens: 12, totalTokens: 57 },
+        },
+      ],
+    },
+  },
+};
