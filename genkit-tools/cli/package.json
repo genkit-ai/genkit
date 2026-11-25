@@ -43,7 +43,7 @@
     "commander": "^14.0.3",
     "get-port": "catalog:",
     "open": "^11.0.4",
-    "semver": "^7.8.5",
+    "semver": "^7.8.6",
     "yaml": "catalog:",
     "zod": "catalog:"
   },
