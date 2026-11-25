@@ -68,12 +68,21 @@ export function toolContentNote(part: Part): string {
   return JSON.stringify(part.data ?? part);
 }
 
-/** Decodes the text of an inline (`data:`) media URL. */
+/**
+ * Decodes the text of an inline (`data:`) media URL. Malformed payloads are
+ * returned as is rather than failing the request.
+ */
 export function decodeDataUrlText(url: string): string {
-  const data = url.substring(url.indexOf(',') + 1);
-  return url.substring(0, url.indexOf(',')).endsWith(';base64')
-    ? new TextDecoder().decode(
-        Uint8Array.from(atob(data), (c) => c.charCodeAt(0))
-      )
-    : decodeURIComponent(data);
+  const comma = url.indexOf(',');
+  if (comma === -1) return '';
+  const data = url.substring(comma + 1);
+  try {
+    return url.substring(0, comma).endsWith(';base64')
+      ? new TextDecoder().decode(
+          Uint8Array.from(atob(data), (c) => c.charCodeAt(0))
+        )
+      : decodeURIComponent(data);
+  } catch {
+    return data;
+  }
 }
