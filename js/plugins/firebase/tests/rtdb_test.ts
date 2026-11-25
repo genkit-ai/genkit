@@ -93,34 +93,33 @@ describe('RtdbStreamManager', () => {
     assert.ok(data.metadata.updatedAt);
   });
 
-  it('should subscribe to a stream', (done) => {
+  it('should subscribe to a stream', async () => {
     const streamId = 'test-stream-4';
     const chunks: any[] = [];
-    let finalOutput: any;
 
     const db = getDatabase(app);
     const streamRef = db.ref(`genkit-streams/${streamId}`);
-    streamRef.set({ metadata: { createdAt: Date.now() } }).then(async () => {
-      await streamManager.subscribe(streamId, {
-        onChunk: (chunk) => {
-          chunks.push(chunk);
-        },
-        onDone: (output) => {
-          finalOutput = output;
-          assert.deepStrictEqual(chunks, [{ foo: 'bar' }, { bar: 'baz' }]);
-          assert.deepStrictEqual(finalOutput, { result: 'success' });
-          done();
-        },
-        onError(error) {
-          console.log(error);
-        },
-      });
+    await streamRef.set({ metadata: { createdAt: Date.now() } });
 
-      const streamDataRef = streamRef.child('stream');
-      streamDataRef.push({ type: 'chunk', chunk: { foo: 'bar' } });
-      streamDataRef.push({ type: 'chunk', chunk: { bar: 'baz' } });
-      streamDataRef.push({ type: 'done', output: { result: 'success' } });
+    const finalOutput = await new Promise((resolve, reject) => {
+      streamManager
+        .subscribe(streamId, {
+          onChunk: (chunk) => {
+            chunks.push(chunk);
+          },
+          onDone: resolve,
+          onError: reject,
+        })
+        .then(() => {
+          const streamDataRef = streamRef.child('stream');
+          streamDataRef.push({ type: 'chunk', chunk: { foo: 'bar' } });
+          streamDataRef.push({ type: 'chunk', chunk: { bar: 'baz' } });
+          streamDataRef.push({ type: 'done', output: { result: 'success' } });
+        }, reject);
     });
+
+    assert.deepStrictEqual(chunks, [{ foo: 'bar' }, { bar: 'baz' }]);
+    assert.deepStrictEqual(finalOutput, { result: 'success' });
   });
 
   it('should throw an error when subscribing to a non-existent stream', async () => {
@@ -137,26 +136,25 @@ describe('RtdbStreamManager', () => {
     );
   });
 
-  it('should time out when no chunks are received', (done) => {
+  it('should time out when no chunks are received', async () => {
     const streamId = 'test-stream-5';
     streamManager = new RtdbStreamManager({
       firebaseApp: app,
       refPrefix: 'genkit-streams',
       timeout: 100,
     });
-    streamManager.open(streamId).then(() => {
-      streamManager.subscribe(streamId, {
-        onChunk: () => {
-          assert.fail('should not have received a chunk');
-        },
-        onDone: () => {
-          assert.fail('should not have received done');
-        },
-        onError: (err) => {
-          assert.strictEqual(err.status, 'DEADLINE_EXCEEDED');
-          done();
-        },
-      });
+    await streamManager.open(streamId);
+
+    const err = await new Promise<any>((resolve, reject) => {
+      streamManager
+        .subscribe(streamId, {
+          onChunk: () => reject(new Error('should not have received a chunk')),
+          onDone: () => reject(new Error('should not have received done')),
+          onError: resolve,
+        })
+        .catch(reject);
     });
+
+    assert.strictEqual(err.status, 'DEADLINE_EXCEEDED');
   });
 });

@@ -1,4 +1,4 @@
 node_modules
-vitest.config.ts
+vitest.config.mts
 tsconfig.json
 tsup.config.ts
