@@ -23,6 +23,7 @@ import type { DocumentData } from '../../src/document.js';
 import { configureFormats } from '../../src/formats/index.js';
 import { generate } from '../../src/generate.js';
 import {
+  defineModel,
   type GenerateRequest,
   type GenerateResponseData,
   type MessageData,
@@ -32,6 +33,7 @@ import {
   TEST_ONLY,
   augmentWithContext,
   fallback,
+  foldToolResponseContent,
   retry,
   simulateConstrainedGeneration,
   simulateSystemPrompt,
@@ -1086,6 +1088,154 @@ describe.only('simulateConstrainedGeneration', () => {
         },
       },
       tools: [],
+    });
+  });
+});
+
+describe('foldToolResponseContent', () => {
+  const png = 'data:image/png;base64,iVBORw0KGgo=';
+  const request = (content: MessageData['content']): GenerateRequest => ({
+    messages: [
+      { role: 'user', content: [{ text: 'hi' }] },
+      {
+        role: 'model',
+        content: [{ toolRequest: { name: 'shot', ref: '1', input: {} } }],
+      },
+      { role: 'tool', content },
+    ],
+  });
+  const run = async (
+    req: GenerateRequest,
+    options?: Parameters<typeof foldToolResponseContent>[0]
+  ): Promise<MessageData[]> => {
+    let seen: GenerateRequest | undefined;
+    await foldToolResponseContent(options)(req, async (r) => {
+      seen = r;
+      return {};
+    });
+    return seen!.messages;
+  };
+
+  it('passes requests without tool response content through', async () => {
+    const req = request([
+      { toolResponse: { name: 'shot', ref: '1', output: 'ok' } },
+    ]);
+    assert.deepStrictEqual(await run(req), req.messages);
+  });
+
+  it('folds text and resources into output and moves media to a user message', async () => {
+    const messages = await run(
+      request([
+        {
+          toolResponse: {
+            name: 'shot',
+            ref: '1',
+            output: 'ok',
+            content: [
+              { text: 'caption' },
+              { resource: { uri: 'my://res' } },
+              { media: { url: png, contentType: 'image/png' } },
+            ],
+          },
+        },
+      ])
+    );
+    assert.deepStrictEqual(messages.slice(2), [
+      {
+        role: 'tool',
+        content: [
+          {
+            toolResponse: {
+              name: 'shot',
+              ref: '1',
+              output:
+                'ok\n\ncaption\nResource: my://res\n[1 media part(s) follow in the next message]',
+            },
+          },
+        ],
+      },
+      {
+        role: 'user',
+        content: [
+          { text: 'Media returned by tool "shot":' },
+          { media: { url: png, contentType: 'image/png' } },
+        ],
+      },
+    ]);
+  });
+
+  it('keeps structured output next to folded text', async () => {
+    const messages = await run(
+      request([
+        {
+          toolResponse: {
+            name: 'shot',
+            output: { title: 'x' },
+            content: [{ text: 'caption' }],
+          },
+        },
+      ])
+    );
+    assert.deepStrictEqual(messages[2].content[0].toolResponse?.output, {
+      output: { title: 'x' },
+      text: 'caption',
+    });
+  });
+
+  it('replaces media with a note when the model does not accept media', async () => {
+    const messages = await run(
+      request([
+        {
+          toolResponse: {
+            name: 'shot',
+            content: [{ media: { url: png, contentType: 'image/png' } }],
+          },
+        },
+      ]),
+      { media: false }
+    );
+    assert.strictEqual(messages.length, 3);
+    assert.deepStrictEqual(messages[2].content[0].toolResponse, {
+      name: 'shot',
+      output: '[image/png omitted: the model does not accept media]',
+    });
+  });
+
+  it('is applied to models that do not declare toolResponseContent', async () => {
+    const registry = new Registry();
+    configureFormats(registry);
+    const seen: GenerateRequest[] = [];
+    const define = (name: string, toolResponseContent: boolean) =>
+      defineModel(
+        registry,
+        { name, supports: { toolResponseContent } },
+        async (req) => {
+          seen.push(req);
+          return { message: { role: 'model', content: [{ text: 'done' }] } };
+        }
+      );
+    define('folding', false);
+    define('native', true);
+    const messages = request([
+      {
+        toolResponse: {
+          name: 'shot',
+          ref: '1',
+          content: [{ text: 'caption' }],
+        },
+      },
+    ]).messages;
+    await generate(registry, { model: 'folding', messages });
+    await generate(registry, { model: 'native', messages });
+    assert.deepStrictEqual(seen[0].messages[2].content[0].toolResponse, {
+      name: 'shot',
+      ref: '1',
+      output: 'caption',
+    });
+    assert.deepStrictEqual(seen[1].messages[2].content[0].toolResponse, {
+      name: 'shot',
+      ref: '1',
+      content: [{ text: 'caption' }],
     });
   });
 });

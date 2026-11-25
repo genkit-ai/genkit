@@ -31,8 +31,10 @@ export {
   augmentWithContext,
   downloadRequestMedia,
   fallback,
+  foldToolResponseContent,
   retry,
   simulateSystemPrompt,
   validateSupport,
   type AugmentWithContextOptions,
+  type FoldToolResponseContentOptions,
 } from '@genkit-ai/ai/model/middleware';

@@ -53,6 +53,7 @@ import {
 } from './model-types.js';
 import {
   augmentWithContext,
+  foldToolResponseContent,
   simulateConstrainedGeneration,
 } from './model/middleware.js';
 import {
@@ -353,6 +354,11 @@ function getModelMiddleware(options: {
   // Copy so we don't mutate the caller's array (it may be shared across models).
   const middleware: ModelMiddlewareArgument[] = [...(options.use ?? [])];
   if (!options?.supports?.context) middleware.push(augmentWithContext());
+  if (!options?.supports?.toolResponseContent) {
+    middleware.push(
+      foldToolResponseContent({ media: options?.supports?.media ?? true })
+    );
+  }
   const constratedSimulator = simulateConstrainedGeneration();
   const constrained: ModelMiddleware = (req, next) => {
     if (

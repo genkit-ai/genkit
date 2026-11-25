@@ -81,6 +81,10 @@ export interface MockModelOptions {
    * instead exercise the framework's simulated path, where the schema is
    * injected into the prompt (and thus visible in `lastRequestText`) and
    * stripped from what `respond` sees.
+   *
+   * `supports.toolResponseContent` defaults to `true`, so `respond` sees tool
+   * response `content` as sent. Pass `false` to exercise the
+   * `foldToolResponseContent` shim instead.
    */
   info?: ModelInfo;
   /**
@@ -376,7 +380,11 @@ export function mockModel(
       // intact instead of the framework injecting a schema blob into the prompt
       // and stripping it. Spread last so callers can opt out with
       // `supports: { constrained: 'none' }` to exercise the simulated path.
-      supports: { constrained: 'all', ...options.info?.supports },
+      supports: {
+        constrained: 'all',
+        toolResponseContent: true,
+        ...options.info?.supports,
+      },
     },
     async (request, { sendChunk }) => {
       // Snapshot so later mutation of the request can't alter recorded history.
