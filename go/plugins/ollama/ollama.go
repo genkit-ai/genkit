@@ -772,7 +772,7 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 		var err error
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read response body: %v", err)
+			return nil, fmt.Errorf("failed to read response body: %w", err)
 		}
 
 		var response *ai.ModelResponse
@@ -782,7 +782,7 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 			response, err = translateModelResponse(body)
 		}
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse response: %v", err)
+			return nil, fmt.Errorf("failed to parse response: %w", err)
 		}
 		response.Request = input
 		return response, nil
@@ -794,10 +794,10 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 
 		for {
 			var raw json.RawMessage
-			if err := decoder.Decode(&raw); err == io.EOF {
+			if err := decoder.Decode(&raw); errors.Is(err, io.EOF) {
 				break
 			} else if err != nil {
-				return nil, fmt.Errorf("reading response stream: %v", err)
+				return nil, fmt.Errorf("reading response stream: %w", err)
 			}
 			chunkCount++
 

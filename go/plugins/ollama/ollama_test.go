@@ -1421,4 +1421,21 @@ func TestGenerateErrors(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("keeps a deadline that ends the stream matchable", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			fmt.Fprintln(w, `{"message":{"role":"assistant","content":"a"},"done":false}`)
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+		}))
+		defer server.Close()
+
+		ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+		defer cancel()
+		g := &generator{model: ModelDefinition{Name: "test-model", Type: "chat"}, serverAddress: server.URL}
+		_, err := g.generate(ctx, input, func(context.Context, *ai.ModelResponseChunk) error { return nil })
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("generate() error = %v, want %v", err, context.DeadlineExceeded)
+		}
+	})
 }
