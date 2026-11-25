@@ -181,7 +181,15 @@ export class GenkitMcpServer {
         const def = toToolDefinition(t);
         return {
           name: def.name,
-          inputSchema: (def.inputSchema as any) || { type: 'object' },
+          // Tools without an input schema (z.void()) describe `{}`; MCP
+          // requires an object schema.
+          inputSchema: (def.inputSchema?.type
+            ? def.inputSchema
+            : { ...def.inputSchema, type: 'object' }) as Tool['inputSchema'],
+          // MCP output schemas must describe an object (structuredContent).
+          ...(def.outputSchema?.type === 'object'
+            ? { outputSchema: def.outputSchema as Tool['outputSchema'] }
+            : {}),
           description: def.description,
           _meta: t.__action.metadata?.mcp?._meta,
         };
@@ -207,18 +215,8 @@ export class GenkitMcpServer {
         status: 'NOT_FOUND',
         message: `Tried to call tool '${req.params.name}' but it could not be found.`,
       });
-    const { output } = await tool(req.params.arguments);
-    return {
-      content: [
-        {
-          type: 'text',
-          text:
-            typeof output === 'string'
-              ? output
-              : (JSON.stringify(output) ?? ''),
-        },
-      ],
-    };
+    const { output, content } = await tool(req.params.arguments);
+    return toCallToolResult(req.params.name, output, content);
   }
 
   /**
@@ -435,6 +433,80 @@ function toMcpPromptMessage(messageData: MessageData): PromptMessage {
   } else {
     return { ...common, content: { type: 'text', text: message.text } };
   }
+}
+
+/**
+ * Converts a tool response to an MCP CallToolResult. `output` is sent as
+ * serialized JSON text (and as `structuredContent` when it's an object, as the
+ * MCP spec recommends), `content` parts as content blocks.
+ */
+function toCallToolResult(
+  toolName: string,
+  output: unknown,
+  content: Part[] | undefined
+): CallToolResult {
+  const blocks: CallToolResult['content'] = [];
+  if (output !== undefined) {
+    blocks.push({
+      type: 'text',
+      text: typeof output === 'string' ? output : JSON.stringify(output),
+    });
+  }
+  content?.forEach((p, i) => blocks.push(toMcpContentBlock(toolName, p, i)));
+  const structured =
+    typeof output === 'object' && output !== null && !Array.isArray(output);
+  return {
+    content: blocks,
+    ...(structured
+      ? { structuredContent: output as Record<string, unknown> }
+      : {}),
+  };
+}
+
+/** Converts a tool response content part to an MCP content block. */
+function toMcpContentBlock(
+  toolName: string,
+  part: Part,
+  index: number
+): CallToolResult['content'][number] {
+  if (part.text !== undefined) {
+    return { type: 'text', text: part.text };
+  }
+  if (part.media) {
+    const { url } = part.media;
+    if (!url.startsWith('data:')) {
+      return {
+        type: 'resource_link',
+        uri: url,
+        name: url,
+        ...(part.media.contentType ? { mimeType: part.media.contentType } : {}),
+      };
+    }
+    const mimeType =
+      part.media.contentType ||
+      url.substring(url.indexOf(':') + 1, url.indexOf(';'));
+    const data = url.substring(url.indexOf(',') + 1);
+    if (mimeType.startsWith('image/')) return { type: 'image', mimeType, data };
+    if (mimeType.startsWith('audio/')) return { type: 'audio', mimeType, data };
+    // Other inline media (pdf, video, ...) has no dedicated MCP block type.
+    return {
+      type: 'resource',
+      resource: {
+        uri: `genkit://tool/${toolName}/content/${index}`,
+        mimeType,
+        blob: data,
+      },
+    };
+  }
+  if (part.resource) {
+    return {
+      type: 'resource_link',
+      uri: part.resource.uri,
+      name: part.resource.uri,
+    };
+  }
+  // Anything else (data, custom, ...) is sent as JSON text.
+  return { type: 'text', text: JSON.stringify(part.data ?? part) };
 }
 
 /**
