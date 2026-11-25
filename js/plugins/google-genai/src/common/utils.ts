@@ -1453,6 +1453,24 @@ export function toSnakeCaseObj(val: unknown): Record<string, unknown> {
 }
 
 /**
+ * Converts only the top-level keys of an object to snake_case; values,
+ * including nested objects, are kept as they are. For objects whose own
+ * keys are API field names but whose values can hold keys chosen by the
+ * user (e.g. HTTP header names, a JSON schema's property names), which
+ * must be sent unchanged. A non-object gives `{}`.
+ */
+export function toSnakeCaseKeys(val: unknown): Record<string, unknown> {
+  if (!isObject(val)) {
+    return {};
+  }
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(val)) {
+    result[camelToSnakeCase(key)] = value;
+  }
+  return result;
+}
+
+/**
  * Inserts raw audio bytes at the end of a WAV file's `data` chunk and updates
  * the RIFF and `data` sizes. Chunks after `data` (the server sends one) stay
  * after the audio. Returns `undefined` if `wav` isn't a WAV file with a
