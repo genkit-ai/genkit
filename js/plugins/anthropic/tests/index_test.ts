@@ -19,7 +19,7 @@ import { genkit, type ActionMetadata } from 'genkit';
 import type { ModelInfo } from 'genkit/model';
 import { describe, it } from 'node:test';
 import anthropic from '../src/index.js';
-import { TEST_ONLY } from '../src/models.js';
+import { TEST_ONLY, type KnownClaudeModels } from '../src/models.js';
 import { PluginOptions, __testClient } from '../src/types.js';
 
 import { createMockAnthropicClient } from './mocks/anthropic-client.js';
@@ -133,8 +133,8 @@ describe('Anthropic Plugin', () => {
           id: 'claude-haiku-4-5-latest',
           display_name: 'Claude 4.5 Haiku Latest',
         },
-        { id: 'claude-sonnet-4-5', display_name: 'Claude 4.5 Sonnet' },
-        { id: 'claude-sonnet-4', display_name: 'Claude 4 Sonnet' },
+        { id: 'claude-sonnet-4-6', display_name: 'Claude Sonnet 4.6' },
+        { id: 'claude-opus-5-5', display_name: 'Claude Opus 5.5' },
         { id: 'claude-new-5-20251212', display_name: 'Claude New 5' },
         { id: 'claude-experimental-latest' },
       ],
@@ -159,12 +159,12 @@ describe('Anthropic Plugin', () => {
       'Latest variant should be listed separately'
     );
     assert.ok(
-      names.includes('anthropic/claude-sonnet-4-5'),
-      'Unknown Claude 4.5 Sonnet should be listed with full model ID'
+      names.includes('anthropic/claude-sonnet-4-6'),
+      'Known Claude Sonnet 4.6 model should be listed with full model ID'
     );
     assert.ok(
-      names.includes('anthropic/claude-sonnet-4'),
-      'Known Claude Sonnet 4 model should be listed with full model ID'
+      names.includes('anthropic/claude-opus-5-5'),
+      'Known Claude Opus 5.5 model should be listed with full model ID'
     );
     assert.ok(
       names.includes('anthropic/claude-new-5-20251212'),
@@ -186,6 +186,13 @@ describe('Anthropic Plugin', () => {
       (model) => model.name === 'anthropic/claude-new-5-20251212'
     );
     assert.ok(newModelMetadata, 'New model metadata should exist');
+    const newModelInfo = getModelInfo(newModelMetadata);
+    assert.deepStrictEqual(
+      newModelInfo?.supports?.output,
+      ['text'],
+      'Unknown models should fall back to text-only output'
+    );
+    assert.strictEqual(newModelInfo?.supports?.constrained, undefined);
 
     const experimentalMetadata = models.find(
       (model) => model.name === 'anthropic/claude-experimental-latest'
@@ -230,6 +237,32 @@ describe('Anthropic Plugin', () => {
       listStub.mock.calls.length,
       1,
       'beta.models.list should only be called once due to caching'
+    );
+  });
+});
+
+describe('Known model list', () => {
+  const CURRENT_MODELS: KnownClaudeModels[] = [
+    'claude-fable-5-2',
+    'claude-fable-5-1',
+    'claude-fable-5',
+    'claude-opus-5-5',
+    'claude-opus-5',
+    'claude-opus-4-8',
+    'claude-opus-4-7',
+    'claude-opus-4-6',
+    'claude-opus-4-5',
+    'claude-sonnet-5-5',
+    'claude-sonnet-5',
+    'claude-sonnet-4-6',
+    'claude-haiku-5-5',
+    'claude-haiku-4-5',
+  ];
+
+  it('lists exactly the current models', () => {
+    assert.deepStrictEqual(
+      Object.keys(KNOWN_MODELS).sort(),
+      [...CURRENT_MODELS].sort()
     );
   });
 });
