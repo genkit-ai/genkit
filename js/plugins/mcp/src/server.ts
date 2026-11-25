@@ -212,7 +212,10 @@ export class GenkitMcpServer {
       content: [
         {
           type: 'text',
-          text: typeof output === 'string' ? output : JSON.stringify(output),
+          text:
+            typeof output === 'string'
+              ? output
+              : (JSON.stringify(output) ?? ''),
         },
       ],
     };

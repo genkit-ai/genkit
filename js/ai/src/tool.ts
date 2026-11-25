@@ -625,7 +625,8 @@ function buildTool<I extends GenkitSchema, O extends GenkitSchema>(
       };
       const response = await parseSchemaAsync<MultipartToolResponse>(
         config.multipart
-          ? await (fn as MultipartToolFn<I, O>)(i, ctx)
+          ? // Tolerate a multipart tool that returns nothing.
+            ((await (fn as MultipartToolFn<I, O>)(i, ctx)) ?? {})
           : { output: await (fn as ToolFn<I, O>)(i, ctx) },
         { schema: MultipartToolResponseSchema }
       );

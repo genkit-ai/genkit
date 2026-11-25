@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { action, z } from '@genkit-ai/core';
+import { action, z, type GenkitSchema } from '@genkit-ai/core';
 import { initNodeFeatures } from '@genkit-ai/core/node';
 import { Registry } from '@genkit-ai/core/registry';
 import * as assert from 'assert';
@@ -30,6 +30,7 @@ import {
   restartTool,
   toToolDefinition,
   tool,
+  type MultipartToolFn,
 } from '../src/tool.js';
 
 initNodeFeatures();
@@ -650,6 +651,15 @@ describe('defineTool', () => {
       async () => 'foo'
     );
     assert.deepStrictEqual(await t({}), { output: 'foo' });
+  });
+
+  it('tolerates a multipart tool that returns nothing', async () => {
+    const t = defineTool(
+      registry,
+      { name: 'voidMultipart', description: 'test', multipart: true },
+      (async () => {}) as unknown as MultipartToolFn<GenkitSchema, GenkitSchema>
+    );
+    assert.deepStrictEqual(await t({}), {});
   });
 
   it('advertises the declared output schema, not the envelope', async () => {
