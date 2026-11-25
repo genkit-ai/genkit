@@ -176,6 +176,11 @@ export function metadataToAttributes(
  * JSON-encodes a span attribute value. Telemetry must never fail the traced
  * operation, so a value JSON can't encode (a cycle, a BigInt) is recorded as
  * a JSON string placeholder rather than throwing.
+ *
+ * Like `JSON.stringify` (and typed the same way), an undefined value yields
+ * undefined rather than a string. That is deliberate: an undefined attribute
+ * (e.g. `genkit:input` of a no-input action) is dropped on export, where an
+ * empty string would reach the Dev UI as unparseable JSON.
  */
 function stringifyAttribute(value: unknown): string {
   try {
