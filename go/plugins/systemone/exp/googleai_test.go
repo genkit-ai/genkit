@@ -140,3 +140,17 @@ func TestMediaResolutionRefusedElsewhere(t *testing.T) {
 		t.Errorf("error = %v, calls = %d, want a refusal before the request", err, fake.Calls())
 	}
 }
+
+func TestGoogleAIExtraRefused(t *testing.T) {
+	// The SDK builds the whole request, so extra fields would be dropped.
+	fake := &systemonetest.Server{}
+	g := newGoogleAI(t, fake, nil)
+	_, err := genkit.Generate(t.Context(), g,
+		ai.WithModelName("googleai-decisions/gemini-decision-1"),
+		ai.WithOutputType(triage{}),
+		ai.WithConfig(&Config{Extra: map[string]any{"seed": 1}}),
+		ai.WithPrompt("hi"))
+	if err == nil || fake.Calls() != 0 {
+		t.Errorf("error = %v, calls = %d, want a refusal before the request", err, fake.Calls())
+	}
+}
