@@ -1339,7 +1339,7 @@ func TestAPIKeyFromEnvironment(t *testing.T) {
 	}
 }
 
-func TestGenerateStreaming(t *testing.T) {
+func TestGenerateErrors(t *testing.T) {
 	input := &ai.ModelRequest{Messages: []*ai.Message{ai.NewUserTextMessage("hi")}}
 
 	t.Run("stops and returns the callback's error", func(t *testing.T) {
@@ -1365,23 +1365,32 @@ func TestGenerateStreaming(t *testing.T) {
 		}
 	})
 
-	t.Run("returns an error for a non-200 reply", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			http.Error(w, `{"error":"model \"llama9\" not found, try pulling it first"}`, http.StatusNotFound)
-		}))
-		defer server.Close()
+	// The status check runs before either read path, for both endpoints.
+	for _, modelType := range []string{"chat", "generate"} {
+		for _, stream := range []bool{false, true} {
+			t.Run(fmt.Sprintf("returns an error for a non-200 reply (%s, stream=%v)", modelType, stream), func(t *testing.T) {
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					http.Error(w, `{"error":"model \"llama9\" not found, try pulling it first"}`, http.StatusNotFound)
+				}))
+				defer server.Close()
 
-		g := &generator{model: ModelDefinition{Name: "llama9", Type: "chat"}, serverAddress: server.URL}
-		calls := 0
-		_, err := g.generate(t.Context(), input, func(context.Context, *ai.ModelResponseChunk) error {
-			calls++
-			return nil
-		})
-		if err == nil || !strings.Contains(err.Error(), "non-200 status: 404") {
-			t.Errorf("generate() error = %v, want a non-200 status error", err)
+				g := &generator{model: ModelDefinition{Name: "llama9", Type: modelType}, serverAddress: server.URL}
+				calls := 0
+				var cb func(context.Context, *ai.ModelResponseChunk) error
+				if stream {
+					cb = func(context.Context, *ai.ModelResponseChunk) error {
+						calls++
+						return nil
+					}
+				}
+				_, err := g.generate(t.Context(), input, cb)
+				if err == nil || !strings.Contains(err.Error(), "non-200 status: 404") {
+					t.Errorf("generate() error = %v, want a non-200 status error", err)
+				}
+				if calls != 0 {
+					t.Errorf("callback called %d times, want 0", calls)
+				}
+			})
 		}
-		if calls != 0 {
-			t.Errorf("callback called %d times, want 0", calls)
-		}
-	})
+	}
 }

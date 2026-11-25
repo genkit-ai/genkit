@@ -755,9 +755,10 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 	defer resp.Body.Close()
 
 	// Check the status before reading the body in either mode: a streaming
-	// request would otherwise decode the error reply as a chunk.
+	// request would otherwise decode the error reply as a chunk. Ollama's
+	// error replies are short, so a longer body is cut off.
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
 		return nil, fmt.Errorf("server returned non-200 status: %d, body: %s", resp.StatusCode, body)
 	}
 
