@@ -273,7 +273,7 @@ describe('v2 plugin tools', () => {
         ),
       ],
       resolve: (actionType, name) =>
-        actionType === 'tool'
+        actionType === 'tool.v2'
           ? tool({ name, description: name }, async () => 'ok')
           : undefined,
     });
@@ -281,9 +281,9 @@ describe('v2 plugin tools', () => {
     defineEchoModel(ai);
     const tools = await Promise.all(
       [
-        '/tool/toolPlugin/eager',
+        '/tool.v2/toolPlugin/eager',
         '/tool.v2/toolPlugin/multipart',
-        '/tool/toolPlugin/lazy',
+        '/tool.v2/toolPlugin/lazy',
       ].map((key) => ai.registry.lookupAction(key))
     );
     const errors = mock.method(logger, 'error');

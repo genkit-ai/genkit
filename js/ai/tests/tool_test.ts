@@ -24,10 +24,11 @@ import {
   defineTool,
   interrupt,
   isDynamicTool,
-  isMultipartTool,
+  isToolAction,
   resolveTools,
   respondTool,
   restartTool,
+  toToolDefinition,
   tool,
 } from '../src/tool.js';
 
@@ -127,7 +128,12 @@ describe('defineInterrupt', () => {
       description: 'simple',
       outputSchema: ResponseSchema,
     });
-    assert.equal(simple.__action.outputSchema, ResponseSchema);
+    // The action returns the tool response envelope; the declared schema is
+    // what manifests and tool definitions advertise.
+    assert.equal(simple.__action.outputSchema, undefined);
+    assert.deepStrictEqual(toToolDefinition(simple).outputSchema?.properties, {
+      foo: { type: 'string' },
+    });
     const simple2 = defineInterrupt(registry, {
       name: 'simple2',
       description: 'simple2',
@@ -188,15 +194,15 @@ describe('defineInterrupt', () => {
         },
         async ({ n }) => ({ doubled: n * 2 })
       );
-      assert.deepStrictEqual(await t({}), { doubled: 4, note: 'ok' });
-      const v2 = await registry.lookupAction('/tool.v2/parsed');
-      assert.deepStrictEqual(await v2({}), {
+      assert.deepStrictEqual(await t({}), {
         output: { doubled: 4, note: 'ok' },
       });
+      const registered = await registry.lookupAction('/tool.v2/parsed');
+      assert.strictEqual(registered, t);
     });
 
-    it('parses an undefined regular tool output in the v2 action too', async () => {
-      defineTool(
+    it('parses an undefined regular tool output', async () => {
+      const t = defineTool(
         registry,
         {
           name: 'defaulted',
@@ -205,10 +211,7 @@ describe('defineInterrupt', () => {
         },
         async () => undefined
       );
-      const v1 = await registry.lookupAction('/tool/defaulted');
-      const v2 = await registry.lookupAction('/tool.v2/defaulted');
-      assert.strictEqual(await v1({}), 'fallback');
-      assert.deepStrictEqual(await v2({}), { output: 'fallback' });
+      assert.deepStrictEqual(await t({}), { output: 'fallback' });
     });
   });
 
@@ -353,7 +356,7 @@ describe('isDynamicTool', () => {
     const dynamic = tool({ name: 'dynamic', description: 'test' });
     assert.strictEqual(isDynamicTool(dynamic), true);
 
-    registry.registerAction('tool', dynamic);
+    registry.registerAction('tool.v2', dynamic);
 
     assert.strictEqual(isDynamicTool(dynamic), true);
   });
@@ -390,7 +393,7 @@ describe('isDynamicTool', () => {
   });
 });
 
-describe('isMultipartTool', () => {
+describe('isToolAction', () => {
   let registry = new Registry();
   registry.apiStability = 'beta';
   afterEach(() => {
@@ -398,22 +401,23 @@ describe('isMultipartTool', () => {
     registry.apiStability = 'beta';
   });
 
-  it('should return true for a multipart tool', () => {
+  it('should return true for regular and multipart tools', () => {
     const multipart = defineTool(
       registry,
       { name: 'multipart', description: 'test', multipart: true },
       async () => ({})
     );
-    assert.strictEqual(isMultipartTool(multipart), true);
-  });
-
-  it('should return false for a non-multipart tool', () => {
     const regular = defineTool(
       registry,
       { name: 'regular', description: 'test' },
       async () => {}
     );
-    assert.strictEqual(isMultipartTool(regular), false);
+    assert.strictEqual(isToolAction(multipart), true);
+    assert.strictEqual(isToolAction(regular), true);
+    assert.strictEqual(
+      isToolAction(tool({ name: 'd', description: 'd' })),
+      true
+    );
   });
 
   it('should return false for a non-tool action', () => {
@@ -421,13 +425,13 @@ describe('isMultipartTool', () => {
       { actionType: 'util', name: 'regularAction', description: 'test' },
       async () => {}
     );
-    assert.strictEqual(isMultipartTool(regularAction), false);
+    assert.strictEqual(isToolAction(regularAction), false);
   });
 
   it('should return false for a non-action', () => {
-    assert.strictEqual(isMultipartTool({}), false);
-    assert.strictEqual(isMultipartTool('tool'), false);
-    assert.strictEqual(isMultipartTool(123), false);
+    assert.strictEqual(isToolAction({}), false);
+    assert.strictEqual(isToolAction('tool'), false);
+    assert.strictEqual(isToolAction(123), false);
   });
 });
 
@@ -601,7 +605,7 @@ describe('defineTool', () => {
       async () => {}
     );
     assert.strictEqual(registered.__action.metadata.tool.restartable, false);
-    assert.strictEqual(registered.__action.metadata.type, 'tool');
+    assert.strictEqual(registered.__action.metadata.type, 'tool.v2');
 
     const dynamic = tool({
       name: 'dynamic_restartable',
@@ -610,16 +614,20 @@ describe('defineTool', () => {
     });
     assert.strictEqual(dynamic.__action.metadata.tool.restartable, false);
     assert.strictEqual(dynamic.__action.metadata.tool.custom, 'val');
-    assert.strictEqual(dynamic.__action.metadata.type, 'tool');
+    assert.strictEqual(dynamic.__action.metadata.type, 'tool.v2');
   });
 
-  it('should register a v1 tool as v2 as well', async () => {
-    defineTool(registry, { name: 'test', description: 'test' }, async () => {});
-    assert.ok(await registry.lookupAction('/tool/test'));
-    assert.ok(await registry.lookupAction('/tool.v2/test'));
+  it('should register a regular tool only as tool.v2', async () => {
+    const t = defineTool(
+      registry,
+      { name: 'test', description: 'test' },
+      async () => {}
+    );
+    assert.strictEqual(await registry.lookupAction('/tool.v2/test'), t);
+    assert.equal(await registry.lookupAction('/tool/test'), undefined);
   });
 
-  it('should only register a multipart tool as v2', async () => {
+  it('should only register a multipart tool as tool.v2', async () => {
     defineTool(
       registry,
       { name: 'test', description: 'test', multipart: true },
@@ -629,16 +637,56 @@ describe('defineTool', () => {
     assert.equal(await registry.lookupAction('/tool/test'), undefined);
   });
 
-  it('should wrap v1 tool output when called as v2', async () => {
-    defineTool(
+  it('should only register an interrupt as tool.v2', async () => {
+    defineInterrupt(registry, { name: 'ask', description: 'ask' });
+    assert.ok(await registry.lookupAction('/tool.v2/ask'));
+    assert.equal(await registry.lookupAction('/tool/ask'), undefined);
+  });
+
+  it('should wrap a regular tool result as the tool response output', async () => {
+    const t = defineTool(
       registry,
       { name: 'test', description: 'test' },
       async () => 'foo'
     );
-    const action = await registry.lookupAction('/tool.v2/test');
-    assert.ok(action);
-    const result = await action!({});
-    assert.deepStrictEqual(result, { output: 'foo' });
+    assert.deepStrictEqual(await t({}), { output: 'foo' });
+  });
+
+  it('advertises the declared output schema, not the envelope', async () => {
+    const t = defineTool(
+      registry,
+      {
+        name: 'typed',
+        description: 'test',
+        multipart: true,
+        outputSchema: z.object({ title: z.string() }),
+      },
+      async () => ({ output: { title: 'x' } })
+    );
+    const def = toToolDefinition(t);
+    assert.deepStrictEqual(def.outputSchema?.properties, {
+      title: { type: 'string' },
+    });
+    assert.strictEqual(t.__action.outputSchema, undefined);
+  });
+
+  it('types the tool response output by the output schema', async () => {
+    const t = defineTool(
+      registry,
+      {
+        name: 'typedOutput',
+        description: 'test',
+        inputSchema: z.object({ city: z.string() }),
+        outputSchema: z.object({ temp: z.number() }),
+      },
+      async () => ({ temp: 21 })
+    );
+    const r = await t({ city: 'Paris' });
+    const temp: number | undefined = r.output?.temp;
+    assert.strictEqual(temp, 21);
+    // @ts-expect-error output is typed, not any
+    const wrong: string | undefined = r.output?.temp;
+    assert.ok(wrong !== undefined);
   });
 });
 

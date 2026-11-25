@@ -211,5 +211,12 @@ export const MultipartToolResponseSchema = wireObject({
   metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
-/** A multipart tool response containing structured output, content parts, and metadata. */
-export type MultipartToolResponse = z.infer<typeof MultipartToolResponseSchema>;
+/**
+ * The result every tool returns: structured `output` (typed by the tool's output
+ * schema), optional `content` parts (media, text, etc.), and optional metadata
+ * that lands on the resulting tool response part.
+ */
+export type MultipartToolResponse<O = unknown> = Omit<
+  z.infer<typeof MultipartToolResponseSchema>,
+  'output'
+> & { output?: O };

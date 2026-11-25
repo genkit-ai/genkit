@@ -208,7 +208,7 @@ export class GenAiInstrumentation implements Instrumentation {
     switch (actionType) {
       case 'model':
         return this.runModelSpan(info, next);
-      case 'tool':
+      case 'tool.v2':
         if (this.emitToolSpans) return this.runToolSpan(info, next);
         return this.runGenericSpan(info, next, actionType);
       default:

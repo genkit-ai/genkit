@@ -43,7 +43,10 @@ import {
   type ToolRequestPart,
   type ToolResponsePart,
 } from './model.js';
-import { MultipartToolResponseSchema } from './parts.js';
+import {
+  MultipartToolResponseSchema,
+  type MultipartToolResponse,
+} from './parts.js';
 
 /**
  * Interface for tools that support the interrupts / human-in-the-loop pattern.
@@ -69,7 +72,7 @@ export interface Resumable<
      * interrupt's input schema.
      **/
     outputData: InferInput<O>,
-    options?: { metadata?: Record<string, any> }
+    options?: ToolRespondOptions
   ): ToolResponsePart;
 
   /**
@@ -98,33 +101,34 @@ export interface Resumable<
   ): ToolRequestPart;
 }
 
+/** Options for {@link Resumable.respond} and {@link respondTool}. */
+export interface ToolRespondOptions {
+  /** Metadata recorded as the `interruptResponse` of the tool response part. */
+  metadata?: Record<string, any>;
+  /** Content parts (media, text, etc.) to include alongside the output. */
+  content?: Part[];
+}
+
 /**
- * An action with a `tool` type.
+ * Type-level view of {@link MultipartToolResponseSchema} with `output` typed by
+ * the tool's output schema `O`. The runtime schema can't embed an arbitrary
+ * output schema, so only the types carry `O`.
+ */
+export type ToolResponseSchema<O extends GenkitSchema = GenkitSchema> =
+  GenkitSchema<
+    MultipartToolResponse<InferInput<O>>,
+    MultipartToolResponse<InferOutput<O>>
+  >;
+
+/**
+ * A tool: an action of type `tool.v2` that returns a {@link MultipartToolResponse}
+ * (`{ output, content, metadata }`), with `output` typed by the tool's output
+ * schema `O`.
  */
 export type ToolAction<
   I extends GenkitSchema = GenkitSchema,
   O extends GenkitSchema = GenkitSchema,
-> = Action<I, O, GenkitSchema, ToolRunOptions> &
-  Resumable<I, O> & {
-    __action: {
-      metadata: {
-        type: 'tool';
-      };
-    };
-  };
-
-/**
- * An action with a `tool.v2` type.
- */
-export type MultipartToolAction<
-  I extends GenkitSchema = GenkitSchema,
-  O extends GenkitSchema = GenkitSchema,
-> = Action<
-  I,
-  typeof MultipartToolResponseSchema,
-  GenkitSchema,
-  ToolRunOptions
-> &
+> = Action<I, ToolResponseSchema<O>, GenkitSchema, ToolRunOptions> &
   Resumable<I, O> & {
     __action: {
       metadata: {
@@ -134,21 +138,12 @@ export type MultipartToolAction<
   };
 
 /**
- * A dynamic action with a `tool` type. Dynamic tools are detached actions -- not associated with any registry.
+ * @deprecated Every tool is multipart now, use {@link ToolAction}.
  */
-export type DynamicToolAction<
+export type MultipartToolAction<
   I extends GenkitSchema = GenkitSchema,
   O extends GenkitSchema = GenkitSchema,
-> = Action<I, O, GenkitSchema, ToolRunOptions> & {
-  /** @deprecated no-op, for backwards compatibility only. */
-  attach(registry: Registry): ToolAction<I, O>;
-} & Resumable<I, O> & {
-    __action: {
-      metadata: {
-        type: 'tool';
-      };
-    };
-  };
+> = ToolAction<I, O>;
 
 /** Runtime options passed to a tool when it is executed by the framework. */
 export interface ToolRunOptions extends ActionRunOptions<GenkitSchema> {
@@ -190,24 +185,26 @@ export type ToolArgument<
 > = string | ToolAction<I, O> | Action<I, O>;
 
 /**
- * Converts an action to a tool action by setting the appropriate metadata.
+ * Converts an action to a tool action. Tools are returned as is; any other
+ * action (a flow, or a legacy `tool` action registered by other code) is
+ * adapted so that its result becomes the tool response `output`.
  */
 export function asTool<I extends GenkitSchema, O extends GenkitSchema>(
   registry: Registry,
-  action: Action<I, O>
+  action: Action<I, O> | ToolAction<I, O>
 ): ToolAction<I, O> {
-  if (action.__action?.metadata?.type === 'tool') {
+  if (isToolAction(action)) {
     return action as ToolAction<I, O>;
   }
 
-  const fn = ((input) => {
+  const fn = (async (input) => {
     setCustomMetadataAttributes({ subtype: 'tool' });
-    return action(input);
+    return { output: await action(input) };
   }) as ToolAction<I, O>;
   fn.__action = {
     ...action.__action,
-    metadata: { ...action.__action.metadata, type: 'tool' },
-  };
+    metadata: { ...action.__action.metadata, type: 'tool.v2' },
+  } as ToolAction<I, O>['__action'];
   return fn;
 }
 
@@ -250,14 +247,16 @@ export async function lookupToolByName(
 ): Promise<ToolAction> {
   const tool =
     (await registry.lookupAction(name)) ||
-    (await registry.lookupAction(`/tool/${name}`)) ||
     (await registry.lookupAction(`/tool.v2/${name}`)) ||
-    (await registry.lookupAction(`/dynamic-action-provider/${name}`));
+    (await registry.lookupAction(`/dynamic-action-provider/${name}`)) ||
+    // Legacy: nothing in Genkit registers `tool` actions anymore, but other
+    // code might. They are adapted to return a tool response.
+    (await registry.lookupAction(`/tool/${name}`));
   if (!tool) {
     throw new Error(`Tool ${name} not found`);
   }
   assertNotPrompt(tool);
-  return tool as ToolAction;
+  return asTool(registry, tool);
 }
 
 /**
@@ -331,17 +330,13 @@ export type ToolFn<I extends GenkitSchema, O extends GenkitSchema> = (
 export type MultipartToolFn<I extends GenkitSchema, O extends GenkitSchema> = (
   input: InferOutput<I>,
   ctx: ToolFnOptions & ToolRunOptions
-) => Promise<{
-  output?: InferInput<O>;
-  content?: Part[];
-  metadata?: Record<string, any>;
-}>;
+) => Promise<MultipartToolResponse<InferInput<O>>>;
 
 export function defineTool<I extends GenkitSchema, O extends GenkitSchema>(
   registry: Registry,
   config: { multipart: true } & ToolConfig<I, O>,
   fn?: MultipartToolFn<I, O>
-): MultipartToolAction<I, O>;
+): ToolAction<I, O>;
 export function defineTool<I extends GenkitSchema, O extends GenkitSchema>(
   registry: Registry,
   config: ToolConfig<I, O>,
@@ -357,18 +352,10 @@ export function defineTool<I extends GenkitSchema, O extends GenkitSchema>(
   registry: Registry,
   config: { multipart?: true } & ToolConfig<I, O>,
   fn?: ToolFn<I, O> | MultipartToolFn<I, O>
-): ToolAction<I, O> | MultipartToolAction<I, O> {
-  if (config.multipart) {
-    const a = multipartTool(config, fn as MultipartToolFn<I, O> | undefined);
-    delete a.__action.metadata.dynamic;
-    registry.registerAction('tool.v2', a);
-    return a;
-  }
-  const a = basicTool(config, fn as ToolFn<I, O> | undefined);
+): ToolAction<I, O> {
+  const a = buildTool(config, fn);
   delete a.__action.metadata.dynamic;
-  registry.registerAction('tool', a);
-  // For non-multipart tools, we register a v2 tool action as well
-  registry.registerAction('tool.v2', basicToolV2(config, fn as ToolFn<I, O>));
+  registry.registerAction('tool.v2', a);
   return a;
 }
 
@@ -478,13 +465,14 @@ export function restartTool(
 export function respondTool(
   interrupt: ToolRequestPart,
   responseData: any,
-  options?: { metadata?: any }
+  options?: ToolRespondOptions
 ): ToolResponsePart {
   return {
     toolResponse: stripUndefinedProps({
       name: interrupt.toolRequest.name,
       ref: interrupt.toolRequest.ref,
       output: responseData,
+      content: options?.content,
     }),
     metadata: stripUndefinedProps({
       interruptResponse: options?.metadata ?? true,
@@ -500,12 +488,12 @@ export function isToolResponse(part: Part): part is ToolResponsePart {
   return !!part.toolResponse;
 }
 
-export function isDynamicTool(
-  t: unknown
-): t is ToolAction | MultipartToolAction {
-  return isAction(t) && t.__action?.metadata?.dynamic === true;
+export function isDynamicTool(t: unknown): t is ToolAction {
+  return isToolAction(t) && t.__action?.metadata?.dynamic === true;
 }
-export function isMultipartTool(t: unknown): t is MultipartToolAction {
+
+/** Whether `t` is a tool action (type `tool.v2`). */
+export function isToolAction(t: unknown): t is ToolAction {
   return isAction(t) && t.__action?.metadata?.type === 'tool.v2';
 }
 
@@ -539,7 +527,7 @@ export function defineInterrupt<I extends GenkitSchema, O extends GenkitSchema>(
 ): ToolAction<I, O> {
   const i = interrupt(config);
   delete i.__action.metadata.dynamic;
-  registry.registerAction('tool', i);
+  registry.registerAction('tool.v2', i);
   return i;
 }
 
@@ -574,7 +562,7 @@ function interruptTool(registry?: Registry) {
 export function tool<I extends GenkitSchema, O extends GenkitSchema>(
   config: { multipart: true } & ToolConfig<I, O>,
   fn?: MultipartToolFn<I, O>
-): MultipartToolAction<I, O>;
+): ToolAction<I, O>;
 export function tool<I extends GenkitSchema, O extends GenkitSchema>(
   config: ToolConfig<I, O>,
   fn?: ToolFn<I, O>
@@ -587,10 +575,8 @@ export function tool<I extends GenkitSchema, O extends GenkitSchema>(
 export function tool<I extends GenkitSchema, O extends GenkitSchema>(
   config: { multipart?: true } & ToolConfig<I, O>,
   fn?: ToolFn<I, O> | MultipartToolFn<I, O>
-): ToolAction<I, O> | MultipartToolAction<I, O> {
-  return config.multipart
-    ? multipartTool(config, fn as MultipartToolFn<I, O> | undefined)
-    : basicTool(config, fn as ToolFn<I, O> | undefined);
+): ToolAction<I, O> {
+  return buildTool(config, fn);
 }
 
 function recordResumedMetadata(runOptions: any) {
@@ -602,58 +588,21 @@ function recordResumedMetadata(runOptions: any) {
   }
 }
 
-function basicTool<I extends GenkitSchema, O extends GenkitSchema>(
-  config: ToolConfig<I, O>,
-  fn?: ToolFn<I, O>
+/**
+ * Builds a (dynamic) tool action. Every tool returns a multipart tool response:
+ * `multipart: true` tools return it themselves, the result of any other tool
+ * becomes its `output`.
+ */
+function buildTool<I extends GenkitSchema, O extends GenkitSchema>(
+  config: { multipart?: true } & ToolConfig<I, O>,
+  fn?: ToolFn<I, O> | MultipartToolFn<I, O>
 ): ToolAction<I, O> {
   const a = action(
     {
       ...config,
-      actionType: 'tool',
-      metadata: { ...(config.metadata || {}), type: 'tool', dynamic: true },
-    },
-    (i, runOptions) => {
-      recordResumedMetadata(runOptions);
-      const interrupt = interruptTool(runOptions.registry);
-      if (fn) {
-        return fn(i, {
-          ...runOptions,
-          context: { ...runOptions.context },
-          interrupt,
-        });
-      }
-      return interrupt();
-    }
-  ) as ToolAction<I, O>;
-  implementTool(a, config);
-  return a;
-}
-
-function basicToolV2<I extends GenkitSchema, O extends GenkitSchema>(
-  config: ToolConfig<I, O>,
-  fn?: ToolFn<I, O>
-): MultipartToolAction<I, O> {
-  return multipartTool(config, async (input, ctx) => {
-    if (!fn) {
-      const interrupt = interruptTool(ctx.registry);
-      return interrupt();
-    }
-    return {
-      output: await fn(input, ctx),
-    };
-  });
-}
-
-function multipartTool<I extends GenkitSchema, O extends GenkitSchema>(
-  config: { multipart?: true } & ToolConfig<I, O>,
-  fn?: MultipartToolFn<I, O>
-): MultipartToolAction<I, O> {
-  const a = action(
-    {
-      ...config,
-      outputSchema: MultipartToolResponseSchema,
-      // The action returns the `{ output, content }` envelope; the tool's own
-      // output JSON schema (which would take priority) describes `output` only.
+      // The action returns the multipart envelope, validated below. The tool's
+      // own output schema describes `output` only, so it isn't the action's.
+      outputSchema: undefined,
       outputJsonSchema: undefined,
       actionType: 'tool.v2',
       metadata: {
@@ -663,21 +612,26 @@ function multipartTool<I extends GenkitSchema, O extends GenkitSchema>(
         dynamic: true,
       },
     },
-    async (i, runOptions) => {
+    async (i, runOptions): Promise<MultipartToolResponse> => {
       recordResumedMetadata(runOptions);
       const interrupt = interruptTool(runOptions.registry);
       if (!fn) {
         return interrupt();
       }
-      const response = await fn(i, {
+      const ctx = {
         ...runOptions,
         context: { ...runOptions.context },
         interrupt,
-      });
-      // The action's output schema is the multipart envelope; parse `output`
-      // with the tool's own schema, like the v1 tool action does. Multipart
-      // tools may return only `content`; the v2 action of a regular tool
-      // parses `undefined` like its v1 action (defaults, required checks).
+      };
+      const response = await parseSchemaAsync<MultipartToolResponse>(
+        config.multipart
+          ? await (fn as MultipartToolFn<I, O>)(i, ctx)
+          : { output: await (fn as ToolFn<I, O>)(i, ctx) },
+        { schema: MultipartToolResponseSchema }
+      );
+      // Parse `output` with the tool's own schema. Multipart tools may return
+      // only `content`; a regular tool's result is always parsed (defaults,
+      // required checks), even when it's `undefined`.
       if (response.output === undefined && config.multipart) return response;
       return {
         ...response,
@@ -687,22 +641,16 @@ function multipartTool<I extends GenkitSchema, O extends GenkitSchema>(
         }),
       };
     }
-  ) as MultipartToolAction<I, O>;
-  implementTool(a as any, config);
+  ) as unknown as ToolAction<I, O>;
+  // Manifests (Dev UI, reflection) and model-facing tool definitions describe
+  // the tool's declared output (what `output` holds), not the envelope, like
+  // Genkit Dart. Set after construction so the action layer doesn't validate
+  // the envelope against it.
+  a.__action.outputJsonSchema =
+    toJsonSchema({
+      schema: config.outputSchema,
+      jsonSchema: config.outputJsonSchema,
+    }) ?? undefined;
+  implementTool(a, config);
   return a;
-}
-
-/**
- * Defines a dynamic tool. Dynamic tools are just like regular tools but will not be registered in the
- * Genkit registry and can be defined dynamically at runtime.
- *
- * @deprecated renamed to {@link tool}.
- */
-export function dynamicTool<I extends GenkitSchema, O extends GenkitSchema>(
-  config: ToolConfig<I, O>,
-  fn?: ToolFn<I, O>
-): DynamicToolAction<I, O> {
-  const t = basicTool(config, fn) as DynamicToolAction<I, O>;
-  t.attach = (_: Registry) => t;
-  return t;
 }

@@ -126,7 +126,7 @@ export {
   type ToolResponse,
   type ToolResponsePart,
 } from '@genkit-ai/ai';
-export { dynamicTool, tool } from '@genkit-ai/ai/tool';
+export { tool } from '@genkit-ai/ai/tool';
 export {
   GENKIT_CLIENT_HEADER,
   GENKIT_VERSION,

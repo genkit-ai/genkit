@@ -29,12 +29,16 @@
 
 export {
   asTool,
-  dynamicTool,
   interrupt,
+  isToolAction,
   toToolDefinition,
   tool,
   type MultipartToolAction,
+  type MultipartToolFn,
   type ToolAction,
   type ToolArgument,
   type ToolConfig,
+  type ToolFn,
+  type ToolRespondOptions,
+  type ToolResponseSchema,
 } from '@genkit-ai/ai/tool';

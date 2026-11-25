@@ -24,8 +24,8 @@ import { getFirestore } from 'firebase-admin/firestore';
 import fs from 'fs';
 import {
   MessageSchema,
-  dynamicTool,
   genkit,
+  tool,
   z,
   type GenerateResponseData,
   type MediaPart,
@@ -472,7 +472,7 @@ export const dynamicToolCaller = ai.defineFlow(
     streamSchema: z.any(),
   },
   async (input, { sendChunk }) => {
-    const dynamicGablorkenTool = dynamicTool(
+    const dynamicGablorkenTool = tool(
       {
         name: 'dynamicGablorkenTool',
         inputSchema: z.object({

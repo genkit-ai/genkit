@@ -78,7 +78,6 @@ import {
 import {
   assertNotPrompt,
   isDynamicTool,
-  isMultipartTool,
   resolveTools,
   toToolDefinition,
   type ToolArgument,
@@ -737,7 +736,7 @@ export function maybeRegisterDynamicMiddlewareTools(
   middlewares?.forEach((mw) => {
     mw.tools?.forEach((t) => {
       if (isDynamicTool(t)) {
-        registry.registerAction('tool', t as Action);
+        registry.registerAction('tool.v2', t);
       }
     });
   });
@@ -749,11 +748,7 @@ function maybeRegisterDynamicTools<
 >(registry: Registry, options: GenerateOptions<O, CustomOptions>) {
   options?.tools?.forEach((t) => {
     if (isDynamicTool(t)) {
-      if (isMultipartTool(t)) {
-        registry.registerAction('tool.v2', t);
-      } else {
-        registry.registerAction('tool', t as Action);
-      }
+      registry.registerAction('tool.v2', t);
     }
   });
 }
@@ -871,11 +866,13 @@ async function resolveFullToolNames(
       return names;
     }
   }
-  if (await registry.lookupAction(`/tool/${name}`)) {
-    return [`/tool/${name}`];
-  }
   if (await registry.lookupAction(`/tool.v2/${name}`)) {
     return [`/tool.v2/${name}`];
+  }
+  // Legacy: nothing in Genkit registers `tool` actions anymore, but other code
+  // might. They are adapted to return a tool response when resolved.
+  if (await registry.lookupAction(`/tool/${name}`)) {
+    return [`/tool/${name}`];
   }
   throw new Error(`Unable to resolve tool: ${name}`);
 }

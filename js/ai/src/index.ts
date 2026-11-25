@@ -158,6 +158,7 @@ export {
   defineInterrupt,
   defineTool,
   interrupt,
+  isToolAction,
   respondTool,
   restartTool,
   type InterruptConfig,
@@ -165,5 +166,7 @@ export {
   type ToolAction,
   type ToolArgument,
   type ToolConfig,
+  type ToolRespondOptions,
+  type ToolResponseSchema,
 } from './tool.js';
 export * from './types.js';
