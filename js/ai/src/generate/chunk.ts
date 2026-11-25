@@ -119,7 +119,7 @@ export class GenerateResponseChunk<
    * @returns The first `data` part detected in the chunk (if any).
    */
   get data(): T | null {
-    return (this.content.find((part) => part.data !== undefined)?.data ??
+    return (this.content.find((part) => part.data != null)?.data ??
       null) as T | null;
   }
 
@@ -138,11 +138,9 @@ export class GenerateResponseChunk<
    * with the generate request, or falls back to naive JSON parsing otherwise.
    */
   get output(): T | null {
-    if (this.parser) return this.parser(this);
-    // A data part wins even when its value is falsy (0, false, '', null).
-    const dataPart = this.content.find((part) => part.data !== undefined);
-    if (dataPart) return dataPart.data as T | null;
-    return extractJson(this.accumulatedText);
+    const parsed = this.parser?.(this);
+    if (parsed != null) return parsed;
+    return this.data ?? extractJson(this.accumulatedText);
   }
 
   toJSON(): GenerateResponseChunkData {

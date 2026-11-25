@@ -83,11 +83,8 @@ export class Message<T = unknown> implements MessageData {
    */
   get output(): T {
     const parsed = this.parser?.(this);
-    if (parsed) return parsed;
-    // A data part wins even when its value is falsy (0, false, '', null).
-    const dataPart = this.content.find((part) => part.data !== undefined);
-    if (dataPart) return dataPart.data as T;
-    return extractJson<T>(this.text);
+    if (parsed != null) return parsed;
+    return (this.data ?? extractJson<T>(this.text)) as T;
   }
 
   toolResponseParts(): ToolResponsePart[] {
@@ -125,7 +122,7 @@ export class Message<T = unknown> implements MessageData {
    * @returns The first `data` part detected in the message (if any).
    */
   get data(): T | null {
-    return (this.content.find((part) => part.data !== undefined)?.data ??
+    return (this.content.find((part) => part.data != null)?.data ??
       null) as T | null;
   }
 

@@ -67,26 +67,49 @@ describe('Message', () => {
       assert.strictEqual(m.data, null);
     });
 
-    it('returns a null data part without falling back to text JSON', () => {
+    it('skips a null data part, as Go and Python do', () => {
+      const besideText = new Message({
+        role: 'model',
+        content: [{ text: '{"a": 1}', data: null }],
+      });
+      assert.deepStrictEqual(besideText.output, { a: 1 });
+      const beforeData = new Message({
+        role: 'model',
+        content: [{ data: null }, { data: { a: 1 } }],
+      });
+      assert.deepStrictEqual(beforeData.output, { a: 1 });
+      assert.deepStrictEqual(beforeData.data, { a: 1 });
+    });
+
+    it('returns the first data part even when it is falsy', () => {
       const m = new Message({
         role: 'model',
-        content: [{ data: null }, { text: '{"a": 1}' }],
+        content: [{ data: 0 }, { data: { a: 1 } }],
       });
-      assert.strictEqual(m.output, null);
+      assert.strictEqual(m.output, 0);
+      assert.strictEqual(m.data, 0);
     });
 
     it('falls back to a data part when the parser finds nothing', () => {
       const m = new Message(
         { role: 'model', content: [{ data: 0 }] },
-        { parser: () => null as any }
+        { parser: () => null }
       );
       assert.strictEqual(m.output, 0);
+    });
+
+    it('keeps a falsy parser result', () => {
+      const m = new Message(
+        { role: 'model', content: [{ data: 0 }] },
+        { parser: () => false }
+      );
+      assert.strictEqual(m.output, false);
     });
 
     it('still prefers a truthy parser result', () => {
       const m = new Message(
         { role: 'model', content: [{ data: 0 }] },
-        { parser: () => 7 as any }
+        { parser: () => 7 }
       );
       assert.strictEqual(m.output, 7);
     });

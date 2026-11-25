@@ -51,7 +51,7 @@ describe('GenerateResponseChunk', () => {
       assert.strictEqual(chunk.output, 0);
     });
 
-    it('returns null from a null data part without falling back to text JSON', () => {
+    it('skips a null data part', () => {
       const chunk = new GenerateResponseChunk(
         {
           index: 0,
@@ -61,7 +61,15 @@ describe('GenerateResponseChunk', () => {
         { index: 0, role: 'model', previousChunks: [] }
       );
       assert.strictEqual(chunk.data, null);
-      assert.strictEqual(chunk.output, null);
+      assert.deepStrictEqual(chunk.output, { a: 1 });
+    });
+
+    it('falls back to a data part when the parser finds nothing', () => {
+      const chunk = new GenerateResponseChunk(
+        { index: 0, role: 'model', content: [{ data: 0 }] },
+        { index: 0, role: 'model', previousChunks: [], parser: () => null }
+      );
+      assert.strictEqual(chunk.output, 0);
     });
 
     it('returns null from #data when there is no data part', () => {
