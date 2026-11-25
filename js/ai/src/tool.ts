@@ -43,7 +43,6 @@ import {
   type ToolResponsePart,
 } from './model.js';
 import { MultipartToolResponseSchema } from './parts.js';
-import { isExecutablePrompt, type ExecutablePrompt } from './prompt.js';
 
 /**
  * Interface for tools that support the interrupts / human-in-the-loop pattern.
@@ -187,7 +186,7 @@ export interface ToolConfig<I extends GenkitSchema, O extends GenkitSchema> {
 export type ToolArgument<
   I extends GenkitSchema = GenkitSchema,
   O extends GenkitSchema = GenkitSchema,
-> = string | ToolAction<I, O> | Action<I, O> | ExecutablePrompt<any, any, any>;
+> = string | ToolAction<I, O> | Action<I, O>;
 
 /**
  * Converts an action to a tool action by setting the appropriate metadata.
@@ -231,8 +230,6 @@ export async function resolveTools<
         return await lookupToolByName(registry, ref);
       } else if (isAction(ref)) {
         return asTool(registry, ref);
-      } else if (isExecutablePrompt(ref)) {
-        return await ref.asTool();
       } else if ((ref as ToolDefinition).name) {
         return await lookupToolByName(
           registry,
@@ -253,7 +250,6 @@ export async function lookupToolByName(
     (await registry.lookupAction(name)) ||
     (await registry.lookupAction(`/tool/${name}`)) ||
     (await registry.lookupAction(`/tool.v2/${name}`)) ||
-    (await registry.lookupAction(`/prompt/${name}`)) ||
     (await registry.lookupAction(`/dynamic-action-provider/${name}`));
   if (!tool) {
     throw new Error(`Tool ${name} not found`);

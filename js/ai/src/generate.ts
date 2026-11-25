@@ -68,7 +68,6 @@ import {
   type ToolRequestPart,
   type ToolResponsePart,
 } from './model.js';
-import { isExecutablePrompt } from './prompt.js';
 import {
   ResourceAction,
   ResourceArgument,
@@ -413,9 +412,6 @@ async function toolsToActionRefs(
       tools.push(...names);
     } else if (isAction(t) || isDynamicTool(t)) {
       tools.push(`/${t.__action.metadata?.type}/${t.__action.name}`);
-    } else if (isExecutablePrompt(t)) {
-      const promptToolAction = await t.asTool();
-      tools.push(`/prompt/${promptToolAction.__action.name}`);
     } else {
       throw new Error(`Unable to determine type of tool: ${JSON.stringify(t)}`);
     }
@@ -872,9 +868,6 @@ async function resolveFullToolNames(
   }
   if (await registry.lookupAction(`/tool.v2/${name}`)) {
     return [`/tool.v2/${name}`];
-  }
-  if (await registry.lookupAction(`/prompt/${name}`)) {
-    return [`/prompt/${name}`];
   }
   throw new Error(`Unable to resolve tool: ${name}`);
 }

@@ -17,7 +17,6 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { Prompt } from '@modelcontextprotocol/sdk/types.js';
 import {
-  GenkitError,
   type ExecutablePrompt,
   type GenerateOptions,
   type GenerateResponse,
@@ -26,7 +25,6 @@ import {
   type GenkitSchema,
   type JSONSchema,
   type PromptGenerateOptions,
-  type ToolAction,
 } from 'genkit';
 import { logger } from 'genkit/logging';
 import type { InferOutput } from 'genkit/schema';
@@ -139,13 +137,6 @@ function createExecutablePrompt<
       ...opts,
       messages,
     };
-  };
-
-  callPrompt.asTool = async (): Promise<ToolAction> => {
-    throw new GenkitError({
-      status: 'UNIMPLEMENTED',
-      message: `[MCP] prompt.asTool not supported with MCP`,
-    });
   };
 
   return callPrompt;

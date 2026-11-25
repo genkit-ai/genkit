@@ -429,10 +429,6 @@ export class Genkit extends GenkitAI implements HasRegistry {
       };
     };
 
-    executablePrompt.asTool = async (): Promise<ToolAction<I, O>> => {
-      return (await promise).asTool() as Promise<ToolAction<I, O>>;
-    };
-
     return executablePrompt;
   }
 

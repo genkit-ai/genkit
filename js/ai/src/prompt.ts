@@ -67,7 +67,7 @@ import {
   type Part,
 } from './model.js';
 import { getCurrentSession, type Session } from './session.js';
-import type { ToolAction, ToolArgument } from './tool.js';
+import type { ToolArgument } from './tool.js';
 
 /**
  * Prompt action.
@@ -84,10 +84,6 @@ export type PromptAction<I extends GenkitSchema = GenkitSchema> = Action<
   };
   __executablePrompt: ExecutablePrompt<InferInput<I>>;
 };
-
-export function isPromptAction(action: Action): action is PromptAction {
-  return action.__action.metadata?.type === 'prompt';
-}
 
 /**
  * Prompt action.
@@ -189,11 +185,6 @@ export interface ExecutablePrompt<
     input?: I,
     opts?: PromptGenerateOptions<O, CustomOptions>
   ): Promise<GenerateOptions<O, CustomOptions>>;
-
-  /**
-   * Returns the prompt usable as a tool.
-   */
-  asTool(): Promise<ToolAction>;
 }
 
 export type PartsResolver<I, S = any> = (
@@ -550,9 +541,6 @@ function wrapInExecutablePrompt<
     );
   };
 
-  executablePrompt.asTool = async (): Promise<ToolAction<I, O>> => {
-    return (await wrapOpts.rendererAction) as unknown as ToolAction<I, O>;
-  };
   return executablePrompt;
 }
 
@@ -726,9 +714,6 @@ function toolName(tool: ToolArgument): string | undefined {
   if (isAction(tool)) {
     return tool.__action.name;
   }
-  if (isExecutablePrompt(tool)) {
-    return tool.ref.name;
-  }
   return undefined;
 }
 
@@ -790,9 +775,7 @@ async function renderDotpromptToParts<
  */
 export function isExecutablePrompt(obj: any): obj is ExecutablePrompt {
   return (
-    !!(obj as ExecutablePrompt)?.render &&
-    !!(obj as ExecutablePrompt)?.asTool &&
-    !!(obj as ExecutablePrompt)?.stream
+    !!(obj as ExecutablePrompt)?.render && !!(obj as ExecutablePrompt)?.stream
   );
 }
 
