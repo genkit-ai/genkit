@@ -34,7 +34,7 @@ ai.defineFlow('stable-pdf-base64', async () => {
   const pdfBase64 = pdfBuffer.toString('base64');
 
   const { text } = await ai.generate({
-    model: anthropic.model('claude-sonnet-4-5'),
+    model: anthropic.model('claude-sonnet-5-5'),
     messages: [
       {
         role: 'user',
@@ -67,7 +67,7 @@ ai.defineFlow('stable-pdf-url', async () => {
     'https://assets.anthropic.com/m/1cd9d098ac3e6467/original/Claude-3-Model-Card-October-Addendum.pdf';
 
   const { text } = await ai.generate({
-    model: anthropic.model('claude-sonnet-4-5'),
+    model: anthropic.model('claude-sonnet-5-5'),
     messages: [
       {
         role: 'user',
@@ -99,7 +99,7 @@ ai.defineFlow('stable-pdf-analysis', async () => {
   const pdfBase64 = pdfBuffer.toString('base64');
 
   const { text } = await ai.generate({
-    model: anthropic.model('claude-sonnet-4-5'),
+    model: anthropic.model('claude-sonnet-5-5'),
     messages: [
       {
         role: 'user',

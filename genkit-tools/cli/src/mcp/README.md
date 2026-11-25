@@ -34,8 +34,3 @@ The following tools allow MCP-aware environments to interact with the Genkit ser
 | **`kill_runtime`** | Kills the runtime process started by `start_runtime`. |
 | **`restart_runtime`** | Restarts the runtime process started by `start_runtime`. |
 
-### Available Prompts
-
-| Prompt Name | Description |
-| :--- | :--- |
-| **`genkit:init`** | Helps initialize a new Genkit project with best practices and language-specific setup. |

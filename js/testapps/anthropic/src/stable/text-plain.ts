@@ -33,7 +33,7 @@ const ai = genkit({
 ai.defineFlow('stable-text-plain-error', async () => {
   try {
     await ai.generate({
-      model: anthropic.model('claude-sonnet-4-5'),
+      model: anthropic.model('claude-sonnet-5-5'),
       messages: [
         {
           role: 'user',
@@ -66,7 +66,7 @@ ai.defineFlow('stable-text-plain-correct', async () => {
   const textContent = 'Hello World\n\nThis is a text file content.';
 
   const { text } = await ai.generate({
-    model: anthropic.model('claude-sonnet-4-5'),
+    model: anthropic.model('claude-sonnet-5-5'),
     messages: [
       {
         role: 'user',

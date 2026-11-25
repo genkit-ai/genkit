@@ -205,7 +205,7 @@ export const start = new Command('start')
     if (!options.noui) {
       const port =
         options.port ?? (await getPort({ port: portNumbers(4000, 4099) }));
-      startServer(manager, port, options.host);
+      void startServer(manager, port, options.host);
       if (options.open) {
         const openHost =
           options.host && options.host !== '0.0.0.0' && options.host !== '::'
@@ -215,7 +215,9 @@ export const start = new Command('start')
           openHost.includes(':') && !openHost.startsWith('[')
             ? `[${openHost}]`
             : openHost;
-        open(`http://${formattedHost}:${port}`);
+        void Promise.resolve(open(`http://${formattedHost}:${port}`)).catch(
+          () => {}
+        );
       }
     }
     await processPromise;

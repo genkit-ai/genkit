@@ -76,8 +76,11 @@ export class FirstUsageEvent extends GAEvent {
   name = 'first_visit';
   duration = 1;
 
-  constructor() {
+  constructor(project_runtime?: string) {
     super();
+    this.parameters = {
+      project_runtime: project_runtime || 'unknown',
+    };
   }
 }
 
@@ -180,14 +183,16 @@ export function extractActionType(key?: unknown): string {
 }
 
 /** Displays a notification that analytics are in use. */
-export async function notifyAnalyticsIfFirstRun(): Promise<void> {
+export async function notifyAnalyticsIfFirstRun(
+  projectRuntime?: string
+): Promise<void> {
   if (isAnalyticsOptedOut()) return;
 
   if (configstore.get(NOTIFICATION_ACKED)) {
     return;
   }
 
-  console.log(ANALYTICS_NOTIFICATION);
+  logger.info(ANALYTICS_NOTIFICATION);
 
   const readline = createInterface({
     input: process.stdin,
@@ -198,7 +203,7 @@ export async function notifyAnalyticsIfFirstRun(): Promise<void> {
 
   configstore.set(NOTIFICATION_ACKED, true);
 
-  await record(new FirstUsageEvent());
+  await record(new FirstUsageEvent(projectRuntime));
 }
 
 /** Gets session information for the UI. */
@@ -361,7 +366,7 @@ async function recordInternal(
       if (!response.ok) {
         logger.warn(`Analytics validation HTTP error: ${response.status}`);
       }
-      const respBody = await response.text;
+      const respBody = await response.text();
       logger.debug(`Analytics validation result: ${respBody}`);
     }
     // response.ok / response.status intentionally ignored, see comment below.

@@ -921,6 +921,8 @@ export function isStringArray(values: unknown[]): values is string[] {
 const DROPPED_CONFIG_FIELD_HINTS: Record<string, string> = {
   'thinkingConfig.thinkingBudget':
     " Use thinkingConfig.thinkingLevel ('LOW' | 'MEDIUM' | 'HIGH') instead.",
+  'functionCallingConfig.allowedFunctionNames':
+    " It only applies with mode 'ANY' or 'VALIDATED'.",
 };
 
 /** `model:field` pairs that have already been warned about. */

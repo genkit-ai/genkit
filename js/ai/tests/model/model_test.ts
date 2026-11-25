@@ -45,8 +45,7 @@ describe('model', () => {
     it('defines a model', async () => {
       const registry = new Registry();
       let calledWithStreamingCallback:
-        | StreamingCallback<GenerateResponseChunkData>
-        | undefined;
+        StreamingCallback<GenerateResponseChunkData> | undefined;
       const model = defineModel(
         registry,
         {

@@ -33,8 +33,9 @@ export interface VertexVectorSearchOptions<
 export type IIndexDatapoint =
   aiplatform.protos.google.cloud.aiplatform.v1.IIndexDatapoint;
 
-export class Datapoint extends aiplatform.protos.google.cloud.aiplatform.v1
-  .IndexDatapoint {
+export class Datapoint
+  extends aiplatform.protos.google.cloud.aiplatform.v1.IndexDatapoint
+{
   constructor(properties: IIndexDatapoint) {
     super(properties);
   }

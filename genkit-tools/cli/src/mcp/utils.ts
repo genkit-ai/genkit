@@ -14,10 +14,8 @@
  * limitations under the License.
  */
 
-import {
-  BaseRuntimeManager,
-  GenkitToolsError,
-} from '@genkit-ai/tools-common/manager';
+import type { BaseRuntimeManager } from '@genkit-ai/tools-common/manager';
+import { GenkitToolsError } from '@genkit-ai/tools-common/manager';
 import path from 'path';
 import { z } from 'zod';
 import {

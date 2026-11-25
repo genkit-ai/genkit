@@ -15,11 +15,11 @@
  */
 
 import { record } from '@genkit-ai/tools-common/utils';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import z from 'zod';
 import { McpRunToolEvent } from './analytics.js';
+import type { McpToolOptions } from './utils.js';
 import {
-  McpToolOptions,
   formatMcpError,
   getCommonSchema,
   resolveProjectRoot,

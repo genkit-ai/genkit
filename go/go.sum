@@ -182,8 +182,8 @@ github.com/golang/protobuf v1.4.3/go.mod h1:oDoupMAO8OvCJWAcko0GGGIgR6R6ocIYbsSw
 github.com/golang/protobuf v1.5.0/go.mod h1:FsONVRAS9T7sI+LIUmWTfcYkHO4aIWwzhcaSAoJOfIk=
 github.com/golang/protobuf v1.5.4 h1:i7eJL8qZTpSEXOPTxNKhASYpMn+8e5Q6AdndVa1dWek=
 github.com/golang/protobuf v1.5.4/go.mod h1:lnTiLA8Wa4RWRcIUkrtSVa5nRhsEGBg48fD6rSs7xps=
-github.com/google/dotprompt/go v0.0.0-20260708220100-73beb993ac95 h1:SJdnmyOaT+kZNcUR+a1y2+Oa51j2ctCjYbtexaiXN68=
-github.com/google/dotprompt/go v0.0.0-20260708220100-73beb993ac95/go.mod h1:dnlL7KrFwJ7s8EJdsAp1WdLqOalJq1Sx2jWZnQkhFXs=
+github.com/google/dotprompt/go v0.0.0-20261118194220-bdc60beb8a17 h1:ZLqxco58oRiBLiSEF8/X8Adysw8ZlmlR5s3nTxJFJmE=
+github.com/google/dotprompt/go v0.0.0-20261118194220-bdc60beb8a17/go.mod h1:iXHNbixObmFNZFUYK/FowBLET1msct+SuNxjZiQ0TUg=
 github.com/google/flatbuffers v23.5.26+incompatible h1:M9dgRyhJemaM4Sw8+66GHBu8ioaQmyPLg1b8VwK5WJg=
 github.com/google/flatbuffers v23.5.26+incompatible/go.mod h1:1AeVuKshWv4vARoZatz6mlQ0JxURH0Kv5+zNeJKJCa8=
 github.com/google/go-cmp v0.2.0/go.mod h1:oXzfMopK8JAjlY9xF4vHSVASa0yLyX7SntLO5aqRK0M=

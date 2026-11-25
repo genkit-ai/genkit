@@ -62,10 +62,10 @@ own OTel instrumentation emits shows up (the flow span plus the `gen_ai.*`
 client and tool spans), not Genkit's more detailed native dev spans. For the
 richer native view, run `genkit start` without `--experimental-use-otel`.
 
-Note: only traces and logs (`http/json`) are pointed at the dev telemetry
-server. Metrics are left alone and go wherever the app's OTel config sends them
-(the NodeSDK default is `localhost:4318`), so the two GenAI client metrics
-won't appear in the Dev UI.
+Note: only traces and logs are pointed at the dev telemetry server. Metrics are
+left alone and go wherever the app's OTel config sends them (the NodeSDK
+default is `localhost:4318`), so the two GenAI client metrics won't appear in
+the Dev UI.
 
 ## What to expect
 

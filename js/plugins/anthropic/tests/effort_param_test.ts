@@ -171,6 +171,41 @@ describe('Effort Parameter Tests', () => {
     );
   });
 
+  test('should pass output_config.effort with max value', async () => {
+    const mockClient = createMockAnthropicClient({
+      messageResponse: createMockAnthropicMessage({
+        text: 'Response with max effort',
+      }),
+    });
+
+    const plugin = createPlugin({
+      apiVersion: 'beta',
+      mockClient,
+    });
+
+    const ai = createGenkitInstance(plugin);
+
+    await ai.generate({
+      model: 'anthropic/claude-opus-5-5',
+      prompt: 'Generate the most thorough response',
+      config: {
+        output_config: {
+          effort: 'max',
+        },
+      },
+    });
+
+    verifyApiCalled(mockClient, 'beta');
+    const apiRequest = getApiRequest(mockClient, 'beta');
+
+    assert.ok(apiRequest.output_config, 'Request should have output_config');
+    assert.strictEqual(
+      apiRequest.output_config.effort,
+      'max',
+      'effort should be set to max'
+    );
+  });
+
   test('should pass output_config.effort with medium value', async () => {
     const mockClient = createMockAnthropicClient({
       messageResponse: createMockAnthropicMessage({

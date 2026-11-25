@@ -33,7 +33,9 @@ import { MatInputModule } from '@angular/material/input';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { streamFlow } from 'genkit/beta/client';
 
-const url = 'http://127.0.0.1:3400/chatbotFlow';
+// This sample uses an Angular dev-server proxy to connect to the flow
+// see the config in genkit-app/proxy.conf.json
+const url = '/chatbotFlow';
 
 interface ToolResponse {
   name: string;

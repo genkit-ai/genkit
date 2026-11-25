@@ -2050,7 +2050,13 @@ describe('toOpenAiRequestBody', () => {
         },
       ],
     } as GenerateRequest;
-    const withMedia = toOpenAIRequestBody('gpt-4o', request, undefined, true);
+    const withMedia = toOpenAIRequestBody(
+      'gpt-4o',
+      request,
+      undefined,
+      undefined,
+      true
+    );
     const withoutMedia = toOpenAIRequestBody('deepseek-chat', request);
     expect(withMedia.messages.map((m) => m.role)).toEqual(['tool', 'user']);
     expect(withoutMedia.messages).toStrictEqual([
@@ -2307,6 +2313,43 @@ describe('toOpenAiRequestBody', () => {
     expect(() => toOpenAIRequestBody('gpt-5', request)).toThrow(
       'OpenAI strict output requires output.format="json" and an output schema.'
     );
+  });
+
+  it('sets image_url.detail from visualDetailLevel without leaking visualDetailLevel to the request body', () => {
+    const request = {
+      messages: [
+        {
+          role: 'user',
+          content: [
+            {
+              media: {
+                contentType: 'image/jpeg',
+                url: 'data:image/jpeg;base64,/9j/4AAQ',
+              },
+            },
+          ],
+        },
+      ],
+      config: { visualDetailLevel: 'high' },
+    } as unknown as GenerateRequest;
+
+    const actualOutput = toOpenAIRequestBody('gpt-4o', request) as any;
+
+    expect(actualOutput.messages).toStrictEqual([
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'image_url',
+            image_url: {
+              url: 'data:image/jpeg;base64,/9j/4AAQ',
+              detail: 'high',
+            },
+          },
+        ],
+      },
+    ]);
+    expect(actualOutput.visualDetailLevel).toBeUndefined();
   });
 });
 

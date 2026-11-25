@@ -583,30 +583,77 @@ describe('Google AI Gemini', () => {
         const apiRequest: CreateInteractionRequest = JSON.parse(
           fetchStub.lastCall.args[1].body
         );
-        assert.deepStrictEqual(apiRequest.generation_config?.tool_choice, {
-          allowed_tools: {
-            mode: 'any',
-          },
-        });
+        assert.strictEqual(apiRequest.generation_config?.tool_choice, 'any');
       });
 
-      it('constructs generation_config.tool_choice for toolChoice none (Interactions API)', async () => {
+      // The server rejects {allowed_tools: {mode: 'none' | 'auto'}} with a 400
+      // ("allowed_tools mode must be either ANY or VALIDATED."), so plain
+      // modes are sent as strings.
+      for (const toolChoice of ['none', 'auto'] as const) {
+        it(`sends toolChoice ${toolChoice} as a plain string (Interactions API)`, async () => {
+          const model = defineModel(
+            'gemini-flash-latest',
+            defaultPluginOptions
+          );
+          mockFetchResponse(defaultApiResponse);
+          await model.run({ ...minimalRequest, toolChoice });
+
+          const apiRequest: CreateInteractionRequest = JSON.parse(
+            fetchStub.lastCall.args[1].body
+          );
+          assert.strictEqual(
+            apiRequest.generation_config?.tool_choice,
+            toolChoice
+          );
+        });
+      }
+
+      it('sends functionCallingConfig mode without names as a plain string (Interactions API)', async () => {
         const model = defineModel('gemini-flash-latest', defaultPluginOptions);
         mockFetchResponse(defaultApiResponse);
-        const request: GenerateRequest<typeof GeminiConfigSchema> = {
+        await model.run({
           ...minimalRequest,
-          toolChoice: 'none',
-        };
-        await model.run(request);
+          config: { functionCallingConfig: { mode: 'NONE' } },
+        });
 
         const apiRequest: CreateInteractionRequest = JSON.parse(
           fetchStub.lastCall.args[1].body
         );
-        assert.deepStrictEqual(apiRequest.generation_config?.tool_choice, {
-          allowed_tools: {
-            mode: 'none',
+        assert.strictEqual(apiRequest.generation_config?.tool_choice, 'none');
+      });
+
+      it('drops allowedFunctionNames without ANY with a warning (Interactions API)', async () => {
+        const warnStub = sinon.stub(logger, 'warn');
+        // Its own model name: the warning is logged once per model and field.
+        const model = defineModel(
+          'gemini-allowed-names-auto',
+          defaultPluginOptions
+        );
+        mockFetchResponse(defaultApiResponse);
+        await model.run({
+          ...minimalRequest,
+          config: {
+            functionCallingConfig: {
+              mode: 'AUTO',
+              allowedFunctionNames: ['myFunc'],
+            },
           },
         });
+
+        const apiRequest: CreateInteractionRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.strictEqual(apiRequest.generation_config?.tool_choice, 'auto');
+        assert.ok(
+          warnStub
+            .getCalls()
+            .some((c) =>
+              String(c.args[0]).includes(
+                "functionCallingConfig.allowedFunctionNames is not supported by 'gemini-allowed-names-auto' and was ignored. It only applies with mode 'ANY' or 'VALIDATED'."
+              )
+            ),
+          'expected a warning about allowedFunctionNames'
+        );
       });
 
       it('sends responseModalities as response_format entries (Interactions API)', async () => {

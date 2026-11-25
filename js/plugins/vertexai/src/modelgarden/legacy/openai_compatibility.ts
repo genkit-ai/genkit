@@ -248,8 +248,7 @@ const finishReasonMap: Partial<
 /** @deprecated */
 export function fromOpenAiToolCall(
   toolCall:
-    | ChatCompletionMessageToolCall
-    | ChatCompletionChunk.Choice.Delta.ToolCall
+    ChatCompletionMessageToolCall | ChatCompletionChunk.Choice.Delta.ToolCall
 ): ToolRequestPart {
   if (!toolCall.function) {
     throw Error(

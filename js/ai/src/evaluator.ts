@@ -95,8 +95,8 @@ export type EvalResponses = z.infer<typeof EvalResponsesSchema>;
 
 /** Implementation function for an evaluator. Receives a data point and optional config, returns an {@link EvalResponse}. */
 export type EvaluatorFn<
-  EvalDataPoint extends
-    typeof BaseEvalDataPointSchema = typeof BaseEvalDataPointSchema,
+  EvalDataPoint extends typeof BaseEvalDataPointSchema =
+    typeof BaseEvalDataPointSchema,
   CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
 > = (
   input: z.infer<EvalDataPoint>,
@@ -161,8 +161,8 @@ export interface EvaluatorOptions<
  */
 export function defineEvaluator<
   DataPoint extends typeof BaseDataPointSchema = typeof BaseDataPointSchema,
-  EvalDataPoint extends
-    typeof BaseEvalDataPointSchema = typeof BaseEvalDataPointSchema,
+  EvalDataPoint extends typeof BaseEvalDataPointSchema =
+    typeof BaseEvalDataPointSchema,
   EvaluatorOpts extends z.ZodTypeAny = z.ZodTypeAny,
 >(
   registry: Registry,
@@ -181,8 +181,8 @@ export function defineEvaluator<
  */
 export function evaluator<
   DataPoint extends typeof BaseDataPointSchema = typeof BaseDataPointSchema,
-  EvalDataPoint extends
-    typeof BaseEvalDataPointSchema = typeof BaseEvalDataPointSchema,
+  EvalDataPoint extends typeof BaseEvalDataPointSchema =
+    typeof BaseEvalDataPointSchema,
   EvaluatorOpts extends z.ZodTypeAny = z.ZodTypeAny,
 >(
   options: EvaluatorOptions<DataPoint, EvaluatorOpts>,
@@ -371,8 +371,8 @@ function getBatchedArray<T extends { testCaseId?: string }>(
 }
 
 async function runBatch<
-  EvalDataPoint extends
-    typeof BaseEvalDataPointSchema = typeof BaseEvalDataPointSchema,
+  EvalDataPoint extends typeof BaseEvalDataPointSchema =
+    typeof BaseEvalDataPointSchema,
   EvaluatorOpts extends z.ZodTypeAny = z.ZodTypeAny,
 >(
   runner: EvaluatorFn<EvalDataPoint, EvaluatorOpts>,

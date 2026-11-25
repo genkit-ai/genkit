@@ -93,6 +93,8 @@ console.log(response.output);
 Apply `.strict()` to every object in the schema; Genkit does not automatically set `additionalProperties: false`.
 See the [Structured Outputs guide](https://developers.openai.com/api/docs/guides/structured-outputs).
 
+OpenAI only accepts an object at the root of a schema, so `openAI()` sends any other schema (an array, enum or scalar) as the `value` property of an object and unwraps the reply. `response.output` and the streamed chunks hold the value itself, but `response.raw` is the reply as OpenAI sent it, so its message content is still `{"value": ...}`.
+
 ### Multi-modal prompt
 
 ```typescript
