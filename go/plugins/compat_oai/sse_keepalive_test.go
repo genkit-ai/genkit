@@ -40,11 +40,23 @@ func sseChunk(text, finish string) string {
 }
 
 // streamText streams one request against a server that writes body verbatim
-// and returns the final text.
+// as text/event-stream and returns the final text.
 func streamText(t *testing.T, body string, opts ...option.RequestOption) (string, error) {
 	t.Helper()
+	return streamTextAs(t, "text/event-stream; charset=utf-8", body, opts...)
+}
+
+// streamTextAs is streamText with the response's Content-Type set to
+// contentType, or left out when it is empty.
+func streamTextAs(t *testing.T, contentType, body string, opts ...option.RequestOption) (string, error) {
+	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		if contentType == "" {
+			// Without this, net/http sniffs and sets text/plain.
+			w.Header()["Content-Type"] = nil
+		} else {
+			w.Header().Set("Content-Type", contentType)
+		}
 		for _, part := range strings.SplitAfter(body, "\n") {
 			_, _ = io.WriteString(w, part)
 			w.(http.Flusher).Flush()
@@ -85,6 +97,7 @@ func TestStreamingSkipsSSEKeepAliveComments(t *testing.T) {
 		{"event with no data", "event: ping\nid: 1\n\n" + sseChunk("hel", "") + sseChunk("lo", "stop") + "data: [DONE]\n\n"},
 		{"stray blank lines", "\n\n" + sseChunk("hel", "") + "\n" + sseChunk("lo", "stop") + "data: [DONE]\n\n"},
 		{"empty data values", "data:\n\ndata: \n\n" + sseChunk("hel", "") + sseChunk("lo", "stop") + "data: [DONE]\n\n"},
+		{"bare CR line endings", strings.ReplaceAll(": keep-alive\n\n"+sseChunk("hel", "")+sseChunk("lo", "stop")+"data: [DONE]\n\n", "\n", "\r")},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -157,7 +170,9 @@ func TestSSEFilter(t *testing.T) {
 	}{
 		{"comment-only events", ": a\n\n: b\n\ndata: x\n\n", "data: x\n\n"},
 		{"comment inside an event", "data: x\n: c\ndata: y\n\n", "data: x\ndata: y\n\n"},
-		{"CRLF", ": a\r\n\r\ndata: x\r\n\r\n", "data: x\r\n\r\n"},
+		{"CRLF", ": a\r\n\r\ndata: x\r\n\r\n", "data: x\n\n"},
+		{"bare CR", ": a\r\rdata: x\r\r", "data: x\n\n"},
+		{"mixed line endings", ": a\r\ndata: x\r\rdata: y\n\n", "data: x\n\ndata: y\n\n"},
 		{"fields before data are kept", "event: e\nid: 1\ndata: x\n\n", "event: e\nid: 1\ndata: x\n\n"},
 		{"fields after data are kept", "data: x\nid: 1\n\n", "data: x\nid: 1\n\n"},
 		{"event without data is dropped", "event: ping\nretry: 5\n\ndata: x\n\n", "data: x\n\n"},
@@ -301,5 +316,184 @@ func TestSSEFilterPassesOnSourceErrors(t *testing.T) {
 	}
 	if want := "data: x\n\ndata: partial"; string(got) != want {
 		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestStreamingSkipsKeepAlivesInUnlabelledStreams covers a gateway that sends
+// a stream without labelling it text/event-stream: the SDK decodes the reply
+// to a streaming request as SSE regardless, so it must be filtered too.
+func TestStreamingSkipsKeepAlivesInUnlabelledStreams(t *testing.T) {
+	body := ": keep-alive\n\n" + sseChunk("hel", "") + sseChunk("lo", "stop") + "data: [DONE]\n\n"
+	for _, contentType := range []string{"", "text/plain", "text/plain; charset=utf-8", "application/octet-stream"} {
+		t.Run(contentType, func(t *testing.T) {
+			got, err := streamTextAs(t, contentType, body)
+			if err != nil {
+				t.Fatalf("Generate() error = %v", err)
+			}
+			if got != "hello" {
+				t.Errorf("text = %q, want %q", got, "hello")
+			}
+		})
+	}
+}
+
+func TestDropDatalessSSEEventsOnStreamingRequests(t *testing.T) {
+	body := ": keep-alive\n\n"
+	tests := []struct {
+		name, contentType, encoding string
+		status                      int
+		want                        string
+	}{
+		{"no content type", "", "", 200, ""},
+		{"text/plain", "text/plain; charset=utf-8", "", 200, ""},
+		{"JSON", "application/json", "", 200, body},
+		{"problem JSON", "application/problem+json", "", 200, body},
+		{"compressed", "", "gzip", 200, body},
+		{"error status", "text/plain", "", 502, body},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			next := func(*http.Request) (*http.Response, error) {
+				h := http.Header{}
+				if tt.contentType != "" {
+					h.Set("Content-Type", tt.contentType)
+				}
+				if tt.encoding != "" {
+					h.Set("Content-Encoding", tt.encoding)
+				}
+				return &http.Response{StatusCode: tt.status, Header: h, Body: io.NopCloser(strings.NewReader(body))}, nil
+			}
+			req := httptest.NewRequest("POST", "/", nil)
+			req = req.WithContext(withStreamingRequest(req.Context()))
+			resp, err := dropDatalessSSEEvents(req, next)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, _ := io.ReadAll(resp.Body); string(got) != tt.want {
+				t.Errorf("body = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestSniffedSSEBody pins that an unlabelled reply is filtered only when it
+// starts like an event stream; anything else reaches the SDK as sent.
+func TestSniffedSSEBody(t *testing.T) {
+	html := "<!DOCTYPE html>\n<html>\n\n<body>502 Bad Gateway</body>\n\n</html>\n"
+	prettyJSON := "{\n\n  \"error\": {\"message\": \"quota\"}\n\n}\n"
+	tests := []struct{ name, in, want string }{
+		{"HTML page", html, html},
+		{"pretty-printed JSON", prettyJSON, prettyJSON},
+		{"JSON after blank lines", "\n\n" + prettyJSON, "\n\n" + prettyJSON},
+		{"a field-like word that is not a field", "dataset: x\n\n", "dataset: x\n\n"},
+		{"keep-alive first", ": ka\n\ndata: x\n\n", "data: x\n\n"},
+		{"blank lines, then a keep-alive", "\n\n: ka\n\ndata: x\n\n", "data: x\n\n"},
+		{"data first", "data: x\n\n", "data: x\n\n"},
+		{"data with no colon", "data\ndata: x\n\n", "data\ndata: x\n\n"},
+		{"event first", "event: e\ndata: x\n\n", "event: e\ndata: x\n\n"},
+		{"retry only", "retry: 5\n\n", ""},
+		{"CRLF", "\r\n: ka\r\n\r\ndata: x\r\n\r\n", "data: x\n\n"},
+		{"empty", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := &sniffedSSEBody{src: io.NopCloser(iotest.OneByteReader(strings.NewReader(tt.in)))}
+			got, err := io.ReadAll(body)
+			if err != nil {
+				t.Fatalf("ReadAll() error = %v", err)
+			}
+			if string(got) != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+
+	t.Run("error before the body shows what it is", func(t *testing.T) {
+		boom := errors.New("connection reset")
+		body := &sniffedSSEBody{src: io.NopCloser(io.MultiReader(strings.NewReader("\n\n"), iotest.ErrReader(boom)))}
+		got, err := io.ReadAll(body)
+		if !errors.Is(err, boom) || string(got) != "\n\n" {
+			t.Errorf("ReadAll() = %q, %v; want %q, %v", got, err, "\n\n", boom)
+		}
+	})
+}
+
+// TestStreamingNonSSEReplyStillFails pins that a gateway page or JSON error
+// sent with a 200 on a streaming request fails as it did without the filter,
+// rather than having its lines dropped and reading as an empty completion.
+func TestStreamingNonSSEReplyStillFails(t *testing.T) {
+	tests := []struct{ name, contentType, body string }{
+		{"HTML page", "text/html", "<!DOCTYPE html>\n<html>\n\n<body>502 Bad Gateway</body>\n\n</html>\n"},
+		{"JSON error as text/plain", "text/plain", "{\n\n  \"error\": {\"message\": \"quota\"}\n\n}\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := streamTextAs(t, tt.contentType, tt.body)
+			if err == nil || !strings.Contains(err.Error(), "unexpected end of JSON input") {
+				t.Errorf("Generate() error = %v, want the SDK's own decode error", err)
+			}
+		})
+	}
+}
+
+// TestStreamingUnlabelledStreamAfterRetry pins that the streaming mark
+// survives the SDK's retry: the first attempt fails with a 500 and the second
+// returns an unlabelled stream with keep-alives.
+func TestStreamingUnlabelledStreamAfterRetry(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if attempts++; attempts == 1 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(w, `{"error":{"message":"try again"}}`)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = io.WriteString(w, ": keep-alive\n\n"+sseChunk("hello", "stop")+"data: [DONE]\n\n")
+	}))
+	t.Cleanup(server.Close)
+
+	ctx := context.Background()
+	o := &OpenAICompatible{Provider: "testprovider", APIKey: "k", BaseURL: server.URL, Opts: []option.RequestOption{option.WithMaxRetries(1)}}
+	o.Init(ctx)
+	g := genkit.Init(ctx)
+	genkit.RegisterAction(g, o.NewModel("m", ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true}}))
+	resp, err := genkit.Generate(ctx, g,
+		ai.WithModelName("testprovider/m"),
+		ai.WithPrompt("hi"),
+		ai.WithStreaming(func(context.Context, *ai.ModelResponseChunk) error { return nil }),
+	)
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if attempts != 2 {
+		t.Errorf("attempts = %d, want 2", attempts)
+	}
+	if got := resp.Text(); got != "hello" {
+		t.Errorf("text = %q, want %q", got, "hello")
+	}
+}
+
+func TestLineEndingNormalizer(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"a\r\nb", "a\nb"},
+		{"a\rb", "a\nb"},
+		{"a\r\r\nb", "a\n\nb"},
+		{"a\n\rb\r", "a\n\nb\n"},
+		{"\r\n\r\n", "\n\n"},
+	}
+	for _, tt := range tests {
+		// One byte at a time, so a "\r\n" always spans two reads and some
+		// reads hold only a dropped "\n".
+		got, err := io.ReadAll(&lineEndingNormalizer{r: iotest.OneByteReader(strings.NewReader(tt.in))})
+		if err != nil {
+			t.Fatalf("%q: ReadAll() error = %v", tt.in, err)
+		}
+		if string(got) != tt.want {
+			t.Errorf("%q: got %q, want %q", tt.in, got, tt.want)
+		}
+		if err := iotest.TestReader(&lineEndingNormalizer{r: strings.NewReader(tt.in)}, []byte(tt.want)); err != nil {
+			t.Errorf("%q: %v", tt.in, err)
+		}
 	}
 }
