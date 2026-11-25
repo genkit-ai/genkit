@@ -68,6 +68,7 @@ import {
   type ToolRequestPart,
   type ToolResponsePart,
 } from './model.js';
+import { isExecutablePrompt, type ExecutablePrompt } from './prompt.js';
 import {
   ResourceAction,
   ResourceArgument,
@@ -75,6 +76,7 @@ import {
   resolveResources,
 } from './resource.js';
 import {
+  assertNotPrompt,
   isDynamicTool,
   isMultipartTool,
   resolveTools,
@@ -411,7 +413,13 @@ async function toolsToActionRefs(
       const names = await resolveFullToolNames(registry, t);
       tools.push(...names);
     } else if (isAction(t) || isDynamicTool(t)) {
+      assertNotPrompt(t);
       tools.push(`/${t.__action.metadata?.type}/${t.__action.name}`);
+    } else if (isExecutablePrompt(t)) {
+      throw new GenkitError({
+        status: 'INVALID_ARGUMENT',
+        message: `Prompt '${(t as ExecutablePrompt).ref.name}' cannot be used as a tool.`,
+      });
     } else {
       throw new Error(`Unable to determine type of tool: ${JSON.stringify(t)}`);
     }

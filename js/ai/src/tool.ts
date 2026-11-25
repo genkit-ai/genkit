@@ -16,6 +16,7 @@
 
 import {
   ActionFnArg,
+  GenkitError,
   action,
   assertUnstable,
   isAction,
@@ -229,6 +230,7 @@ export async function resolveTools<
       if (typeof ref === 'string') {
         return await lookupToolByName(registry, ref);
       } else if (isAction(ref)) {
+        assertNotPrompt(ref);
         return asTool(registry, ref);
       } else if ((ref as ToolDefinition).name) {
         return await lookupToolByName(
@@ -254,7 +256,22 @@ export async function lookupToolByName(
   if (!tool) {
     throw new Error(`Tool ${name} not found`);
   }
+  assertNotPrompt(tool);
   return tool as ToolAction;
+}
+
+/**
+ * Throws if an action is a prompt: prompts can't be used as tools (that only
+ * served the removed Chat API's multi-agent transfers).
+ */
+export function assertNotPrompt(action: Action<any, any, any>): void {
+  const types = [action.__action?.actionType, action.__action?.metadata?.type];
+  if (types.includes('prompt') || types.includes('executable-prompt')) {
+    throw new GenkitError({
+      status: 'INVALID_ARGUMENT',
+      message: `Prompt '${action.__action.name}' cannot be used as a tool.`,
+    });
+  }
 }
 
 /**
