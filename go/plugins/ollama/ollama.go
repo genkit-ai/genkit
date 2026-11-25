@@ -754,15 +754,19 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 	}
 	defer resp.Body.Close()
 
+	// Check the status before reading the body in either mode: a streaming
+	// request would otherwise decode the error reply as a chunk.
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("server returned non-200 status: %d, body: %s", resp.StatusCode, body)
+	}
+
 	if cb == nil {
 		// Existing behavior for non-streaming responses
 		var err error
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read response body: %v", err)
-		}
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("server returned non-200 status: %d, body: %s", resp.StatusCode, body)
 		}
 
 		var response *ai.ModelResponse
@@ -805,7 +809,9 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 				usage = u
 			}
 			chunks = append(chunks, chunk)
-			cb(ctx, chunk)
+			if err := cb(ctx, chunk); err != nil {
+				return nil, err
+			}
 		}
 
 		// Create a final response with the merged chunks

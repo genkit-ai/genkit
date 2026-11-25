@@ -25,6 +25,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -1336,4 +1337,51 @@ func TestAPIKeyFromEnvironment(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGenerateStreaming(t *testing.T) {
+	input := &ai.ModelRequest{Messages: []*ai.Message{ai.NewUserTextMessage("hi")}}
+
+	t.Run("stops and returns the callback's error", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			for _, text := range []string{"a", "b", "c"} {
+				fmt.Fprintf(w, `{"message":{"role":"assistant","content":%q},"done":false}`+"\n", text)
+			}
+		}))
+		defer server.Close()
+
+		g := &generator{model: ModelDefinition{Name: "test-model", Type: "chat"}, serverAddress: server.URL}
+		wantErr := errors.New("client went away")
+		calls := 0
+		_, err := g.generate(t.Context(), input, func(context.Context, *ai.ModelResponseChunk) error {
+			calls++
+			return wantErr
+		})
+		if !errors.Is(err, wantErr) {
+			t.Errorf("generate() error = %v, want %v", err, wantErr)
+		}
+		if calls != 1 {
+			t.Errorf("callback called %d times, want 1", calls)
+		}
+	})
+
+	t.Run("returns an error for a non-200 reply", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, `{"error":"model \"llama9\" not found, try pulling it first"}`, http.StatusNotFound)
+		}))
+		defer server.Close()
+
+		g := &generator{model: ModelDefinition{Name: "llama9", Type: "chat"}, serverAddress: server.URL}
+		calls := 0
+		_, err := g.generate(t.Context(), input, func(context.Context, *ai.ModelResponseChunk) error {
+			calls++
+			return nil
+		})
+		if err == nil || !strings.Contains(err.Error(), "non-200 status: 404") {
+			t.Errorf("generate() error = %v, want a non-200 status error", err)
+		}
+		if calls != 0 {
+			t.Errorf("callback called %d times, want 0", calls)
+		}
+	})
 }
