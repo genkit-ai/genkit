@@ -17,6 +17,7 @@ package compat_oai
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"io"
 	"mime"
 	"net/http"
@@ -27,26 +28,132 @@ import (
 
 // dropDatalessSSEEvents is a middleware that removes server-sent events with
 // no data (keep-alive comments, pings, empty data values) from a successful,
-// uncompressed text/event-stream response. openai-go v1 dispatches those
-// events and fails to unmarshal them, ending the stream with "unexpected end
-// of JSON input".
+// uncompressed event stream. openai-go v1 dispatches those events and fails to
+// unmarshal them, ending the stream with "unexpected end of JSON input".
 func dropDatalessSSEEvents(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
 	resp, err := next(req)
 	if err != nil || resp == nil || resp.Body == nil || resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return resp, err
 	}
-	if mediaType, _, perr := mime.ParseMediaType(resp.Header.Get("Content-Type")); perr != nil || mediaType != "text/event-stream" {
+	kind := eventStreamKind(req, resp)
+	if kind == notEventStream {
 		return resp, err
 	}
 	if enc := resp.Header.Get("Content-Encoding"); enc != "" && !strings.EqualFold(enc, "identity") {
 		return resp, err
 	}
-	resp.Body = newSSEFilter(resp.Body)
+	if kind == labelledEventStream {
+		resp.Body = newSSEFilter(resp.Body)
+	} else {
+		resp.Body = &sniffedSSEBody{src: resp.Body}
+	}
 	// The filtered body is shorter than what the server declared.
 	resp.ContentLength = -1
 	resp.Header.Del("Content-Length")
 	return resp, err
 }
+
+// streamingRequestKey marks the context of a request the plugin streams, so
+// the middleware knows the SDK will decode the reply as SSE.
+type streamingRequestKey struct{}
+
+// withStreamingRequest marks ctx as carrying a streaming request.
+func withStreamingRequest(ctx context.Context) context.Context {
+	return context.WithValue(ctx, streamingRequestKey{}, true)
+}
+
+type streamKind int
+
+const (
+	notEventStream      streamKind = iota
+	labelledEventStream            // labelled text/event-stream
+	maybeEventStream               // a streamed request's reply, labelled otherwise
+)
+
+// eventStreamKind reports whether resp is an SSE stream. One labelled
+// text/event-stream always is. For a request the plugin streams, the SDK
+// decodes any successful reply as SSE whatever its Content-Type, so a
+// gateway that labels the stream text/plain or not at all may be one too;
+// its body decides (see sniffedSSEBody).
+func eventStreamKind(req *http.Request, resp *http.Response) streamKind {
+	mediaType, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	if mediaType == "text/event-stream" {
+		return labelledEventStream
+	}
+	if streaming, _ := req.Context().Value(streamingRequestKey{}).(bool); !streaming {
+		return notEventStream
+	}
+	return maybeEventStream
+}
+
+// sniffedSSEBody filters a body only if it starts like an event stream: its
+// first non-blank line is a comment or a data, event, id or retry field.
+type sniffedSSEBody struct {
+	src io.ReadCloser
+	r   io.Reader // set by the first Read
+}
+
+func (b *sniffedSSEBody) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if b.r == nil {
+		b.r = sniffSSE(b.src)
+	}
+	return b.r.Read(p)
+}
+
+func (b *sniffedSSEBody) Close() error {
+	return b.src.Close()
+}
+
+// sniffSSE reads src up to the first non-blank line's field name and returns
+// a reader for the whole body: filtered if it is an event stream, as sent
+// otherwise.
+func sniffSSE(src io.Reader) io.Reader {
+	br := bufio.NewReader(src)
+	var seen []byte
+	start := -1 // index in seen of the first non-blank line
+	for {
+		c, err := br.ReadByte()
+		if err != nil {
+			// The body ended or failed before showing what it is: hand on
+			// what was read and then the error, unfiltered.
+			return io.MultiReader(bytes.NewReader(seen), errReader{err})
+		}
+		seen = append(seen, c)
+		if start < 0 {
+			if c == '\r' || c == '\n' {
+				if len(seen) > maxSniffedBlankBytes {
+					// Only blank lines so far; that reads as SSE, not as a
+					// document.
+					return newSSEFilter(io.NopCloser(io.MultiReader(bytes.NewReader(seen), br)))
+				}
+				continue
+			}
+			start = len(seen) - 1
+		}
+		name := seen[start : len(seen)-1]
+		if c == ':' || c == '\r' || c == '\n' || len(name) > len("retry") {
+			body := io.MultiReader(bytes.NewReader(seen), br)
+			switch string(name) {
+			case "", "data", "event", "id", "retry":
+				// An empty name is a comment: the line began with ':'.
+				return newSSEFilter(io.NopCloser(body))
+			}
+			return body
+		}
+	}
+}
+
+// maxSniffedBlankBytes bounds the leading blank lines sniffSSE reads before
+// deciding. A body that is only blank lines that far is treated as SSE.
+const maxSniffedBlankBytes = 64 << 10
+
+// errReader returns err from every Read.
+type errReader struct{ err error }
+
+func (r errReader) Read([]byte) (int, error) { return 0, r.err }
 
 // maxHeldSSEFields bounds the total bytes sseFilter holds back for one event
 // before its first data line. Past it the fields are passed on as they are, leaving the
@@ -81,7 +188,41 @@ type sseFilter struct {
 }
 
 func newSSEFilter(src io.ReadCloser) *sseFilter {
-	return &sseFilter{src: src, r: bufio.NewReader(src)}
+	return &sseFilter{src: src, r: bufio.NewReader(&lineEndingNormalizer{r: src})}
+}
+
+// lineEndingNormalizer rewrites the SSE line endings "\r\n" and a lone "\r"
+// to "\n". The SDK's scanner splits on "\n" only, so a stream that ends lines
+// with a bare "\r", which the spec allows, would otherwise reach it as one
+// line. A "\r" is rewritten as soon as it is read; a "\n" right after it is
+// then dropped, even when it arrives in a later read.
+type lineEndingNormalizer struct {
+	r       io.Reader
+	afterCR bool // the last byte read was "\r"
+}
+
+func (n *lineEndingNormalizer) Read(p []byte) (int, error) {
+	for {
+		read, err := n.r.Read(p)
+		kept := 0
+		for _, b := range p[:read] {
+			switch {
+			case b == '\r':
+				p[kept], n.afterCR = '\n', true
+				kept++
+			case b == '\n' && n.afterCR:
+				n.afterCR = false
+			default:
+				p[kept], n.afterCR = b, false
+				kept++
+			}
+		}
+		// Every byte may have been a dropped "\n"; read again rather than
+		// return 0, nil.
+		if kept > 0 || err != nil || read == 0 {
+			return kept, err
+		}
+	}
 }
 
 func (f *sseFilter) Read(p []byte) (int, error) {
@@ -130,9 +271,7 @@ func (f *sseFilter) filter(chunk []byte, ends bool) {
 // startLine decides what to do with a line from its first chunk, and handles
 // the blank line that ends an event.
 func (f *sseFilter) startLine(chunk []byte) lineAction {
-	// Strip one "\n" and then one "\r", as the SDK's bufio.ScanLines does, so
-	// a line is read here the way the decoder will read it.
-	content := bytes.TrimSuffix(bytes.TrimSuffix(chunk, []byte("\n")), []byte("\r"))
+	content := bytes.TrimSuffix(chunk, []byte("\n"))
 	switch {
 	case len(content) == 0:
 		// A blank line dispatches the event: keep it only if it has data.
