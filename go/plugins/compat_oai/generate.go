@@ -663,8 +663,6 @@ func (g *ModelGenerator) generateStream(ctx context.Context, req *ai.ModelReques
 	// without usage would otherwise report zero tokens for every stream.
 	g.request.StreamOptions.IncludeUsage = openai.Bool(true)
 
-	// The mark lets the SSE filter treat the reply as a stream even when the
-	// server does not label it text/event-stream.
 	stream := g.client.Chat.Completions.NewStreaming(withStreamingRequest(ctx), *g.request)
 	defer func() {
 		_ = stream.Close()

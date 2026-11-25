@@ -28,9 +28,8 @@ import (
 
 // dropDatalessSSEEvents is a middleware that removes server-sent events with
 // no data (keep-alive comments, pings, empty data values) from a successful,
-// uncompressed event stream. openai-go v1 dispatches those
-// events and fails to unmarshal them, ending the stream with "unexpected end
-// of JSON input".
+// uncompressed event stream. openai-go v1 dispatches those events and fails to
+// unmarshal them, ending the stream with "unexpected end of JSON input".
 func dropDatalessSSEEvents(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
 	resp, err := next(req)
 	if err != nil || resp == nil || resp.Body == nil || resp.StatusCode < 200 || resp.StatusCode > 299 {
@@ -75,7 +74,7 @@ const (
 // text/event-stream always is. For a request the plugin streams, the SDK
 // decodes any successful reply as SSE whatever its Content-Type, so a
 // gateway that labels the stream text/plain or not at all may be one too;
-// its body decides (see sniffedSSEBody). A JSON reply is left alone.
+// its body decides (see sniffedSSEBody).
 func eventStreamKind(req *http.Request, resp *http.Response) streamKind {
 	mediaType, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 	if mediaType == "text/event-stream" {
@@ -84,18 +83,11 @@ func eventStreamKind(req *http.Request, resp *http.Response) streamKind {
 	if streaming, _ := req.Context().Value(streamingRequestKey{}).(bool); !streaming {
 		return notEventStream
 	}
-	if mediaType == "application/json" || strings.HasSuffix(mediaType, "+json") {
-		return notEventStream
-	}
 	return maybeEventStream
 }
 
 // sniffedSSEBody filters a body only if it starts like an event stream: its
 // first non-blank line is a comment or a data, event, id or retry field.
-// Anything else, such as a gateway's HTML page or a JSON error labelled
-// text/plain, passes through byte for byte, so the SDK fails on it as it
-// would have without the filter rather than having its lines dropped. The
-// check runs on the first Read, so it does not hold up the request.
 type sniffedSSEBody struct {
 	src io.ReadCloser
 	r   io.Reader // set by the first Read
@@ -117,7 +109,7 @@ func (b *sniffedSSEBody) Close() error {
 
 // sniffSSE reads src up to the first non-blank line's field name and returns
 // a reader for the whole body: filtered if it is an event stream, as sent
-// otherwise. It reads at most a few bytes past any leading blank lines.
+// otherwise.
 func sniffSSE(src io.Reader) io.Reader {
 	br := bufio.NewReader(src)
 	var seen []byte
@@ -132,7 +124,7 @@ func sniffSSE(src io.Reader) io.Reader {
 		seen = append(seen, c)
 		if start < 0 {
 			if c == '\r' || c == '\n' {
-				if len(seen) > maxHeldSSEFields {
+				if len(seen) > maxSniffedBlankBytes {
 					// Only blank lines so far; that reads as SSE, not as a
 					// document.
 					return newSSEFilter(io.NopCloser(io.MultiReader(bytes.NewReader(seen), br)))
@@ -153,6 +145,10 @@ func sniffSSE(src io.Reader) io.Reader {
 		}
 	}
 }
+
+// maxSniffedBlankBytes bounds the leading blank lines sniffSSE reads before
+// deciding. A body that is only blank lines that far is treated as SSE.
+const maxSniffedBlankBytes = 64 << 10
 
 // errReader returns err from every Read.
 type errReader struct{ err error }

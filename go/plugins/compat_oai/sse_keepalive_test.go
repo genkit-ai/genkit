@@ -324,7 +324,7 @@ func TestSSEFilterPassesOnSourceErrors(t *testing.T) {
 // to a streaming request as SSE regardless, so it must be filtered too.
 func TestStreamingSkipsKeepAlivesInUnlabelledStreams(t *testing.T) {
 	body := ": keep-alive\n\n" + sseChunk("hel", "") + sseChunk("lo", "stop") + "data: [DONE]\n\n"
-	for _, contentType := range []string{"", "text/plain", "text/plain; charset=utf-8", "application/octet-stream"} {
+	for _, contentType := range []string{"", "text/plain", "text/plain; charset=utf-8", "application/octet-stream", "application/json"} {
 		t.Run(contentType, func(t *testing.T) {
 			got, err := streamTextAs(t, contentType, body)
 			if err != nil {
@@ -346,8 +346,8 @@ func TestDropDatalessSSEEventsOnStreamingRequests(t *testing.T) {
 	}{
 		{"no content type", "", "", 200, ""},
 		{"text/plain", "text/plain; charset=utf-8", "", 200, ""},
-		{"JSON", "application/json", "", 200, body},
-		{"problem JSON", "application/problem+json", "", 200, body},
+		{"JSON", "application/json", "", 200, ""},
+		{"problem JSON", "application/problem+json", "", 200, ""},
 		{"compressed", "", "gzip", 200, body},
 		{"error status", "text/plain", "", 502, body},
 	}
@@ -393,6 +393,7 @@ func TestSniffedSSEBody(t *testing.T) {
 		{"event first", "event: e\ndata: x\n\n", "event: e\ndata: x\n\n"},
 		{"retry only", "retry: 5\n\n", ""},
 		{"CRLF", "\r\n: ka\r\n\r\ndata: x\r\n\r\n", "data: x\n\n"},
+		{"blank lines past the sniff limit", strings.Repeat("\n", maxSniffedBlankBytes+1) + "data: x\n\n", "data: x\n\n"},
 		{"empty", "", ""},
 	}
 	for _, tt := range tests {
@@ -425,6 +426,7 @@ func TestStreamingNonSSEReplyStillFails(t *testing.T) {
 	tests := []struct{ name, contentType, body string }{
 		{"HTML page", "text/html", "<!DOCTYPE html>\n<html>\n\n<body>502 Bad Gateway</body>\n\n</html>\n"},
 		{"JSON error as text/plain", "text/plain", "{\n\n  \"error\": {\"message\": \"quota\"}\n\n}\n"},
+		{"JSON error as application/json", "application/json", "{\n\n  \"error\": {\"message\": \"quota\"}\n\n}\n"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
