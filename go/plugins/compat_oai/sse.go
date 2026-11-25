@@ -20,6 +20,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"strings"
 
 	"github.com/openai/openai-go/option"
 )
@@ -34,14 +35,19 @@ import (
 // "unexpected end of JSON input". openai-go v3 fixed its decoder; v1, which
 // this package's public API is built on, did not.
 //
-// Only successful text/event-stream responses are touched, so errors and
-// non-streaming replies reach the SDK as sent.
+// Only successful, uncompressed text/event-stream responses are touched, so
+// errors and non-streaming replies reach the SDK as sent. A body still
+// compressed (a caller set Accept-Encoding, so Go did not decode it) is left
+// alone rather than filtered as if it were text.
 func dropDatalessSSEEvents(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
 	resp, err := next(req)
 	if err != nil || resp == nil || resp.Body == nil || resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return resp, err
 	}
 	if mediaType, _, perr := mime.ParseMediaType(resp.Header.Get("Content-Type")); perr != nil || mediaType != "text/event-stream" {
+		return resp, err
+	}
+	if enc := resp.Header.Get("Content-Encoding"); enc != "" && !strings.EqualFold(enc, "identity") {
 		return resp, err
 	}
 	resp.Body = newSSEFilter(resp.Body)
@@ -51,8 +57,8 @@ func dropDatalessSSEEvents(req *http.Request, next option.MiddlewareNext) (*http
 	return resp, err
 }
 
-// maxHeldSSEFields bounds what sseFilter holds back for one event before its
-// first data line. Past it the fields are passed on as they are, leaving the
+// maxHeldSSEFields bounds the total bytes sseFilter holds back for one event
+// before its first data line. Past it the fields are passed on as they are, leaving the
 // event to the SDK; real streams put a few short fields before their data.
 const maxHeldSSEFields = 64 << 10
 
@@ -88,6 +94,9 @@ func newSSEFilter(src io.ReadCloser) *sseFilter {
 }
 
 func (f *sseFilter) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
 	for f.outIdx >= len(f.out) {
 		if f.err != nil {
 			return 0, f.err
@@ -130,7 +139,9 @@ func (f *sseFilter) filter(chunk []byte, ends bool) {
 // startLine decides what to do with a line from its first chunk, and handles
 // the blank line that ends an event.
 func (f *sseFilter) startLine(chunk []byte) lineAction {
-	content := bytes.TrimRight(chunk, "\r\n")
+	// Strip one "\n" and then one "\r", as the SDK's bufio.ScanLines does, so
+	// a line is read here the way the decoder will read it.
+	content := bytes.TrimSuffix(bytes.TrimSuffix(chunk, []byte("\n")), []byte("\r"))
 	switch {
 	case len(content) == 0:
 		// A blank line dispatches the event: keep it only if it has data.

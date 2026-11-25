@@ -16,12 +16,14 @@ package compat_oai
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"testing/iotest"
+	"time"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
@@ -137,6 +139,8 @@ func TestSSEFilter(t *testing.T) {
 		{"data with no space or value", "data\n\n", "data\n\n"},
 		{"unterminated final event", "data: x\n\nid: 2\ndata: y", "data: x\n\nid: 2\ndata: y"},
 		{"unterminated final event without data", "data: x\n\nid: 2", "data: x\n\n"},
+		{"line ending in two CRs", "data\r\r\n\ndata: x\n\n", "data: x\n\n"},
+		{"held fields past the cap across lines", strings.Repeat("id: "+strings.Repeat("i", 30000)+"\n", 3) + "\n", strings.Repeat("id: "+strings.Repeat("i", 30000)+"\n", 3) + "\n"},
 		{"colon in data value", "data: {\"a\":\"b\"}\n\n", "data: {\"a\":\"b\"}\n\n"},
 		{"data line longer than the buffer", "data: " + strings.Repeat("x", 10000) + "\n\n", "data: " + strings.Repeat("x", 10000) + "\n\n"},
 		{"comment longer than the buffer", ": " + strings.Repeat("c", 10000) + "\n\ndata: x\n\n", "data: x\n\n"},
@@ -171,6 +175,8 @@ func TestDropDatalessSSEEventsLeavesOtherResponsesAlone(t *testing.T) {
 		{"JSON", 200, "application/json", body},
 		{"error status", 500, "text/event-stream", body},
 		{"no content type", 200, "", body},
+		{"compressed", 200, "text/event-stream", body},
+		{"identity encoding", 200, "text/event-stream", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -178,6 +184,12 @@ func TestDropDatalessSSEEventsLeavesOtherResponsesAlone(t *testing.T) {
 				h := http.Header{"Content-Length": {"15"}}
 				if tt.contentType != "" {
 					h.Set("Content-Type", tt.contentType)
+				}
+				switch tt.name {
+				case "compressed":
+					h.Set("Content-Encoding", "gzip")
+				case "identity encoding":
+					h.Set("Content-Encoding", "identity")
 				}
 				return &http.Response{StatusCode: tt.status, Header: h, ContentLength: 15, Body: io.NopCloser(strings.NewReader(body))}, nil
 			}
@@ -197,5 +209,68 @@ func TestDropDatalessSSEEventsLeavesOtherResponsesAlone(t *testing.T) {
 				t.Errorf("ContentLength = %d, want it untouched", resp.ContentLength)
 			}
 		})
+	}
+}
+
+// TestStreamingStaysIncremental pins that the filter hands each line on as it
+// arrives: the server holds the second chunk back until the first has reached
+// the caller, so a filter that buffered ahead would hang here.
+func TestStreamingStaysIncremental(t *testing.T) {
+	firstSeen := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, ": keep-alive\n\n"+sseChunk("hel", ""))
+		w.(http.Flusher).Flush()
+		select {
+		case <-firstSeen:
+		case <-time.After(5 * time.Second):
+			return
+		}
+		_, _ = io.WriteString(w, sseChunk("lo", "stop")+"data: [DONE]\n\n")
+	}))
+	t.Cleanup(server.Close)
+
+	ctx := context.Background()
+	o := &OpenAICompatible{Provider: "testprovider", APIKey: "k", BaseURL: server.URL}
+	o.Init(ctx)
+	g := genkit.Init(ctx)
+	genkit.RegisterAction(g, o.NewModel("m", ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true}}))
+	chunks := 0
+	resp, err := genkit.Generate(ctx, g,
+		ai.WithModelName("testprovider/m"),
+		ai.WithPrompt("hi"),
+		ai.WithStreaming(func(context.Context, *ai.ModelResponseChunk) error {
+			if chunks++; chunks == 1 {
+				close(firstSeen)
+			}
+			return nil
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if got := resp.Text(); got != "hello" {
+		t.Errorf("text = %q, want %q (the first chunk did not arrive before the second was sent)", got, "hello")
+	}
+}
+
+func TestSSEFilterZeroLengthRead(t *testing.T) {
+	f := newSSEFilter(io.NopCloser(strings.NewReader("data: x\n\n")))
+	if n, err := f.Read(nil); n != 0 || err != nil {
+		t.Fatalf("Read(nil) = %d, %v; want 0, nil", n, err)
+	}
+}
+
+// TestSSEFilterPassesOnSourceErrors pins that a read error from the server
+// reaches the SDK after whatever was filtered before it.
+func TestSSEFilterPassesOnSourceErrors(t *testing.T) {
+	boom := errors.New("connection reset")
+	src := io.NopCloser(io.MultiReader(strings.NewReader(": keep-alive\n\ndata: x\n\ndata: partial"), iotest.ErrReader(boom)))
+	got, err := io.ReadAll(newSSEFilter(src))
+	if !errors.Is(err, boom) {
+		t.Fatalf("ReadAll() error = %v, want %v", err, boom)
+	}
+	if want := "data: x\n\ndata: partial"; string(got) != want {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }
