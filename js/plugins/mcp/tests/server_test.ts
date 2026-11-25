@@ -88,6 +88,7 @@ describe('createMcpServer', async () => {
             },
           },
           { resource: { uri: 'my://resource' } },
+          { media: { url: 'data:text/plain,hello%20world' } },
         ],
       })
     );
@@ -241,6 +242,14 @@ describe('createMcpServer', async () => {
             type: 'resource_link',
             uri: 'my://resource',
             name: 'my://resource',
+          },
+          {
+            type: 'resource',
+            resource: {
+              uri: 'genkit://tool/screenshotTool/content/5',
+              mimeType: 'text/plain',
+              blob: btoa('hello world'),
+            },
           },
         ],
       });

@@ -482,10 +482,16 @@ function toMcpContentBlock(
         ...(part.media.contentType ? { mimeType: part.media.contentType } : {}),
       };
     }
+    // data:[<mime>][;base64],<data>; MCP wants base64 either way.
+    const match = url.match(/^data:([^;,]*)((?:;[^;,]*)*),(.*)$/s);
     const mimeType =
-      part.media.contentType ||
-      url.substring(url.indexOf(':') + 1, url.indexOf(';'));
-    const data = url.substring(url.indexOf(',') + 1);
+      part.media.contentType || match?.[1] || 'application/octet-stream';
+    const payload = match?.[3] ?? '';
+    const data = match?.[2].includes(';base64')
+      ? payload
+      : btoa(
+          String.fromCharCode(...new TextEncoder().encode(safeDecode(payload)))
+        );
     if (mimeType.startsWith('image/')) return { type: 'image', mimeType, data };
     if (mimeType.startsWith('audio/')) return { type: 'audio', mimeType, data };
     // Other inline media (pdf, video, ...) has no dedicated MCP block type.
@@ -507,6 +513,15 @@ function toMcpContentBlock(
   }
   // Anything else (data, custom, ...) is sent as JSON text.
   return { type: 'text', text: JSON.stringify(part.data ?? part) };
+}
+
+/** Percent-decodes a data URL payload, keeping it as is when malformed. */
+function safeDecode(payload: string): string {
+  try {
+    return decodeURIComponent(payload);
+  } catch {
+    return payload;
+  }
 }
 
 /**
