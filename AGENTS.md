@@ -8,5 +8,5 @@
 
 ## Repo-Wide Checks
 
-- Run `pnpm format` from the repo root to apply Prettier formatting and add missing `Copyright <year> Google LLC` Apache-2.0 headers (`pnpm format:check` to verify; `go fmt -C go ./...` for Go, or `bin/fmt` for Go and Python).
+- Run `pnpm format` from the repo root to apply Prettier formatting and add missing `Copyright <year> Google LLC` Apache-2.0 headers (`pnpm format:check` to verify; `go fmt -C go ./...` for Go).
 - Use Conventional Commit and PR headers (`<= 120` chars, non-empty scope per `commitlint.config.js`) with scopes prefixed by the workspace directory, e.g. `fix(js/ai): ...`, `fix(genkit-tools/cli): ...`, or `feat(go/ai): ...`.
