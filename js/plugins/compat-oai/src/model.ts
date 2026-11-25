@@ -251,9 +251,14 @@ function toOpenAIToolResultContent(
   const contentType = part.media.contentType || inline?.contentType || '';
   const note = `[${contentType || 'media'} content omitted: not supported by the model]`;
   if (contentType.startsWith('text/') && inline) {
-    return new TextDecoder().decode(
-      Uint8Array.from(atob(inline.data), (c) => c.charCodeAt(0))
-    );
+    // atob/TextDecoder rather than Buffer: Genkit also runs outside Node.
+    try {
+      return new TextDecoder().decode(
+        Uint8Array.from(atob(inline.data), (c) => c.charCodeAt(0))
+      );
+    } catch {
+      return note;
+    }
   }
   if (!mediaSupported) return note;
   if (inline && (contentType === 'audio/wav' || contentType === 'audio/mpeg')) {

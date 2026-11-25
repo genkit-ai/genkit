@@ -509,9 +509,7 @@ function toOllamaImage(media: { url: string; contentType?: string }) {
 /** A media part's content type, from `contentType` or its data URL. */
 function mediaContentType(media: { url: string; contentType?: string }) {
   if (media.contentType) return media.contentType;
-  return media.url.startsWith('data:')
-    ? media.url.substring(5, media.url.indexOf(';'))
-    : '';
+  return media.url.match(/^data:([^;,]+)/)?.[1] ?? '';
 }
 
 function toOllamaRole(role: string) {
