@@ -9,7 +9,11 @@ description: Guide for writing and reviewing CLI commands and MCP server tools i
 
 - **Naming**: Use `noun:verb` or `category:action` in kebab-case (e.g. `flow:run`, `eval:run`, `trace:get`). Use camelCase for code arguments and `<argName>` in help text.
 - **Runtime lifecycle**: Use `runWithManager(projectRoot, async (manager) => ...)` from `../utils/manager-utils.js` (with `findProjectRoot()` from `@genkit-ai/tools-common/utils`) for commands that interact with a project runtime (see `cli/src/commands/flow-run.ts`).
-- **Output & flags**: Log via `logger` from `@genkit-ai/tools-common/utils`; support `--output` (file/JSON output) and `--stream` where appropriate.
+- **Output channels & flags**: Direct `console.*` is disallowed in `*/src/**/*.ts` (`no-console` ESLint rule). Use the 3-channel output boundary:
+  - `writeStdout` (`cli/src/utils/output.ts`): Primary command payloads suitable for piping/redirection (JSON, JSONL, trace trees, docs, flow results). Never wrap machine-readable payloads in ANSI color.
+  - `writeStderr` (`cli/src/utils/output.ts`): Unprefixed human-facing CLI chrome (labels, hints, pagination tips, empty states, banners, unknown-command error help). Gate interactive prompts on `isInteractive()` and TTY-only banners on `isStderrTTY()`.
+  - `logger.*` (`@genkit-ai/tools-common/utils`): Diagnostic and server lifecycle logs (`Debug:`, `Info:`, `Warn:`, `Error:` on `stderr`, filterable via `logger.level` / `DEBUG=1`).
+  - Use `colorette` (`import * as clc from 'colorette'`) for optional terminal styling (`red` errors, `yellow` warnings/hints, `green` success/headings, `cyan` IDs/links, `bold`/`dim`/`italic` emphasis); support `--output` (file/JSON output) and `--stream` where appropriate.
 - **Registration**: Register new commands in the `commands` array in `cli/src/cli.ts`.
 
 ## 2. MCP Tools (`cli/src/mcp/`)
