@@ -203,7 +203,7 @@ export function foldToolResponseContent(
   return (req, next) => {
     if (
       !req.messages.some((m) =>
-        m.content.some((p) => p.toolResponse?.content?.length)
+        m.content.some((p) => p.toolResponse?.content !== undefined)
       )
     ) {
       return next(req);
@@ -212,9 +212,12 @@ export function foldToolResponseContent(
     for (const message of req.messages) {
       const media: Part[] = [];
       const content = message.content.map((part): Part => {
-        const toolContent = part.toolResponse?.content;
-        if (!part.toolResponse || !toolContent?.length) return part;
-        const { content: _content, ...toolResponse } = part.toolResponse;
+        if (!part.toolResponse || part.toolResponse.content === undefined) {
+          return part;
+        }
+        // `content` is always removed: providers without native support may
+        // reject the field even when it's empty.
+        const { content: toolContent, ...toolResponse } = part.toolResponse;
         const notes: string[] = [];
         const toolMedia: MediaPart[] = [];
         for (const p of toolContent) {
@@ -257,7 +260,7 @@ export function foldToolResponseContent(
  */
 function foldText(output: unknown, text: string): unknown {
   if (!text) return output;
-  if (output === undefined || output === null) return text;
+  if (output === undefined || output === null || output === '') return text;
   if (typeof output === 'string') return `${output}\n\n${text}`;
   return { output, text };
 }

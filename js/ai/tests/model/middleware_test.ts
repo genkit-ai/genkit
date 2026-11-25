@@ -1164,6 +1164,19 @@ describe('foldToolResponseContent', () => {
     ]);
   });
 
+  it('strips empty content and ignores an empty output string', async () => {
+    const messages = await run(
+      request([
+        { toolResponse: { name: 'a', output: 'ok', content: [] } },
+        { toolResponse: { name: 'b', output: '', content: [{ text: 'hi' }] } },
+      ])
+    );
+    assert.deepStrictEqual(messages[2].content, [
+      { toolResponse: { name: 'a', output: 'ok' } },
+      { toolResponse: { name: 'b', output: 'hi' } },
+    ]);
+  });
+
   it('keeps structured output next to folded text', async () => {
     const messages = await run(
       request([
