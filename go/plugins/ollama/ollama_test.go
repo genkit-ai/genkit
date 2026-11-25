@@ -1393,4 +1393,32 @@ func TestGenerateErrors(t *testing.T) {
 			})
 		}
 	}
+
+	// Once a stream has started, Ollama reports a failure as an error line
+	// in the 200 reply.
+	for _, tc := range []struct{ modelType, first string }{
+		{"chat", `{"message":{"role":"assistant","content":"a"},"done":false}`},
+		{"generate", `{"response":"a","done":false}`},
+	} {
+		t.Run("returns an error line from the stream ("+tc.modelType+")", func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				fmt.Fprintln(w, tc.first)
+				fmt.Fprintln(w, `{"error":"llama runner process has terminated"}`)
+			}))
+			defer server.Close()
+
+			g := &generator{model: ModelDefinition{Name: "test-model", Type: tc.modelType}, serverAddress: server.URL}
+			calls := 0
+			_, err := g.generate(t.Context(), input, func(context.Context, *ai.ModelResponseChunk) error {
+				calls++
+				return nil
+			})
+			if err == nil || !strings.Contains(err.Error(), "llama runner process has terminated") {
+				t.Errorf("generate() error = %v, want the stream's error", err)
+			}
+			if calls != 1 {
+				t.Errorf("callback called %d times, want 1", calls)
+			}
+		})
+	}
 }

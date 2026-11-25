@@ -406,6 +406,9 @@ type ollamaChatResponse struct {
 		Thinking  string           `json:"thinking"`
 		ToolCalls []ollamaToolCall `json:"tool_calls,omitempty"`
 	} `json:"message"`
+	// Error is set on a stream line that reports a failure after the reply
+	// has started, which keeps its 200 status.
+	Error string `json:"error"`
 	ollamaUsage
 }
 
@@ -413,6 +416,8 @@ type ollamaModelResponse struct {
 	Model     string `json:"model"`
 	CreatedAt string `json:"created_at"`
 	Response  string `json:"response"`
+	// Error is as in [ollamaChatResponse].
+	Error string `json:"error"`
 	ollamaUsage
 }
 
@@ -804,7 +809,7 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 				chunk, u, err = translateGenerateChunk(string(raw))
 			}
 			if err != nil {
-				return nil, fmt.Errorf("failed to translate chunk: %v", err)
+				return nil, fmt.Errorf("reading response stream: %w", err)
 			}
 			if u != (ollamaUsage{}) {
 				usage = u
@@ -985,6 +990,9 @@ func translateChatChunk(input string) (*ai.ModelResponseChunk, ollamaUsage, erro
 	if err := json.Unmarshal([]byte(input), &response); err != nil {
 		return nil, ollamaUsage{}, fmt.Errorf("failed to parse response JSON: %v", err)
 	}
+	if response.Error != "" {
+		return nil, ollamaUsage{}, fmt.Errorf("server returned an error mid-stream: %s", response.Error)
+	}
 	chunk := &ai.ModelResponseChunk{}
 
 	// Check for thinking/reasoning first
@@ -1019,6 +1027,9 @@ func translateGenerateChunk(input string) (*ai.ModelResponseChunk, ollamaUsage, 
 
 	if err := json.Unmarshal([]byte(input), &response); err != nil {
 		return nil, ollamaUsage{}, fmt.Errorf("failed to parse response JSON: %v", err)
+	}
+	if response.Error != "" {
+		return nil, ollamaUsage{}, fmt.Errorf("server returned an error mid-stream: %s", response.Error)
 	}
 	chunk := &ai.ModelResponseChunk{}
 	aiPart := ai.NewTextPart(response.Response)
