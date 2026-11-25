@@ -809,7 +809,7 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 				chunk, u, err = translateGenerateChunk(string(raw))
 			}
 			if err != nil {
-				return nil, fmt.Errorf("reading response stream: %w", err)
+				return nil, fmt.Errorf("failed to translate chunk: %w", err)
 			}
 			if u != (ollamaUsage{}) {
 				usage = u
@@ -991,7 +991,7 @@ func translateChatChunk(input string) (*ai.ModelResponseChunk, ollamaUsage, erro
 		return nil, ollamaUsage{}, fmt.Errorf("failed to parse response JSON: %v", err)
 	}
 	if response.Error != "" {
-		return nil, ollamaUsage{}, fmt.Errorf("server returned an error mid-stream: %s", response.Error)
+		return nil, ollamaUsage{}, fmt.Errorf("server reported an error: %s", response.Error)
 	}
 	chunk := &ai.ModelResponseChunk{}
 
@@ -1029,7 +1029,7 @@ func translateGenerateChunk(input string) (*ai.ModelResponseChunk, ollamaUsage, 
 		return nil, ollamaUsage{}, fmt.Errorf("failed to parse response JSON: %v", err)
 	}
 	if response.Error != "" {
-		return nil, ollamaUsage{}, fmt.Errorf("server returned an error mid-stream: %s", response.Error)
+		return nil, ollamaUsage{}, fmt.Errorf("server reported an error: %s", response.Error)
 	}
 	chunk := &ai.ModelResponseChunk{}
 	aiPart := ai.NewTextPart(response.Response)
