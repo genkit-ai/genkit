@@ -81,13 +81,10 @@ describe('logger', () => {
     logger.warn('visible warn');
     logger.error('visible error');
 
-    expect(stderrSpy).toHaveBeenCalledTimes(2);
-    expect(stripVTControlCharacters(String(stderrSpy.mock.calls[0][0]))).toBe(
-      'Warn: visible warn\n'
+    const written = stderrSpy.mock.calls.map(([chunk]) =>
+      stripVTControlCharacters(String(chunk))
     );
-    expect(stripVTControlCharacters(String(stderrSpy.mock.calls[1][0]))).toBe(
-      'Error: visible error\n'
-    );
+    expect(written).toEqual(['Warn: visible warn\n', 'Error: visible error\n']);
   });
 
   it('formats multiple arguments using util.format', () => {
@@ -125,16 +122,18 @@ describe('logger', () => {
         .split('\n')
         .map((line) => JSON.parse(line));
 
-      expect(lines).toHaveLength(2);
-      expect(lines[0]).toMatchObject({
-        level: 'debug',
-        message: 'trace details',
-      });
-      expect(typeof lines[0].timestamp).toBe('string');
-      expect(lines[1]).toMatchObject({
-        level: 'warn',
-        message: 'something looks off',
-      });
+      expect(lines).toEqual([
+        {
+          level: 'debug',
+          message: 'trace details',
+          timestamp: expect.any(String),
+        },
+        {
+          level: 'warn',
+          message: 'something looks off',
+          timestamp: expect.any(String),
+        },
+      ]);
       expect(stderrSpy).toHaveBeenCalledTimes(2);
     } finally {
       debugToFile(null);
