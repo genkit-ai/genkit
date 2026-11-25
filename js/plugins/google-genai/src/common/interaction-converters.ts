@@ -22,6 +22,7 @@ import {
   Operation,
   Part,
   z,
+  type MediaPart,
 } from 'genkit';
 import { ToolDefinition, getBasicUsageStats } from 'genkit/model';
 import {
@@ -35,6 +36,7 @@ import {
   FunctionCallStep,
   FunctionResultContent,
   FunctionResultStep,
+  FunctionResultSubcontent,
   GeminiInteraction,
   GoogleSearchCallStep,
   GoogleSearchResultStep,
@@ -59,6 +61,12 @@ import {
   Usage,
   VideoContent,
 } from './interaction-types.js';
+import {
+  decodeDataUrlText,
+  isGeminiToolResultMimeType,
+  mediaMimeType,
+  toolContentNote,
+} from './tool-response-content.js';
 import { isObject } from './types.js';
 import {
   appendToWavData,
@@ -830,7 +838,30 @@ function videoProcessingOf(part: Part): Pick<VideoContent, 'processing'> {
   return typeof processing === 'string' ? { processing } : {};
 }
 
-function toInteractionMedia(part: Part): Content {
+/**
+ * Converts a tool response content part to a function result block. Parts the
+ * API doesn't accept in function results are degraded to text instead of
+ * failing the request (the plugin declares `supports.toolResponseContent`).
+ */
+function toInteractionToolResultContent(part: Part): FunctionResultSubcontent {
+  if (part.text !== undefined) return { type: 'text', text: part.text };
+  if (part.media) {
+    const mimeType = mediaMimeType(part as MediaPart);
+    // Only CSV is accepted as a text document; send other text files as text.
+    const plainText = mimeType.startsWith('text/') && mimeType !== 'text/csv';
+    if (plainText && part.media.url.startsWith('data:')) {
+      return { type: 'text', text: decodeDataUrlText(part.media.url) };
+    }
+    if (!plainText && isGeminiToolResultMimeType(mimeType)) {
+      return toInteractionMedia(part);
+    }
+  }
+  return { type: 'text', text: toolContentNote(part) };
+}
+
+function toInteractionMedia(
+  part: Part
+): ImageContent | AudioContent | VideoContent | DocumentContent {
   if (!part.media) throw new Error('Media part missing media');
   const { url } = part.media;
   const contentType = part.media.contentType || extractMimeType(url);
@@ -920,8 +951,14 @@ const ImageContentSchema = z.object({
   resolution: MediaResolutionSchema.optional(),
 });
 
+// Audio, video and document blocks are built by toInteractionMedia; they're
+// only checked for their type here.
+const MediaContentSchema = z
+  .object({ type: z.enum(['audio', 'video', 'document']) })
+  .passthrough();
+
 const FunctionResultArraySchema = z.array(
-  z.union([ImageContentSchema, TextContentSchema])
+  z.union([ImageContentSchema, TextContentSchema, MediaContentSchema])
 );
 
 const RecordUnknownOrStringOrArraySchema = z.union([
@@ -1131,17 +1168,14 @@ export function toInteractionSteps(messages: MessageData[]): Step[] {
         let result: unknown = part.toolResponse.output;
 
         if (part.toolResponse.content && part.toolResponse.content.length > 0) {
-          const contentParts: Content[] = [];
+          const contentParts: FunctionResultSubcontent[] = [];
           if (result !== undefined) {
             const outputText =
               typeof result === 'string' ? result : JSON.stringify(result);
             contentParts.push({ type: 'text', text: outputText });
           }
           for (const p of part.toolResponse.content) {
-            const mapped = toInteractionContent(p);
-            if (mapped) {
-              contentParts.push(mapped);
-            }
+            contentParts.push(toInteractionToolResultContent(p));
           }
           result = contentParts;
         } else if (
@@ -1151,14 +1185,15 @@ export function toInteractionSteps(messages: MessageData[]): Step[] {
           result = { result: result };
         }
 
-        let parsedResult:
-          Record<string, unknown> | string | (ImageContent | TextContent)[];
+        let parsedResult: FunctionResultStep['result'];
         try {
-          parsedResult = RecordUnknownOrStringOrArraySchema.parse(result ?? {});
+          parsedResult = RecordUnknownOrStringOrArraySchema.parse(
+            result ?? {}
+          ) as FunctionResultStep['result'];
         } catch {
           throw new GenkitError({
             status: 'INVALID_ARGUMENT',
-            message: `Tool output for ${part.toolResponse.name} may only contain text or image content.`,
+            message: `Tool output for ${part.toolResponse.name} must be an object, a string, or a list of text, image, audio, video or document content.`,
           });
         }
         steps.push({

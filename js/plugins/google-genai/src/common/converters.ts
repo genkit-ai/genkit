@@ -26,6 +26,11 @@ import {
 } from 'genkit/model';
 import { JSONPath } from 'jsonpath-plus';
 import {
+  isGeminiToolResultMimeType,
+  mediaMimeType,
+  toolContentNote,
+} from './tool-response-content.js';
+import {
   FunctionCallingMode,
   FunctionDeclaration,
   FunctionDeclarationSchema,
@@ -196,25 +201,35 @@ function toGeminiToolRequest(part: Part): GeminiPart {
 }
 
 function toGeminiToolResponse(part: Part): GeminiPart {
-  if (part.toolResponse?.output === undefined && !part.toolResponse?.content) {
-    throw Error(
-      'Invalid ToolResponsePart: output or content must be provided.'
-    );
+  const toolResponse = part.toolResponse!;
+  // `function_response.parts` only takes inline/file data: media Gemini
+  // accepts goes there, everything else (text, resources, unsupported media)
+  // is folded into the JSON `response` as text.
+  const media: MediaPart[] = [];
+  const text: string[] = [];
+  for (const p of toolResponse.content ?? []) {
+    if (p.text !== undefined) {
+      text.push(p.text);
+    } else if (
+      p.media &&
+      isGeminiToolResultMimeType(mediaMimeType(p as MediaPart))
+    ) {
+      media.push(p as MediaPart);
+    } else {
+      text.push(toolContentNote(p));
+    }
   }
   const functionResponse: FunctionResponse = {
-    name: part.toolResponse!.name,
-    ...(part.toolResponse?.ref !== undefined
-      ? { id: part.toolResponse.ref }
-      : {}),
+    name: toolResponse.name,
+    ...(toolResponse.ref !== undefined ? { id: toolResponse.ref } : {}),
     response: {
-      name: part.toolResponse!.name,
-      ...(part.toolResponse?.output !== undefined
-        ? { content: part.toolResponse.output }
+      name: toolResponse.name,
+      ...(toolResponse.output !== undefined
+        ? { content: toolResponse.output }
         : {}),
+      ...(text.length ? { text: text.join('\n') } : {}),
     },
-    ...(part.toolResponse?.content !== undefined
-      ? { parts: part.toolResponse.content.map(toGeminiPart) }
-      : {}),
+    ...(media.length ? { parts: media.map(toGeminiMedia) } : {}),
   };
 
   return maybeAddGeminiThoughtSignatureAndMetadata(part, {

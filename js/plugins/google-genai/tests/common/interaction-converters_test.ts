@@ -1913,16 +1913,15 @@ describe('Interaction Converters', () => {
       ]);
     });
 
-    it('throws GenkitError when tool output contains non-text/image content', () => {
+    it('maps document, audio, text and unsupported tool content', () => {
       const messages: MessageData[] = [
         {
           role: 'tool',
           content: [
             {
               toolResponse: {
-                name: 'pdfTool',
+                name: 'filesTool',
                 ref: 'call-1',
-                output: undefined,
                 content: [
                   {
                     media: {
@@ -1930,23 +1929,49 @@ describe('Interaction Converters', () => {
                       contentType: 'application/pdf',
                     },
                   },
+                  {
+                    media: {
+                      url: 'data:audio/wav;base64,UklG',
+                      contentType: 'audio/wav',
+                    },
+                  },
+                  {
+                    media: {
+                      url: `data:text/plain;base64,${Buffer.from('the password is KIWI9').toString('base64')}`,
+                      contentType: 'text/plain',
+                    },
+                  },
+                  {
+                    media: {
+                      url: 'data:application/gzip;base64,H4sI',
+                      contentType: 'application/gzip',
+                    },
+                  },
+                  { resource: { uri: 'demo://resource/1' } },
                 ],
               },
             },
           ],
         },
       ];
-      assert.throws(
-        () => toInteractionSteps(messages),
-        (err: any) => {
-          assert.strictEqual(err.status, 'INVALID_ARGUMENT');
-          assert.strictEqual(
-            err.originalMessage,
-            'Tool output for pdfTool may only contain text or image content.'
-          );
-          return true;
-        }
-      );
+      const steps = toInteractionSteps(messages);
+      assert.deepStrictEqual(steps, [
+        {
+          type: 'function_result',
+          name: 'filesTool',
+          call_id: 'call-1',
+          result: [
+            { type: 'document', mime_type: 'application/pdf', data: 'ABC' },
+            { type: 'audio', mime_type: 'audio/wav', data: 'UklG' },
+            { type: 'text', text: 'the password is KIWI9' },
+            {
+              type: 'text',
+              text: '[application/gzip content omitted: not supported by the model]',
+            },
+            { type: 'text', text: 'Resource: demo://resource/1' },
+          ],
+        },
+      ]);
     });
 
     it('wraps plain array tool output in result object', () => {

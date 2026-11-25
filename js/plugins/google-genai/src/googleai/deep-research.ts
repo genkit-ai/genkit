@@ -191,6 +191,7 @@ const ADVANCED_DEEP_RESEARCH_INFO = {
     multiturn: true,
     media: true,
     tools: true,
+    toolResponseContent: true,
     toolChoice: false,
     systemRole: false,
     output: ['text', 'media'],

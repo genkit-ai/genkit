@@ -123,6 +123,7 @@ function commonRef(
           multiturn: true,
           media: true,
           tools: true,
+          toolResponseContent: true,
           toolChoice: false,
           systemRole: false,
           output: ['text'],
