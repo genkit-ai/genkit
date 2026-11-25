@@ -13,6 +13,9 @@
   ],
   "version": "1.44.0",
   "type": "commonjs",
+  "engines": {
+    "node": ">=22.12"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/genkit-ai/genkit.git",
@@ -27,7 +30,7 @@
     "genkit": "workspace:^"
   },
   "devDependencies": {
-    "@types/node": "^20.12.12",
+    "@types/node": "^22.15.3",
     "tsup": "^8.0.2",
     "typescript": "^5.9.3",
     "rimraf": "^6.0.1",

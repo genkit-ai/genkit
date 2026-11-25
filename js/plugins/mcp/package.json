@@ -22,6 +22,9 @@
     }
   },
   "type": "commonjs",
+  "engines": {
+    "node": ">=22.12"
+  },
   "scripts": {
     "check": "tsc",
     "compile": "tsup-node",
@@ -44,7 +47,7 @@
   "devDependencies": {
     "get-port": "^5.1.0",
     "express": "^5.1.0",
-    "@types/node": "^20.11.16",
+    "@types/node": "^22.15.3",
     "rimraf": "^6.0.1",
     "tsup": "^8.3.5",
     "tsx": "^4.19.2",

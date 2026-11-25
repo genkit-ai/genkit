@@ -19,6 +19,9 @@
   ],
   "version": "1.44.0",
   "type": "commonjs",
+  "engines": {
+    "node": ">=22.12"
+  },
   "scripts": {
     "check": "tsc",
     "compile": "cross-env NODE_OPTIONS=\"--max-old-space-size=16384\" npx tsup-node",
@@ -53,7 +56,7 @@
     "firebase-admin": ">=12.2"
   },
   "devDependencies": {
-    "@types/node": "^20.11.16",
+    "@types/node": "^22.15.3",
     "@types/sinon": "^17.0.4",
     "cross-env": "10.1.0",
     "google-gax": "^4.4.1",

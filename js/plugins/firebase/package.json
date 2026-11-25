@@ -14,6 +14,9 @@
   ],
   "version": "1.44.0",
   "type": "commonjs",
+  "engines": {
+    "node": ">=22.12"
+  },
   "scripts": {
     "check": "tsc",
     "compile": "tsup-node",
@@ -44,7 +47,7 @@
     }
   },
   "devDependencies": {
-    "@types/node": "^20.11.16",
+    "@types/node": "^22.15.3",
     "firebase": "^11.5.0",
     "firebase-tools": "^13.13.2",
     "genkit": "workspace:*",

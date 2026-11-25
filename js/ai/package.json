@@ -9,6 +9,9 @@
   ],
   "version": "1.44.0",
   "type": "commonjs",
+  "engines": {
+    "node": ">=22.12"
+  },
   "scripts": {
     "check": "tsc -p tsconfig.test.json",
     "compile": "tsup-node",
@@ -28,7 +31,7 @@
   "license": "Apache-2.0",
   "dependencies": {
     "@genkit-ai/core": "workspace:*",
-    "@types/node": "^20.11.19",
+    "@types/node": "^22.15.3",
     "colorette": "^2.0.20",
     "dotprompt": "^1.1.1",
     "handlebars": "^4.7.8",

@@ -79,7 +79,7 @@
     "@genkit-ai/express": "workspace:*",
     "ai": "^6.0.192",
     "@types/express": "^4.17.21",
-    "@types/node": "^20.11.16",
+    "@types/node": "^22.15.3",
     "express": "^4.21.1",
     "get-port": "^5.1.0",
     "rimraf": "^6.0.1",
@@ -88,6 +88,6 @@
     "typescript": "^5.9.3"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.12"
   }
 }

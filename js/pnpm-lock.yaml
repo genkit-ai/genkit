@@ -42,8 +42,8 @@ importers:
         specifier: workspace:*
         version: link:../core
       '@types/node':
-        specifier: ^20.11.19
-        version: 20.19.37
+        specifier: ^22.15.3
+        version: 22.15.32
       colorette:
         specifier: ^2.0.20
         version: 2.0.20
@@ -131,8 +131,8 @@ importers:
         specifier: ^4.17.21
         version: 4.17.25
       '@types/node':
-        specifier: ^20.11.30
-        version: 20.19.37
+        specifier: ^22.15.3
+        version: 22.15.32
       '@types/ws':
         specifier: ^8.5.10
         version: 8.18.1
@@ -238,8 +238,8 @@ importers:
   plugins/a2ui:
     devDependencies:
       '@types/node':
-        specifier: ^20.11.16
-        version: 20.19.37
+        specifier: ^22.15.3
+        version: 22.15.32
       genkit:
         specifier: workspace:*
         version: link:../../genkit
@@ -263,8 +263,8 @@ importers:
         version: 0.97.1(zod@4.6.7)
     devDependencies:
       '@types/node':
-        specifier: ^20.11.16
-        version: 20.19.37
+        specifier: ^22.15.3
+        version: 22.15.32
       check-node-version:
         specifier: ^4.2.1
         version: 4.2.1
@@ -300,8 +300,8 @@ importers:
         version: 9.15.1(encoding@0.1.13)
     devDependencies:
       '@types/node':
-        specifier: ^20.11.16
-        version: 20.19.37
+        specifier: ^22.15.3
+        version: 22.15.32
       rimraf:
         specifier: ^6.0.1
         version: 6.1.3
@@ -328,8 +328,8 @@ importers:
         version: 1.3.1
     devDependencies:
       '@types/node':
-        specifier: ^20.11.16
-        version: 20.19.37
+        specifier: ^22.15.3
+        version: 22.15.32
       rimraf:
         specifier: ^6.0.1
         version: 6.1.3
@@ -365,8 +365,8 @@ importers:
         version: 11.1.0
     devDependencies:
       '@types/node':
-        specifier: ^20.11.16
-        version: 20.19.37
+        specifier: ^22.15.3
+        version: 22.15.32
       '@types/uuid':
         specifier: ^10.0.0
         version: 10.0.0
@@ -387,7 +387,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^4.1.0
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@20.19.37)(msw@2.14.6(@types/node@20.19.37)(typescript@5.9.3))(vite@8.3.4(@types/node@20.19.37)(esbuild@0.28.1)(jiti@2.7.0)(sass@1.97.3)(tsx@4.20.3)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@22.15.32)(msw@2.14.6(@types/node@22.15.32)(typescript@5.9.3))(vite@8.3.4(@types/node@22.15.32)(esbuild@0.28.1)(jiti@2.7.0)(sass@1.97.3)(tsx@4.20.3)(yaml@2.9.1))
 
   plugins/compat-oai:
     dependencies:
@@ -399,8 +399,8 @@ importers:
         version: 4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76)
     devDependencies:
       '@types/node':
-        specifier: ^20.12.12
-        version: 20.19.37
+        specifier: ^22.15.3
+        version: 22.15.32
       rimraf:
         specifier: ^6.0.1
         version: 6.1.3
@@ -412,7 +412,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^4.1.0
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@20.19.37)(msw@2.14.6(@types/node@20.19.37)(typescript@5.9.3))(vite@8.3.4(@types/node@20.19.37)(esbuild@0.28.1)(jiti@2.7.0)(sass@1.97.3)(tsx@4.21.0)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@22.15.32)(msw@2.14.6(@types/node@22.15.32)(typescript@5.9.3))(vite@8.3.4(@types/node@22.15.32)(esbuild@0.28.1)(jiti@2.7.0)(sass@1.97.3)(tsx@4.21.0)(yaml@2.9.1))
 
   plugins/dev-local-vectorstore:
     dependencies:
@@ -427,8 +427,8 @@ importers:
         version: 1.3.1
     devDependencies:
       '@types/node':
-        specifier: ^20.11.16
-        version: 20.19.37
+        specifier: ^22.15.3
+        version: 22.15.32
       rimraf:
         specifier: ^6.0.1
         version: 6.1.3
@@ -461,8 +461,8 @@ importers:
         version: 3.3.2
     devDependencies:
       '@types/node':
-        specifier: ^20.11.16
-        version: 20.19.37
+        specifier: ^22.15.3
+        version: 22.15.32
       rimraf:
         specifier: ^6.0.1
         version: 6.1.3
@@ -501,8 +501,8 @@ importers:
         specifier: ^4.17.21
         version: 4.17.25
       '@types/node':
-        specifier: ^20.11.16
-        version: 20.19.37
+        specifier: ^22.15.3
+        version: 22.15.32
       get-port:
         specifier: ^5.1.0
         version: 5.1.1
@@ -522,8 +522,8 @@ importers:
   plugins/fastify:
     devDependencies:
       '@types/node':
-        specifier: ^20.11.16
-        version: 20.19.37
+        specifier: ^22.15.3
+        version: 22.15.32
       fastify:
         specifier: ^5.0.0
         version: 5.8.5
@@ -549,8 +549,8 @@ importers:
   plugins/fetch:
     devDependencies:
       '@types/node':
-        specifier: ^20.11.16
-        version: 20.19.37
+        specifier: ^22.15.3
+        version: 22.15.32
       genkit:
         specifier: workspace:*
         version: link:../../genkit
@@ -583,14 +583,14 @@ importers:
         version: 13.7.0(encoding@0.1.13)
     devDependencies:
       '@types/node':
-        specifier: ^20.11.16
-        version: 20.19.37
+        specifier: ^22.15.3
+        version: 22.15.32
       firebase:
         specifier: ^11.5.0
         version: 11.10.0
       firebase-tools:
         specifier: ^13.13.2
-        version: 13.35.1(@types/node@20.19.37)(encoding@0.1.13)
+        version: 13.35.1(@types/node@22.15.32)(encoding@0.1.13)
       genkit:
         specifier: workspace:*
         version: link:../../genkit
@@ -608,7 +608,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^4.1.0
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@20.19.37)(msw@2.14.6(@types/node@20.19.37)(typescript@5.9.3))(vite@8.3.4(@types/node@20.19.37)(esbuild@0.28.1)(jiti@2.7.0)(sass@1.97.3)(tsx@4.20.3)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@22.15.32)(msw@2.14.6(@types/node@22.15.32)(typescript@5.9.3))(vite@8.3.4(@types/node@22.15.32)(esbuild@0.28.1)(jiti@2.7.0)(sass@1.97.3)(tsx@4.20.3)(yaml@2.9.1))
 
   plugins/google-cloud:
     dependencies:
@@ -620,11 +620,11 @@ importers:
         version: 0.4.1
     devDependencies:
       '@types/node':
-        specifier: ^20.11.16
-        version: 20.19.37
+        specifier: ^22.15.3
+        version: 22.15.32
       firebase-tools:
         specifier: ^13.13.2
-        version: 13.35.1(@types/node@20.19.37)(encoding@0.1.13)
+        version: 13.35.1(@types/node@22.15.32)(encoding@0.1.13)
       genkit:
         specifier: workspace:*
         version: link:../../genkit
@@ -642,7 +642,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^4.1.0
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@20.19.37)(msw@2.14.6(@types/node@20.19.37)(typescript@5.9.3))(vite@8.3.4(@types/node@20.19.37)(esbuild@0.28.1)(jiti@2.7.0)(sass@1.97.3)(tsx@4.20.3)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@22.15.32)(msw@2.14.6(@types/node@22.15.32)(typescript@5.9.3))(vite@8.3.4(@types/node@22.15.32)(esbuild@0.28.1)(jiti@2.7.0)(sass@1.97.3)(tsx@4.20.3)(yaml@2.9.1))
 
   plugins/google-genai:
     dependencies:
@@ -660,8 +660,8 @@ importers:
         specifier: ^5.0.5
         version: 5.0.5
       '@types/node':
-        specifier: ^20.11.16
-        version: 20.19.37
+        specifier: ^22.15.3
+        version: 22.15.32
       '@types/sinon':
         specifier: ^17.0.4
         version: 17.0.4
@@ -691,8 +691,8 @@ importers:
         version: link:../../genkit
     devDependencies:
       '@types/node':
-        specifier: ^20.11.16
-        version: 20.19.37
+        specifier: ^22.15.3
+        version: 22.15.32
       express:
         specifier: ^5.1.0
         version: 5.2.1
@@ -728,8 +728,8 @@ importers:
         specifier: ^3.0.1
         version: 3.0.1
       '@types/node':
-        specifier: ^20.11.16
-        version: 20.19.37
+        specifier: ^22.15.3
+        version: 22.15.32
       rimraf:
         specifier: ^6.0.1
         version: 6.1.3
@@ -746,14 +746,14 @@ importers:
   plugins/next:
     devDependencies:
       '@types/node':
-        specifier: ^20.11.16
-        version: 20.19.37
+        specifier: ^22.15.3
+        version: 22.15.32
       genkit:
         specifier: workspace:*
         version: link:../../genkit
       next:
         specifier: ^16.3.3
-        version: 16.3.6(@babel/core@7.29.0)(@opentelemetry/api@1.9.1)(@types/node@20.19.37)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(sass@1.97.3)
+        version: 16.3.6(@opentelemetry/api@1.9.1)(@types/node@22.15.32)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(sass@1.97.3)
       rimraf:
         specifier: ^6.0.1
         version: 6.1.3
@@ -768,7 +768,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^4.1.0
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@20.19.37)(msw@2.14.6(@types/node@20.19.37)(typescript@5.9.3))(vite@8.3.4(@types/node@20.19.37)(esbuild@0.28.1)(jiti@2.7.0)(sass@1.97.3)(tsx@4.20.3)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@22.15.32)(msw@2.14.6(@types/node@22.15.32)(typescript@5.9.3))(vite@8.3.4(@types/node@22.15.32)(esbuild@0.28.1)(jiti@2.7.0)(sass@1.97.3)(tsx@4.20.3)(yaml@2.9.1))
       zod:
         specifier: ^4.6.7
         version: 4.6.7
@@ -783,8 +783,8 @@ importers:
         version: 0.5.18
     devDependencies:
       '@types/node':
-        specifier: ^20.11.16
-        version: 20.19.37
+        specifier: ^22.15.3
+        version: 22.15.32
       rimraf:
         specifier: ^6.0.1
         version: 6.1.3
@@ -811,8 +811,8 @@ importers:
         specifier: ^2.11.0
         version: 2.11.0(@opentelemetry/api@1.9.1)
       '@types/node':
-        specifier: ^20.11.16
-        version: 20.19.37
+        specifier: ^22.15.3
+        version: 22.15.32
       genkit:
         specifier: workspace:*
         version: link:../../genkit
@@ -842,8 +842,8 @@ importers:
         version: 1.3.1
     devDependencies:
       '@types/node':
-        specifier: ^20.11.16
-        version: 20.19.37
+        specifier: ^22.15.3
+        version: 22.15.32
       rimraf:
         specifier: ^6.0.1
         version: 6.1.3
@@ -873,8 +873,8 @@ importers:
         specifier: ^4.17.21
         version: 4.17.25
       '@types/node':
-        specifier: ^20.11.16
-        version: 20.19.37
+        specifier: ^22.15.3
+        version: 22.15.32
       ai:
         specifier: ^6.0.192
         version: 6.0.192(zod@4.6.7)
@@ -931,8 +931,8 @@ importers:
         version: 4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76)
     devDependencies:
       '@types/node':
-        specifier: ^20.11.16
-        version: 20.19.37
+        specifier: ^22.15.3
+        version: 22.15.32
       '@types/sinon':
         specifier: ^17.0.4
         version: 17.0.4
@@ -14421,7 +14421,7 @@ snapshots:
   '@grpc/grpc-js@1.9.15':
     dependencies:
       '@grpc/proto-loader': 0.7.15
-      '@types/node': 20.19.37
+      '@types/node': 22.15.32
 
   '@grpc/proto-loader@0.7.15':
     dependencies:
@@ -14601,14 +14601,6 @@ snapshots:
     optionalDependencies:
       '@types/node': 22.15.32
 
-  '@inquirer/confirm@6.1.0(@types/node@20.19.37)':
-    dependencies:
-      '@inquirer/core': 11.2.0(@types/node@20.19.37)
-      '@inquirer/type': 4.0.6(@types/node@20.19.37)
-    optionalDependencies:
-      '@types/node': 20.19.37
-    optional: true
-
   '@inquirer/confirm@6.1.0(@types/node@22.15.32)':
     dependencies:
       '@inquirer/core': 11.2.0(@types/node@22.15.32)
@@ -14629,19 +14621,6 @@ snapshots:
       yoctocolors-cjs: 2.1.3
     optionalDependencies:
       '@types/node': 22.15.32
-
-  '@inquirer/core@11.2.0(@types/node@20.19.37)':
-    dependencies:
-      '@inquirer/ansi': 2.0.6
-      '@inquirer/figures': 2.0.6
-      '@inquirer/type': 4.0.6(@types/node@20.19.37)
-      cli-width: 4.1.0
-      fast-wrap-ansi: 0.2.2
-      mute-stream: 4.0.0
-      signal-exit: 4.1.0
-    optionalDependencies:
-      '@types/node': 20.19.37
-    optional: true
 
   '@inquirer/core@11.2.0(@types/node@22.15.32)':
     dependencies:
@@ -14671,13 +14650,6 @@ snapshots:
       yoctocolors-cjs: 2.1.3
     optionalDependencies:
       '@types/node': 22.15.32
-
-  '@inquirer/external-editor@1.0.3(@types/node@20.19.37)':
-    dependencies:
-      chardet: 2.1.1
-      iconv-lite: 0.7.2
-    optionalDependencies:
-      '@types/node': 20.19.37
 
   '@inquirer/external-editor@1.0.3(@types/node@22.15.32)':
     dependencies:
@@ -14758,11 +14730,6 @@ snapshots:
   '@inquirer/type@3.0.10(@types/node@22.15.32)':
     optionalDependencies:
       '@types/node': 22.15.32
-
-  '@inquirer/type@4.0.6(@types/node@20.19.37)':
-    optionalDependencies:
-      '@types/node': 20.19.37
-    optional: true
 
   '@inquirer/type@4.0.6(@types/node@22.15.32)':
     optionalDependencies:
@@ -17008,7 +16975,7 @@ snapshots:
   '@types/body-parser@1.19.6':
     dependencies:
       '@types/connect': 3.4.38
-      '@types/node': 20.19.37
+      '@types/node': 22.15.32
 
   '@types/caseless@0.12.5': {}
 
@@ -17019,11 +16986,11 @@ snapshots:
 
   '@types/connect@3.4.38':
     dependencies:
-      '@types/node': 20.19.37
+      '@types/node': 22.15.32
 
   '@types/cors@2.8.19':
     dependencies:
-      '@types/node': 20.19.37
+      '@types/node': 22.15.32
 
   '@types/d3-array@3.2.2': {}
 
@@ -17161,14 +17128,14 @@ snapshots:
 
   '@types/express-serve-static-core@4.19.8':
     dependencies:
-      '@types/node': 20.19.37
+      '@types/node': 22.15.32
       '@types/qs': 6.15.0
       '@types/range-parser': 1.2.7
       '@types/send': 1.2.1
 
   '@types/express-serve-static-core@5.1.1':
     dependencies:
-      '@types/node': 20.19.37
+      '@types/node': 22.15.32
       '@types/qs': 6.15.0
       '@types/range-parser': 1.2.7
       '@types/send': 1.2.1
@@ -17207,7 +17174,7 @@ snapshots:
   '@types/jsonwebtoken@9.0.10':
     dependencies:
       '@types/ms': 2.1.0
-      '@types/node': 20.19.37
+      '@types/node': 22.15.32
 
   '@types/katex@0.16.8': {}
 
@@ -17225,7 +17192,7 @@ snapshots:
 
   '@types/node-fetch@2.6.13':
     dependencies:
-      '@types/node': 20.19.37
+      '@types/node': 22.15.32
       form-data: 4.0.5
 
   '@types/node@18.19.130':
@@ -17242,7 +17209,7 @@ snapshots:
 
   '@types/pdf-parse@1.1.5':
     dependencies:
-      '@types/node': 20.19.37
+      '@types/node': 22.15.32
 
   '@types/qs@6.15.0': {}
 
@@ -17259,7 +17226,7 @@ snapshots:
   '@types/request@2.48.13':
     dependencies:
       '@types/caseless': 0.12.5
-      '@types/node': 20.19.37
+      '@types/node': 22.15.32
       '@types/tough-cookie': 4.0.5
       form-data: 2.5.5
 
@@ -17268,26 +17235,26 @@ snapshots:
   '@types/send@0.17.6':
     dependencies:
       '@types/mime': 1.3.5
-      '@types/node': 20.19.37
+      '@types/node': 22.15.32
 
   '@types/send@1.2.1':
     dependencies:
-      '@types/node': 20.19.37
+      '@types/node': 22.15.32
 
   '@types/serve-static@1.15.10':
     dependencies:
       '@types/http-errors': 2.0.5
-      '@types/node': 20.19.37
+      '@types/node': 22.15.32
       '@types/send': 0.17.6
 
   '@types/serve-static@2.2.0':
     dependencies:
       '@types/http-errors': 2.0.5
-      '@types/node': 20.19.37
+      '@types/node': 22.15.32
 
   '@types/set-cookie-parser@2.4.10':
     dependencies:
-      '@types/node': 20.19.37
+      '@types/node': 22.15.32
     optional: true
 
   '@types/sinon@17.0.4':
@@ -17319,7 +17286,7 @@ snapshots:
 
   '@types/wav@1.0.4':
     dependencies:
-      '@types/node': 20.19.37
+      '@types/node': 22.15.32
 
   '@types/webidl-conversions@7.0.3': {}
 
@@ -17331,7 +17298,7 @@ snapshots:
 
   '@types/ws@8.18.1':
     dependencies:
-      '@types/node': 20.19.37
+      '@types/node': 22.15.32
 
   '@typescript-eslint/eslint-plugin@8.60.0(@typescript-eslint/parser@8.60.0(eslint@9.39.4(jiti@2.7.0))(typescript@5.9.3))(eslint@9.39.4(jiti@2.7.0))(typescript@5.9.3)':
     dependencies:
@@ -17525,24 +17492,6 @@ snapshots:
       chai: 6.3.0
       tinyrainbow: 3.2.0
 
-  '@vitest/mocker@4.1.11(msw@2.14.6(@types/node@20.19.37)(typescript@5.9.3))(vite@8.3.4(@types/node@20.19.37)(esbuild@0.28.1)(jiti@2.7.0)(sass@1.97.3)(tsx@4.20.3)(yaml@2.9.1))':
-    dependencies:
-      '@vitest/spy': 4.1.11
-      estree-walker: 3.0.3
-      magic-string: 0.30.21
-    optionalDependencies:
-      msw: 2.14.6(@types/node@20.19.37)(typescript@5.9.3)
-      vite: 8.3.4(@types/node@20.19.37)(esbuild@0.28.1)(jiti@2.7.0)(sass@1.97.3)(tsx@4.20.3)(yaml@2.9.1)
-
-  '@vitest/mocker@4.1.11(msw@2.14.6(@types/node@20.19.37)(typescript@5.9.3))(vite@8.3.4(@types/node@20.19.37)(esbuild@0.28.1)(jiti@2.7.0)(sass@1.97.3)(tsx@4.21.0)(yaml@2.9.1))':
-    dependencies:
-      '@vitest/spy': 4.1.11
-      estree-walker: 3.0.3
-      magic-string: 0.30.21
-    optionalDependencies:
-      msw: 2.14.6(@types/node@20.19.37)(typescript@5.9.3)
-      vite: 8.3.4(@types/node@20.19.37)(esbuild@0.28.1)(jiti@2.7.0)(sass@1.97.3)(tsx@4.21.0)(yaml@2.9.1)
-
   '@vitest/mocker@4.1.11(msw@2.14.6(@types/node@22.15.32)(typescript@5.9.3))(vite@7.3.6(@types/node@22.15.32)(jiti@2.7.0)(lightningcss@1.33.0)(sass@1.97.3)(tsx@4.21.0)(yaml@2.9.1))':
     dependencies:
       '@vitest/spy': 4.1.11
@@ -17552,6 +17501,15 @@ snapshots:
       msw: 2.14.6(@types/node@22.15.32)(typescript@5.9.3)
       vite: 7.3.6(@types/node@22.15.32)(jiti@2.7.0)(lightningcss@1.33.0)(sass@1.97.3)(tsx@4.21.0)(yaml@2.9.1)
     optional: true
+
+  '@vitest/mocker@4.1.11(msw@2.14.6(@types/node@22.15.32)(typescript@5.9.3))(vite@8.3.4(@types/node@22.15.32)(esbuild@0.28.1)(jiti@2.7.0)(sass@1.97.3)(tsx@4.20.3)(yaml@2.9.1))':
+    dependencies:
+      '@vitest/spy': 4.1.11
+      estree-walker: 3.0.3
+      magic-string: 0.30.21
+    optionalDependencies:
+      msw: 2.14.6(@types/node@22.15.32)(typescript@5.9.3)
+      vite: 8.3.4(@types/node@22.15.32)(esbuild@0.28.1)(jiti@2.7.0)(sass@1.97.3)(tsx@4.20.3)(yaml@2.9.1)
 
   '@vitest/mocker@4.1.11(msw@2.14.6(@types/node@22.15.32)(typescript@5.9.3))(vite@8.3.4(@types/node@22.15.32)(esbuild@0.28.1)(jiti@2.7.0)(sass@1.97.3)(tsx@4.21.0)(yaml@2.9.1))':
     dependencies:
@@ -18885,7 +18843,7 @@ snapshots:
   engine.io@6.6.8:
     dependencies:
       '@types/cors': 2.8.19
-      '@types/node': 20.19.37
+      '@types/node': 22.15.32
       '@types/ws': 8.18.1
       accepts: 1.3.8
       base64id: 2.0.0
@@ -19766,7 +19724,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  firebase-tools@13.35.1(@types/node@20.19.37)(encoding@0.1.13):
+  firebase-tools@13.35.1(@types/node@22.15.32)(encoding@0.1.13):
     dependencies:
       '@electric-sql/pglite': 0.2.17
       '@google-cloud/cloud-sql-connector': 1.7.1(encoding@0.1.13)
@@ -19798,8 +19756,8 @@ snapshots:
       gaxios: 6.7.1(encoding@0.1.13)
       glob: 10.5.0
       google-auth-library: 9.15.1(encoding@0.1.13)
-      inquirer: 8.2.7(@types/node@20.19.37)
-      inquirer-autocomplete-prompt: 2.0.1(inquirer@8.2.7(@types/node@20.19.37))
+      inquirer: 8.2.7(@types/node@22.15.32)
+      inquirer-autocomplete-prompt: 2.0.1(inquirer@8.2.7(@types/node@22.15.32))
       js-yaml: 3.14.2
       jsonwebtoken: 9.0.3
       leven: 3.1.0
@@ -20570,18 +20528,18 @@ snapshots:
 
   inline-style-parser@0.2.7: {}
 
-  inquirer-autocomplete-prompt@2.0.1(inquirer@8.2.7(@types/node@20.19.37)):
+  inquirer-autocomplete-prompt@2.0.1(inquirer@8.2.7(@types/node@22.15.32)):
     dependencies:
       ansi-escapes: 4.3.2
       figures: 3.2.0
-      inquirer: 8.2.7(@types/node@20.19.37)
+      inquirer: 8.2.7(@types/node@22.15.32)
       picocolors: 1.1.1
       run-async: 2.4.1
       rxjs: 7.8.2
 
-  inquirer@8.2.7(@types/node@20.19.37):
+  inquirer@8.2.7(@types/node@22.15.32):
     dependencies:
-      '@inquirer/external-editor': 1.0.3(@types/node@20.19.37)
+      '@inquirer/external-editor': 1.0.3(@types/node@22.15.32)
       ansi-escapes: 4.3.2
       chalk: 4.1.2
       cli-cursor: 3.1.0
@@ -22074,32 +22032,6 @@ snapshots:
       msgpackr-extract: 3.0.4
     optional: true
 
-  msw@2.14.6(@types/node@20.19.37)(typescript@5.9.3):
-    dependencies:
-      '@inquirer/confirm': 6.1.0(@types/node@20.19.37)
-      '@mswjs/interceptors': 0.41.9
-      '@open-draft/deferred-promise': 3.0.0
-      '@types/statuses': 2.0.6
-      cookie: 1.1.1
-      graphql: 16.14.0
-      headers-polyfill: 5.0.1
-      is-node-process: 1.2.0
-      outvariant: 1.4.3
-      path-to-regexp: 6.3.0
-      picocolors: 1.1.1
-      rettime: 0.11.11
-      statuses: 2.0.2
-      strict-event-emitter: 0.5.1
-      tough-cookie: 6.0.1
-      type-fest: 5.6.0
-      until-async: 3.0.2
-      yargs: 17.7.2
-    optionalDependencies:
-      typescript: 5.9.3
-    transitivePeerDependencies:
-      - '@types/node'
-    optional: true
-
   msw@2.14.6(@types/node@22.15.32)(typescript@5.9.3):
     dependencies:
       '@inquirer/confirm': 6.1.0(@types/node@22.15.32)
@@ -22191,6 +22123,33 @@ snapshots:
       '@opentelemetry/api': 1.9.1
       sass: 1.97.3
       sharp: 0.35.5(@types/node@20.19.37)
+    transitivePeerDependencies:
+      - '@babel/core'
+      - '@types/node'
+      - babel-plugin-macros
+
+  next@16.3.6(@opentelemetry/api@1.9.1)(@types/node@22.15.32)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(sass@1.97.3):
+    dependencies:
+      '@next/env': 16.3.6
+      '@swc/helpers': 0.5.23
+      baseline-browser-mapping: 2.10.7
+      caniuse-lite: 1.0.30001781
+      postcss: 8.5.23
+      react: 19.2.4
+      react-dom: 19.2.4(react@19.2.4)
+      styled-jsx: 5.1.6(@babel/core@7.29.0)(react@19.2.4)
+    optionalDependencies:
+      '@next/swc-darwin-arm64': 16.3.6
+      '@next/swc-darwin-x64': 16.3.6
+      '@next/swc-linux-arm64-gnu': 16.3.6
+      '@next/swc-linux-arm64-musl': 16.3.6
+      '@next/swc-linux-x64-gnu': 16.3.6
+      '@next/swc-linux-x64-musl': 16.3.6
+      '@next/swc-win32-arm64-msvc': 16.3.6
+      '@next/swc-win32-x64-msvc': 16.3.6
+      '@opentelemetry/api': 1.9.1
+      sass: 1.97.3
+      sharp: 0.35.5(@types/node@22.15.32)
     transitivePeerDependencies:
       - '@babel/core'
       - '@types/node'
@@ -22895,7 +22854,7 @@ snapshots:
       '@protobufjs/path': 1.1.2
       '@protobufjs/pool': 1.1.0
       '@protobufjs/utf8': 1.1.0
-      '@types/node': 20.19.37
+      '@types/node': 22.15.32
       long: 5.3.2
 
   proxy-addr@2.0.7:
@@ -23706,6 +23665,40 @@ snapshots:
       '@img/sharp-win32-ia32': 0.35.5
       '@img/sharp-win32-x64': 0.35.5
       '@types/node': 20.19.37
+    optional: true
+
+  sharp@0.35.5(@types/node@22.15.32):
+    dependencies:
+      '@img/colour': 1.1.0
+      detect-libc: 2.1.2
+      semver: 7.8.5
+    optionalDependencies:
+      '@img/sharp-darwin-arm64': 0.35.5
+      '@img/sharp-darwin-x64': 0.35.5
+      '@img/sharp-freebsd-wasm32': 0.35.5
+      '@img/sharp-libvips-darwin-arm64': 1.3.4
+      '@img/sharp-libvips-darwin-x64': 1.3.4
+      '@img/sharp-libvips-linux-arm': 1.3.4
+      '@img/sharp-libvips-linux-arm64': 1.3.4
+      '@img/sharp-libvips-linux-ppc64': 1.3.4
+      '@img/sharp-libvips-linux-riscv64': 1.3.4
+      '@img/sharp-libvips-linux-s390x': 1.3.4
+      '@img/sharp-libvips-linux-x64': 1.3.4
+      '@img/sharp-libvips-linuxmusl-arm64': 1.3.4
+      '@img/sharp-libvips-linuxmusl-x64': 1.3.4
+      '@img/sharp-linux-arm': 0.35.5
+      '@img/sharp-linux-arm64': 0.35.5
+      '@img/sharp-linux-ppc64': 0.35.5
+      '@img/sharp-linux-riscv64': 0.35.5
+      '@img/sharp-linux-s390x': 0.35.5
+      '@img/sharp-linux-x64': 0.35.5
+      '@img/sharp-linuxmusl-arm64': 0.35.5
+      '@img/sharp-linuxmusl-x64': 0.35.5
+      '@img/sharp-webcontainers-wasm32': 0.35.5
+      '@img/sharp-win32-arm64': 0.35.5
+      '@img/sharp-win32-ia32': 0.35.5
+      '@img/sharp-win32-x64': 0.35.5
+      '@types/node': 22.15.32
     optional: true
 
   shebang-command@2.0.0:
@@ -24832,7 +24825,7 @@ snapshots:
       tsx: 4.21.0
       yaml: 2.9.1
 
-  vite@8.3.4(@types/node@20.19.37)(esbuild@0.28.1)(jiti@2.7.0)(sass@1.97.3)(tsx@4.20.3)(yaml@2.9.1):
+  vite@8.3.4(@types/node@22.15.32)(esbuild@0.28.1)(jiti@2.7.0)(sass@1.97.3)(tsx@4.20.3)(yaml@2.9.1):
     dependencies:
       lightningcss: 1.33.0
       picomatch: 4.0.7
@@ -24840,28 +24833,12 @@ snapshots:
       rolldown: 1.2.14
       tinyglobby: 0.2.17
     optionalDependencies:
-      '@types/node': 20.19.37
+      '@types/node': 22.15.32
       esbuild: 0.28.1
       fsevents: 2.3.3
       jiti: 2.7.0
       sass: 1.97.3
       tsx: 4.20.3
-      yaml: 2.9.1
-
-  vite@8.3.4(@types/node@20.19.37)(esbuild@0.28.1)(jiti@2.7.0)(sass@1.97.3)(tsx@4.21.0)(yaml@2.9.1):
-    dependencies:
-      lightningcss: 1.33.0
-      picomatch: 4.0.7
-      postcss: 8.5.30
-      rolldown: 1.2.14
-      tinyglobby: 0.2.17
-    optionalDependencies:
-      '@types/node': 20.19.37
-      esbuild: 0.28.1
-      fsevents: 2.3.3
-      jiti: 2.7.0
-      sass: 1.97.3
-      tsx: 4.21.0
       yaml: 2.9.1
 
   vite@8.3.4(@types/node@22.15.32)(esbuild@0.28.1)(jiti@2.7.0)(sass@1.97.3)(tsx@4.21.0)(yaml@2.9.1):
@@ -24879,62 +24856,6 @@ snapshots:
       sass: 1.97.3
       tsx: 4.21.0
       yaml: 2.9.1
-
-  vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@20.19.37)(msw@2.14.6(@types/node@20.19.37)(typescript@5.9.3))(vite@8.3.4(@types/node@20.19.37)(esbuild@0.28.1)(jiti@2.7.0)(sass@1.97.3)(tsx@4.20.3)(yaml@2.9.1)):
-    dependencies:
-      '@vitest/expect': 4.1.11
-      '@vitest/mocker': 4.1.11(msw@2.14.6(@types/node@20.19.37)(typescript@5.9.3))(vite@8.3.4(@types/node@20.19.37)(esbuild@0.28.1)(jiti@2.7.0)(sass@1.97.3)(tsx@4.20.3)(yaml@2.9.1))
-      '@vitest/pretty-format': 4.1.11
-      '@vitest/runner': 4.1.11
-      '@vitest/snapshot': 4.1.11
-      '@vitest/spy': 4.1.11
-      '@vitest/utils': 4.1.11
-      es-module-lexer: 2.3.2
-      expect-type: 1.4.0
-      magic-string: 0.30.21
-      obug: 2.2.1
-      pathe: 2.0.3
-      picomatch: 4.0.7
-      std-env: 4.3.0
-      tinybench: 2.9.0
-      tinyexec: 1.2.2
-      tinyglobby: 0.2.17
-      tinyrainbow: 3.2.0
-      vite: 8.3.4(@types/node@20.19.37)(esbuild@0.28.1)(jiti@2.7.0)(sass@1.97.3)(tsx@4.20.3)(yaml@2.9.1)
-      why-is-node-running: 2.3.0
-    optionalDependencies:
-      '@opentelemetry/api': 1.9.1
-      '@types/node': 20.19.37
-    transitivePeerDependencies:
-      - msw
-
-  vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@20.19.37)(msw@2.14.6(@types/node@20.19.37)(typescript@5.9.3))(vite@8.3.4(@types/node@20.19.37)(esbuild@0.28.1)(jiti@2.7.0)(sass@1.97.3)(tsx@4.21.0)(yaml@2.9.1)):
-    dependencies:
-      '@vitest/expect': 4.1.11
-      '@vitest/mocker': 4.1.11(msw@2.14.6(@types/node@20.19.37)(typescript@5.9.3))(vite@8.3.4(@types/node@20.19.37)(esbuild@0.28.1)(jiti@2.7.0)(sass@1.97.3)(tsx@4.21.0)(yaml@2.9.1))
-      '@vitest/pretty-format': 4.1.11
-      '@vitest/runner': 4.1.11
-      '@vitest/snapshot': 4.1.11
-      '@vitest/spy': 4.1.11
-      '@vitest/utils': 4.1.11
-      es-module-lexer: 2.3.2
-      expect-type: 1.4.0
-      magic-string: 0.30.21
-      obug: 2.2.1
-      pathe: 2.0.3
-      picomatch: 4.0.7
-      std-env: 4.3.0
-      tinybench: 2.9.0
-      tinyexec: 1.2.2
-      tinyglobby: 0.2.17
-      tinyrainbow: 3.2.0
-      vite: 8.3.4(@types/node@20.19.37)(esbuild@0.28.1)(jiti@2.7.0)(sass@1.97.3)(tsx@4.21.0)(yaml@2.9.1)
-      why-is-node-running: 2.3.0
-    optionalDependencies:
-      '@opentelemetry/api': 1.9.1
-      '@types/node': 20.19.37
-    transitivePeerDependencies:
-      - msw
 
   vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@22.15.32)(msw@2.14.6(@types/node@22.15.32)(typescript@5.9.3))(vite@7.3.6(@types/node@22.15.32)(jiti@2.7.0)(lightningcss@1.33.0)(sass@1.97.3)(tsx@4.21.0)(yaml@2.9.1)):
     dependencies:
@@ -24964,6 +24885,34 @@ snapshots:
     transitivePeerDependencies:
       - msw
     optional: true
+
+  vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@22.15.32)(msw@2.14.6(@types/node@22.15.32)(typescript@5.9.3))(vite@8.3.4(@types/node@22.15.32)(esbuild@0.28.1)(jiti@2.7.0)(sass@1.97.3)(tsx@4.20.3)(yaml@2.9.1)):
+    dependencies:
+      '@vitest/expect': 4.1.11
+      '@vitest/mocker': 4.1.11(msw@2.14.6(@types/node@22.15.32)(typescript@5.9.3))(vite@8.3.4(@types/node@22.15.32)(esbuild@0.28.1)(jiti@2.7.0)(sass@1.97.3)(tsx@4.20.3)(yaml@2.9.1))
+      '@vitest/pretty-format': 4.1.11
+      '@vitest/runner': 4.1.11
+      '@vitest/snapshot': 4.1.11
+      '@vitest/spy': 4.1.11
+      '@vitest/utils': 4.1.11
+      es-module-lexer: 2.3.2
+      expect-type: 1.4.0
+      magic-string: 0.30.21
+      obug: 2.2.1
+      pathe: 2.0.3
+      picomatch: 4.0.7
+      std-env: 4.3.0
+      tinybench: 2.9.0
+      tinyexec: 1.2.2
+      tinyglobby: 0.2.17
+      tinyrainbow: 3.2.0
+      vite: 8.3.4(@types/node@22.15.32)(esbuild@0.28.1)(jiti@2.7.0)(sass@1.97.3)(tsx@4.20.3)(yaml@2.9.1)
+      why-is-node-running: 2.3.0
+    optionalDependencies:
+      '@opentelemetry/api': 1.9.1
+      '@types/node': 22.15.32
+    transitivePeerDependencies:
+      - msw
 
   vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@22.15.32)(msw@2.14.6(@types/node@22.15.32)(typescript@5.9.3))(vite@8.3.4(@types/node@22.15.32)(esbuild@0.28.1)(jiti@2.7.0)(sass@1.97.3)(tsx@4.21.0)(yaml@2.9.1)):
     dependencies:
