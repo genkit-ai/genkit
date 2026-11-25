@@ -92,6 +92,7 @@ export {
   type ModelReference,
   type ModelRequest,
   type ModelResponseData,
+  type MultipartToolResponse,
   type Part,
   type Role,
   type ToolRequestPart,

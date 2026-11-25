@@ -78,6 +78,7 @@ export {
   type ModelRequest,
   type ModelResponseChunkData,
   type ModelResponseData,
+  type MultipartToolResponse,
   type OutputConfig,
   type Part,
   type Role,

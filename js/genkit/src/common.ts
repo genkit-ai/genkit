@@ -95,6 +95,7 @@ export {
   type ModelRequest,
   type ModelResponseData,
   type MultipartToolAction,
+  type MultipartToolResponse,
   type OperationOptions,
   type OutputOptions,
   type Part,
