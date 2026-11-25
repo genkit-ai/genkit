@@ -68,7 +68,7 @@ func streamText(t *testing.T, body string, opts ...option.RequestOption) (string
 	return resp.Text(), nil
 }
 
-// TestStreamingSkipsSSEKeepAliveComments covers genkit#7344: OpenAI sends
+// TestStreamingSkipsSSEKeepAliveComments: OpenAI sends
 // ": keep-alive" comments while a model is slow to start, and openai-go v1
 // dispatches the blank line after a comment as an event with no data, which
 // it then fails to unmarshal.
@@ -84,6 +84,7 @@ func TestStreamingSkipsSSEKeepAliveComments(t *testing.T) {
 		{"comment inside a data event", ": note\n" + sseChunk("hel", "") + sseChunk("lo", "stop") + "data: [DONE]\n\n"},
 		{"event with no data", "event: ping\nid: 1\n\n" + sseChunk("hel", "") + sseChunk("lo", "stop") + "data: [DONE]\n\n"},
 		{"stray blank lines", "\n\n" + sseChunk("hel", "") + "\n" + sseChunk("lo", "stop") + "data: [DONE]\n\n"},
+		{"empty data values", "data:\n\ndata: \n\n" + sseChunk("hel", "") + sseChunk("lo", "stop") + "data: [DONE]\n\n"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -125,6 +126,31 @@ func TestCallerMiddlewareSeesRawStream(t *testing.T) {
 	}
 }
 
+// TestStreamingIgnoresErrorsWithoutData pins a deliberate change: a stream
+// that ends in an error event with no data, or in a bare JSON error line, used
+// to fail on the empty or invalid event. It now ends with the text so far and
+// no error, as the SSE spec and openai-go v3 have it.
+func TestStreamingIgnoresErrorsWithoutData(t *testing.T) {
+	tests := []struct {
+		name string
+		tail string
+	}{
+		{"error event without data", "event: error\n\n"},
+		{"bare JSON error line", `{"error":{"message":"boom"}}` + "\n\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := streamText(t, sseChunk("hel", "")+tt.tail)
+			if err != nil {
+				t.Fatalf("Generate() error = %v", err)
+			}
+			if got != "hel" {
+				t.Errorf("text = %q, want %q", got, "hel")
+			}
+		})
+	}
+}
+
 func TestSSEFilter(t *testing.T) {
 	tests := []struct {
 		name, in, want string
@@ -136,7 +162,10 @@ func TestSSEFilter(t *testing.T) {
 		{"fields after data are kept", "data: x\nid: 1\n\n", "data: x\nid: 1\n\n"},
 		{"event without data is dropped", "event: ping\nretry: 5\n\ndata: x\n\n", "data: x\n\n"},
 		{"stray blank lines", "\n\ndata: x\n\n\n", "data: x\n\n"},
-		{"data with no space or value", "data\n\n", "data\n\n"},
+		{"data with no colon is dropped", "data\n\ndata: x\n\n", "data: x\n\n"},
+		{"empty data value is dropped", "data:\n\ndata: \n\nevent: e\ndata:\n\ndata: x\n\n", "data: x\n\n"},
+		{"empty data value before a value is kept", "data:\ndata: x\n\n", "data:\ndata: x\n\n"},
+		{"empty data value after a value is kept", "data: x\ndata:\n\n", "data: x\ndata:\n\n"},
 		{"unterminated final event", "data: x\n\nid: 2\ndata: y", "data: x\n\nid: 2\ndata: y"},
 		{"unterminated final event without data", "data: x\n\nid: 2", "data: x\n\n"},
 		{"line ending in two CRs", "data\r\r\n\ndata: x\n\n", "data: x\n\n"},

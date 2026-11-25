@@ -25,20 +25,11 @@ import (
 	"github.com/openai/openai-go/option"
 )
 
-// dropDatalessSSEEvents is a middleware that removes server-sent events
-// carrying no data from a streaming response before the SDK decodes it.
-//
-// OpenAI sends ": keep-alive" comments while a model is slow to start, and
-// gateways send similar ones. The SSE spec says an event whose data buffer is
-// empty is not dispatched, but openai-go v1 dispatches one on every blank
-// line and then fails to unmarshal the empty data, which ends the stream with
-// "unexpected end of JSON input". openai-go v3 fixed its decoder; v1, which
-// this package's public API is built on, did not.
-//
-// Only successful, uncompressed text/event-stream responses are touched, so
-// errors and non-streaming replies reach the SDK as sent. A body still
-// compressed (a caller set Accept-Encoding, so Go did not decode it) is left
-// alone rather than filtered as if it were text.
+// dropDatalessSSEEvents is a middleware that removes server-sent events with
+// no data (keep-alive comments, pings, empty data values) from a successful,
+// uncompressed text/event-stream response. openai-go v1 dispatches those
+// events and fails to unmarshal them, ending the stream with "unexpected end
+// of JSON input".
 func dropDatalessSSEEvents(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
 	resp, err := next(req)
 	if err != nil || resp == nil || resp.Body == nil || resp.StatusCode < 200 || resp.StatusCode > 299 {
@@ -72,18 +63,18 @@ const (
 )
 
 // sseFilter streams an SSE body, dropping comment lines and any event that
-// ends without a data field. It reads in chunks of at most the bufio buffer
+// ends without a data field that has a value. It reads in chunks of at most the bufio buffer
 // size, deciding what to do with a line from its first chunk, so a long line
 // costs no more memory than a short one. Data lines pass through as they
 // arrive; the other fields of an event (event, id, retry) are held only until
-// its first data line, since without one the event is dropped.
+// its first data line with a value, since without one the event is dropped.
 type sseFilter struct {
 	src     io.ReadCloser
 	r       *bufio.Reader
 	out     []byte // filtered bytes, returned to the caller from outIdx on
 	outIdx  int    // the next byte of out to return
-	held    []byte // non-data fields of the current event, before any data
-	hasData bool   // the current event has a data field
+	held    []byte // fields of the current event before its first data value
+	hasData bool   // the current event has a data field with a value
 	midLine bool   // the last chunk read did not end its line
 	action  lineAction
 	err     error // sticky error from src, returned once out drains
@@ -153,12 +144,15 @@ func (f *sseFilter) startLine(chunk []byte) lineAction {
 	case content[0] == ':':
 		return dropLine
 	}
-	name, _, _ := bytes.Cut(content, []byte(":"))
-	if bytes.Equal(name, []byte("data")) {
-		f.flushHeld()
+	if f.hasData {
 		return passLine
 	}
-	if f.hasData {
+	name, value, _ := bytes.Cut(content, []byte(":"))
+	value = bytes.TrimPrefix(value, []byte(" "))
+	// A data line with an empty value is held like any other field: v1 fails
+	// on an event whose data is empty, though the spec would dispatch it.
+	if bytes.Equal(name, []byte("data")) && len(value) > 0 {
+		f.flushHeld()
 		return passLine
 	}
 	return holdLine
