@@ -435,12 +435,16 @@ export declare interface FunctionCallStep {
   signature?: string;
 }
 
+/** Content blocks allowed in a function result. */
+export type FunctionResultSubcontent =
+  TextContent | ImageContent | AudioContent | DocumentContent | VideoContent;
+
 export declare interface FunctionResultStep {
   type: 'function_result';
   name?: string;
   call_id: string;
   is_error?: boolean;
-  result: Record<string, unknown> | string | (ImageContent | TextContent)[];
+  result: Record<string, unknown> | string | FunctionResultSubcontent[];
   signature?: string;
 }
 
@@ -532,7 +536,7 @@ export declare interface McpServerToolResultStep {
   call_id: string;
   name?: string;
   server_name?: string;
-  result?: Record<string, unknown> | string | (ImageContent | TextContent)[];
+  result?: Record<string, unknown> | string | FunctionResultSubcontent[];
 }
 
 export type BuiltInToolStep =
@@ -903,7 +907,7 @@ export interface FunctionResultDelta {
   name?: string;
   call_id: string;
   is_error?: boolean;
-  result: Record<string, unknown> | string | (ImageContent | TextContent)[];
+  result: Record<string, unknown> | string | FunctionResultSubcontent[];
 }
 
 export interface CodeExecutionResultDelta {
@@ -931,7 +935,7 @@ export interface McpServerToolResultDelta {
   type: 'mcp_server_tool_result';
   name?: string;
   server_name?: string;
-  result: Record<string, unknown> | string | (ImageContent | TextContent)[];
+  result: Record<string, unknown> | string | FunctionResultSubcontent[];
 }
 
 export interface FileSearchResultDelta {

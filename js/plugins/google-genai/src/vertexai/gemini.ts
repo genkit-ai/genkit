@@ -670,6 +670,7 @@ function commonRef(
         multiturn: true,
         media: true,
         tools: true,
+        toolResponseContent: true,
         toolChoice: true,
         systemRole: true,
         constrained: 'all',

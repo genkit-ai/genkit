@@ -224,13 +224,13 @@ describe('toGeminiMessage', () => {
             functionResponse: {
               id: '1',
               name: 'screenshot',
+              // function_response.parts only takes inline/file data, so
+              // text content is folded into the JSON response.
               response: {
                 name: 'screenshot',
+                text: 'this is a test',
               },
               parts: [
-                {
-                  text: 'this is a test',
-                },
                 {
                   inlineData: {
                     mimeType: 'image/png',
@@ -269,10 +269,59 @@ describe('toGeminiMessage', () => {
               response: {
                 name: 'screenshot',
                 content: { status: 'ok' },
+                text: 'this is a test',
+              },
+            },
+          },
+        ],
+      },
+    },
+    {
+      should:
+        'should transform genkit message (tool response with unsupported content) correctly',
+      inputMessage: {
+        role: 'tool',
+        content: [
+          {
+            toolResponse: {
+              name: 'files',
+              ref: '3',
+              content: [
+                { resource: { uri: 'demo://resource/1' } },
+                {
+                  media: {
+                    contentType: 'application/gzip',
+                    url: 'data:application/gzip;base64,H4sI',
+                  },
+                },
+                {
+                  media: {
+                    contentType: 'application/pdf',
+                    url: 'data:application/pdf;base64,JVBERi0=',
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+      expectedOutput: {
+        role: 'user',
+        parts: [
+          {
+            functionResponse: {
+              id: '3',
+              name: 'files',
+              response: {
+                name: 'files',
+                text: 'Resource: demo://resource/1\n[application/gzip content omitted: not supported by the model]',
               },
               parts: [
                 {
-                  text: 'this is a test',
+                  inlineData: {
+                    mimeType: 'application/pdf',
+                    data: 'JVBERi0=',
+                  },
                 },
               ],
             },

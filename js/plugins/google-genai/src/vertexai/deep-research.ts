@@ -103,6 +103,7 @@ const DEEP_RESEARCH_SUPPORTS = {
   multiturn: true,
   media: true,
   tools: true,
+  toolResponseContent: true,
   toolChoice: false,
   systemRole: false,
   output: ['text', 'media'],
