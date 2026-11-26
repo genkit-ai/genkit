@@ -15,15 +15,21 @@
 package compat_oai
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
@@ -219,5 +225,90 @@ func TestSDKModelsCountReasoningApart(t *testing.T) {
 				t.Errorf("OutputTokens = %d, want 7, the reasoning counted apart", got)
 			}
 		})
+	}
+}
+
+// TestListActionsWarnsOncePerFailingStreak pins that a listing failure warns
+// once, each repeat logs at debug level instead, and a success re-arms the
+// warning.
+func TestListActionsWarnsOncePerFailingStreak(t *testing.T) {
+	fail := true
+	o := &OpenAICompatible{
+		Provider: "test",
+		ListModels: func(context.Context, *openai.Client) ([]string, error) {
+			if fail {
+				return nil, errors.New("listing broke")
+			}
+			return []string{"m1"}, nil
+		},
+	}
+	var logged bytes.Buffer
+	handler := slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelDebug})
+	ctx := logger.WithContext(context.Background(), slog.New(handler))
+	list := func() []api.ActionDesc {
+		logged.Reset()
+		return listActions(ctx, o, func(id string) api.ActionDesc { return api.ActionDesc{Name: id} })
+	}
+	check := func(step string, warns, debugs int) {
+		t.Helper()
+		log := logged.String()
+		if got := strings.Count(log, "level=WARN"); got != warns {
+			t.Errorf("%s: %d warn records, want %d; log %q", step, got, warns, log)
+		}
+		if got := strings.Count(log, "level=DEBUG"); got != debugs {
+			t.Errorf("%s: %d debug records, want %d; log %q", step, got, debugs, log)
+		}
+		if warns+debugs > 0 && strings.Count(log, "listing broke") != warns+debugs {
+			t.Errorf("%s: log %q does not carry the listing error on every record", step, log)
+		}
+	}
+
+	if got := list(); len(got) != 0 {
+		t.Fatalf("first failure listed %v, want nothing", got)
+	}
+	check("first failure", 1, 0)
+	for i := range 2 {
+		list()
+		check(fmt.Sprintf("repeat failure %d", i+1), 0, 1)
+	}
+	fail = false
+	if got := list(); len(got) != 1 {
+		t.Fatalf("success listed %v, want m1", got)
+	}
+	check("success", 0, 0)
+	fail = true
+	list()
+	check("failure after a success", 1, 0)
+}
+
+// TestListActionsCancelledRequestDoesNotWarn pins that a listing that fails
+// because its context ended logs at debug level and leaves the warning armed
+// for a real failure.
+func TestListActionsCancelledRequestDoesNotWarn(t *testing.T) {
+	o := &OpenAICompatible{
+		Provider: "test",
+		ListModels: func(ctx context.Context, _ *openai.Client) ([]string, error) {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			return nil, errors.New("listing broke")
+		},
+	}
+	var logged bytes.Buffer
+	handler := slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelDebug})
+	base := logger.WithContext(context.Background(), slog.New(handler))
+	desc := func(id string) api.ActionDesc { return api.ActionDesc{Name: id} }
+
+	cancelled, cancel := context.WithCancel(base)
+	cancel()
+	listActions(cancelled, o, desc)
+	if log := logged.String(); strings.Contains(log, "level=WARN") || !strings.Contains(log, "level=DEBUG") {
+		t.Errorf("cancelled listing logged %q, want one debug record and no warning", log)
+	}
+
+	logged.Reset()
+	listActions(base, o, desc)
+	if log := logged.String(); !strings.Contains(log, "level=WARN") {
+		t.Errorf("failure after a cancelled listing logged %q, want a warning", log)
 	}
 }

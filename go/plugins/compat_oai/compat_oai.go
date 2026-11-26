@@ -23,9 +23,11 @@ import (
 	"math"
 	"slices"
 	"sync"
+	"sync/atomic"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/internal/base"
@@ -230,6 +232,9 @@ type OpenAICompatible struct {
 	// model on every reflection poll is wasteful. A plugin instance lists
 	// through one config type, so the cache never mixes schemas.
 	descs sync.Map
+
+	// listFailing records that the last model listing failed.
+	listFailing atomic.Bool
 }
 
 // Init implements genkit.Plugin.
@@ -762,8 +767,6 @@ func ResolveChatAction[Config ChatConfig](o *OpenAICompatible, atype api.ActionT
 }
 
 // listActions lists the models the provider's API reports, described by desc.
-// Descriptors are cached per ID: they are deterministic, and reflection
-// polls the list often.
 func listActions(ctx context.Context, o *OpenAICompatible, desc func(id string) api.ActionDesc) []api.ActionDesc {
 	listModels := o.ListModels
 	if listModels == nil {
@@ -771,8 +774,18 @@ func listActions(ctx context.Context, o *OpenAICompatible, desc func(id string) 
 	}
 	models, err := listModels(ctx, o.client)
 	if err != nil {
+		if ctx.Err() != nil {
+			logger.Debug(ctx, "model listing cancelled", "provider", o.Provider, "error", err)
+			return nil
+		}
+		if o.listFailing.CompareAndSwap(false, true) {
+			logger.Warn(ctx, "unable to list models", "provider", o.Provider, "error", err)
+		} else {
+			logger.Debug(ctx, "unable to list models", "provider", o.Provider, "error", err)
+		}
 		return nil
 	}
+	o.listFailing.Store(false)
 	actions := make([]api.ActionDesc, 0, len(models))
 	for _, id := range models {
 		if cached, ok := o.descs.Load(id); ok {
