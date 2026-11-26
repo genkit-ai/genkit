@@ -63,5 +63,5 @@ export function lookup<T extends object>(
   m: T,
   k: string
 ): T[keyof T] | undefined {
-  return (m as Record<string, T[keyof T] | undefined>)[k];
+  return Object.hasOwn(m, k) ? (m as Record<string, T[keyof T]>)[k] : undefined;
 }
