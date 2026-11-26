@@ -194,6 +194,54 @@ await client.waitForReady();
 await client.runAction({ key: '/tool/runShell', input: { cmd: 'ls' } });
 ```
 
+## Subprocesses: `execRunner()`
+
+Runs each box as a local child process that dials back into a per-runner
+reflection host.
+
+```ts
+import { box, execRunner } from '@genkit-ai/box';
+
+// Self mode: re-run *this same program* as the box. One file defines the tool
+// and boxes it; the body runs in the child.
+const myBox = box(ai, { runner: execRunner({ self: true }) });
+const boxedRunShell = myBox.fromTool(runShell);
+
+// Separate entry: stronger code isolation, and it can be another language.
+box(ai, { runner: execRunner({ cmd: 'tsx src/boxed.ts' }) });
+
+// A string cmd is split on whitespace; use an array for paths with spaces.
+box(ai, { runner: execRunner({ cmd: ['tsx', 'src/my box.ts'] }) });
+```
+
+A box that can't start (missing binary, crash on boot) fails `acquire` right
+away rather than at the readiness timeout.
+
+Boxes nest: a boxed agent can itself box a tool, each level in its own
+process. Call `box.close()` when you are done; it stops every child the runner
+started.
+
+### Environment
+
+By default the child inherits your environment, API keys and other secrets
+included. To hand it only what it needs:
+
+```ts
+execRunner({
+  cmd: 'node lib/boxed.js',
+  inheritEnv: false, // or ['GEMINI_API_KEY'] to inherit just those
+  env: { GEMINI_API_KEY: process.env.GEMINI_API_KEY! },
+});
+```
+
+With `inheritEnv: false` the child still gets the basics a runtime needs to
+start (`PATH`, `HOME`, locale, temp dirs, `NODE_*`, `GENKIT_ENV`, and
+`GENKIT_TELEMETRY_SERVER` so its traces reach the Dev UI). `env` is set on top
+of whatever is inherited, and the box's own reflection vars always win.
+
+New boxes have 30 seconds to connect; raise `readyTimeoutMs` for slow starts
+(e.g. many plugins on a cold container).
+
 ## Tracing
 
 Each proxied call records a span in the caller's trace, marked with
