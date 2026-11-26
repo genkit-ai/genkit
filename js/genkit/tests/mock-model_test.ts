@@ -19,8 +19,8 @@ import { z } from '@genkit-ai/core';
 import { initNodeFeatures } from '@genkit-ai/core/node';
 import * as assert from 'assert';
 import { beforeEach, describe, it } from 'node:test';
-import { genkit as genkitBeta, type GenkitBeta } from '../src/beta';
-import { genkit, type Genkit } from '../src/genkit';
+import { genkit as genkitBeta, type GenkitBeta } from '../src/beta.js';
+import { genkit, type Genkit } from '../src/genkit.js';
 
 initNodeFeatures();
 

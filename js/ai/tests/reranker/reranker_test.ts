@@ -19,8 +19,8 @@ import { initNodeFeatures } from '@genkit-ai/core/node';
 import { Registry } from '@genkit-ai/core/registry';
 import * as assert from 'assert';
 import { beforeEach, describe, it } from 'node:test';
-import { defineReranker, rerank, reranker } from '../../src/reranker';
-import { Document } from '../../src/retriever';
+import { defineReranker, rerank, reranker } from '../../src/reranker.js';
+import { Document } from '../../src/retriever.js';
 
 initNodeFeatures();
 

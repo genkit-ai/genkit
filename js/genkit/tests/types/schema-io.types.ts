@@ -18,7 +18,7 @@
 // `.default()` are optional), implementations receive its *output* type.
 // Never executed: type-checked by `tsconfig.types-test.json`.
 
-import { genkit, z } from '../../src/beta';
+import { genkit, z } from '../../src/beta.js';
 
 const ai = genkit({});
 

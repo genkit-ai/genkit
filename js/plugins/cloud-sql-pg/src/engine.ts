@@ -26,7 +26,7 @@ import {
   ExactNearestNeighbor,
 } from './indexes.js';
 
-import { getIAMPrincipalEmail } from './utils';
+import { getIAMPrincipalEmail } from './utils/index.js';
 
 export { IpAddressTypes } from '@google-cloud/cloud-sql-connector';
 
