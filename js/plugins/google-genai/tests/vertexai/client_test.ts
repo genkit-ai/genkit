@@ -15,6 +15,7 @@
  */
 
 import * as assert from 'assert';
+import { getEventListeners } from 'events';
 import { GoogleAuth } from 'google-auth-library';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import * as sinon from 'sinon';
@@ -1518,18 +1519,47 @@ describe('Vertex AI Client', () => {
       assert.strictEqual(signal!.aborted, true);
     });
 
-    it('should return a signal linked to the provided signal', () => {
+    it('should return the provided signal directly when no timeout is set', () => {
       const controller = new AbortController();
       const reason = new Error('caller cancelled');
       const signal = TEST_ONLY.getAbortSignal({
         ...regionalClientOptions,
         signal: controller.signal,
       });
-      assert.ok(signal);
+      assert.strictEqual(signal, controller.signal);
       assert.strictEqual(signal!.aborted, false);
       controller.abort(reason);
       assert.strictEqual(signal!.aborted, true);
       assert.strictEqual(signal!.reason, reason);
+    });
+
+    it('should return a signal that aborts on timeout or provided signal', () => {
+      const controller = new AbortController();
+      const reason = new Error('caller cancelled');
+      const signal = TEST_ONLY.getAbortSignal({
+        ...regionalClientOptions,
+        signal: controller.signal,
+        timeout: 100,
+      });
+      assert.ok(signal);
+
+      clock.tick(50);
+      assert.strictEqual(signal!.aborted, false);
+      controller.abort(reason);
+      assert.strictEqual(signal!.aborted, true);
+      assert.strictEqual(signal!.reason, reason);
+      assert.strictEqual(clock.countTimers(), 0);
+
+      const controller2 = new AbortController();
+      const signal2 = TEST_ONLY.getAbortSignal({
+        ...regionalClientOptions,
+        signal: controller2.signal,
+        timeout: 100,
+      });
+      assert.ok(signal2);
+      assert.strictEqual(signal2!.aborted, false);
+      clock.tick(100);
+      assert.strictEqual(signal2!.aborted, true);
     });
 
     it('should immediately return an aborted signal if provided signal is already aborted', () => {
@@ -1542,14 +1572,85 @@ describe('Vertex AI Client', () => {
         signal: controller.signal,
         timeout: 100,
       });
-      assert.ok(signal);
+      assert.strictEqual(signal, controller.signal);
       assert.strictEqual(signal!.aborted, true);
       assert.strictEqual(signal!.reason, reason);
       assert.strictEqual(clock.countTimers(), 0);
     });
+
+    it('should not accumulate abort listeners across repeated calls with a shared signal', () => {
+      const controller = new AbortController();
+      const reason = new Error('shared cancel');
+
+      for (let i = 0; i < 15; i++) {
+        const signal = TEST_ONLY.getAbortSignal({
+          ...regionalClientOptions,
+          signal: controller.signal,
+        });
+        assert.strictEqual(signal, controller.signal);
+      }
+      assert.strictEqual(
+        getEventListeners(controller.signal, 'abort').length,
+        0
+      );
+
+      const combinedSignals: AbortSignal[] = [];
+      for (let i = 0; i < 15; i++) {
+        const signal = TEST_ONLY.getAbortSignal({
+          ...regionalClientOptions,
+          signal: controller.signal,
+          timeout: 1000,
+        });
+        assert.ok(signal);
+        assert.notStrictEqual(signal, controller.signal);
+        combinedSignals.push(signal!);
+      }
+      assert.strictEqual(
+        getEventListeners(controller.signal, 'abort').length,
+        0
+      );
+      assert.strictEqual(clock.countTimers(), 15);
+
+      controller.abort(reason);
+      for (const signal of combinedSignals) {
+        assert.strictEqual(signal.aborted, true);
+        assert.strictEqual(signal.reason, reason);
+      }
+      assert.strictEqual(clock.countTimers(), 0);
+    });
   });
 
-  describe('already-aborted signal handling', () => {
+  describe('already-aborted and shared signal handling', () => {
+    it('should not emit MaxListenersExceededWarning across repeated calls with a shared signal', async () => {
+      const warnings: Error[] = [];
+      const onWarning = (warning: Error) => {
+        warnings.push(warning);
+      };
+      process.on('warning', onWarning);
+      try {
+        const controller = new AbortController();
+        for (let i = 0; i < 15; i++) {
+          TEST_ONLY.getAbortSignal({
+            ...regionalClientOptions,
+            signal: controller.signal,
+          });
+          TEST_ONLY.getAbortSignal({
+            ...regionalClientOptions,
+            signal: controller.signal,
+            timeout: 1000,
+          });
+        }
+        assert.strictEqual(
+          getEventListeners(controller.signal, 'abort').length,
+          0
+        );
+        controller.abort(new Error('done'));
+        await new Promise<void>((resolve) => process.nextTick(resolve));
+        assert.deepStrictEqual(warnings, []);
+      } finally {
+        process.off('warning', onWarning);
+      }
+    });
     it('should pass an aborted signal to fetch if aborted while fetching auth token', async () => {
       const controller = new AbortController();
       const reason = new Error('aborted during token fetch');

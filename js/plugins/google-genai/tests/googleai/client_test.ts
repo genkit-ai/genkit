@@ -15,6 +15,7 @@
  */
 
 import * as assert from 'assert';
+import { getEventListeners } from 'events';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import * as sinon from 'sinon';
 import { TextEncoder } from 'util';
@@ -919,10 +920,10 @@ describe('Google AI Client', () => {
 
       sinon.assert.calledOnce(fetchSpy);
       assert.ok(capturedSignal, 'A signal should be passed to fetch');
-      assert.notStrictEqual(
+      assert.strictEqual(
         capturedSignal,
         controller.signal,
-        'The signal passed to fetch should be a new signal, not the original one'
+        'The signal passed to fetch should be the original signal when no timeout is set'
       );
       assert.strictEqual(
         capturedSignal!.aborted,
@@ -976,11 +977,11 @@ describe('Google AI Client', () => {
       assert.strictEqual(signal!.aborted, true);
     });
 
-    it('should return a signal linked to the provided signal', () => {
+    it('should return the provided signal directly when no timeout is set', () => {
       const controller = new AbortController();
       const clientOptions: ClientOptions = { signal: controller.signal };
       const signal = getAbortSignal(clientOptions);
-      assert.ok(signal);
+      assert.strictEqual(signal, controller.signal);
       assert.strictEqual(signal!.aborted, false);
       controller.abort();
       assert.strictEqual(signal!.aborted, true);
@@ -999,6 +1000,7 @@ describe('Google AI Client', () => {
       assert.strictEqual(signal!.aborted, false);
       controller.abort();
       assert.strictEqual(signal!.aborted, true);
+      assert.strictEqual(clock.countTimers(), 0);
 
       const controller2 = new AbortController();
       const signal2 = getAbortSignal({
@@ -1020,14 +1022,74 @@ describe('Google AI Client', () => {
         signal: controller.signal,
         timeout: 100,
       });
-      assert.ok(signal);
+      assert.strictEqual(signal, controller.signal);
       assert.strictEqual(signal!.aborted, true);
       assert.strictEqual(signal!.reason, reason);
       assert.strictEqual(clock.countTimers(), 0);
     });
+
+    it('should not accumulate abort listeners across repeated calls with a shared signal', () => {
+      const controller = new AbortController();
+      const reason = new Error('shared cancel');
+
+      for (let i = 0; i < 15; i++) {
+        const signal = getAbortSignal({ signal: controller.signal });
+        assert.strictEqual(signal, controller.signal);
+      }
+      assert.strictEqual(
+        getEventListeners(controller.signal, 'abort').length,
+        0
+      );
+
+      const combinedSignals: AbortSignal[] = [];
+      for (let i = 0; i < 15; i++) {
+        const signal = getAbortSignal({
+          signal: controller.signal,
+          timeout: 1000,
+        });
+        assert.ok(signal);
+        assert.notStrictEqual(signal, controller.signal);
+        combinedSignals.push(signal!);
+      }
+      assert.strictEqual(
+        getEventListeners(controller.signal, 'abort').length,
+        0
+      );
+      assert.strictEqual(clock.countTimers(), 15);
+
+      controller.abort(reason);
+      for (const signal of combinedSignals) {
+        assert.strictEqual(signal.aborted, true);
+        assert.strictEqual(signal.reason, reason);
+      }
+      assert.strictEqual(clock.countTimers(), 0);
+    });
   });
 
-  describe('already-aborted signal handling', () => {
+  describe('already-aborted and shared signal handling', () => {
+    it('should not emit MaxListenersExceededWarning across repeated calls with a shared signal', async () => {
+      const warnings: Error[] = [];
+      const onWarning = (warning: Error) => {
+        warnings.push(warning);
+      };
+      process.on('warning', onWarning);
+      try {
+        const controller = new AbortController();
+        for (let i = 0; i < 15; i++) {
+          getAbortSignal({ signal: controller.signal });
+          getAbortSignal({ signal: controller.signal, timeout: 1000 });
+        }
+        assert.strictEqual(
+          getEventListeners(controller.signal, 'abort').length,
+          0
+        );
+        controller.abort(new Error('done'));
+        await new Promise<void>((resolve) => process.nextTick(resolve));
+        assert.deepStrictEqual(warnings, []);
+      } finally {
+        process.off('warning', onWarning);
+      }
+    });
     it('should pass an already-aborted signal to fetch in generateContent and generateContentStream', async () => {
       const controller = new AbortController();
       const reason = new Error('already aborted');

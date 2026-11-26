@@ -248,10 +248,10 @@ describe('Google AI Gemini', () => {
         sinon.assert.calledOnce(fetchStub);
         const fetchOptions = fetchStub.lastCall.args[1];
         assert.ok(fetchOptions.signal, 'Fetch options should have a signal');
-        assert.notStrictEqual(
+        assert.strictEqual(
           fetchOptions.signal,
           abortSignal,
-          'Fetch signal should be a new signal, not the original'
+          'Fetch signal should be the original signal when no timeout is set'
         );
 
         const fetchSignal = fetchOptions.signal;

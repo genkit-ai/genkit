@@ -38,9 +38,10 @@ const delimiter = '\n\n';
 function createSafeWriter(writable: WritableStream<Uint8Array>) {
   const writer = writable.getWriter();
   let closed = false;
-  writer.closed.catch(() => {
+  const markClosed = () => {
     closed = true;
-  });
+  };
+  writer.closed.then(markClosed, markClosed);
   return {
     write: async (chunk: Uint8Array): Promise<void> => {
       if (closed) {
