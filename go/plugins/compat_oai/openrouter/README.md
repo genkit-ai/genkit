@@ -45,7 +45,7 @@ response, err := genkit.Generate(ctx, g, ai.WithPrompt("Explain reinforcement le
 ```
 
 `SiteURL` and `AppName` are optional. They name the application on
-OpenRouter's public rankings, sent as the `HTTP-Referer` and `X-Title`
+OpenRouter's public rankings, sent as the `HTTP-Referer` and `X-OpenRouter-Title`
 headers, and change nothing else about a request.
 
 Reasoning output is returned as Genkit reasoning parts and is available

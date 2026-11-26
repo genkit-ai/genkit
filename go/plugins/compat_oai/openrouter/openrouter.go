@@ -486,8 +486,11 @@ type OpenRouter struct {
 	// attribution only.
 	SiteURL string
 	// AppName is the title the calling application appears under on
-	// OpenRouter's rankings, sent as the X-Title header. It is optional and
-	// affects attribution only.
+	// OpenRouter's rankings, sent as the X-OpenRouter-Title header.
+	// This alone does not create an app page, it must be paired with SiteURL.
+	// By default applications are public, include the
+	// `X-OpenRouter-App-Visibility: hidden` header to make it visible only in
+	// internal analytics. It is optional and affects attribution only.
 	AppName string
 	// Opts contains additional OpenAI client request options, such as
 	// [option.WithBaseURL] for a different endpoint (OPENROUTER_BASE_URL
@@ -561,7 +564,7 @@ func (o *OpenRouter) Init(ctx context.Context) []api.Action {
 		opts = append(opts, option.WithHeader("HTTP-Referer", o.SiteURL))
 	}
 	if o.AppName != "" {
-		opts = append(opts, option.WithHeader("X-Title", o.AppName))
+		opts = append(opts, option.WithHeader("X-OpenRouter-Title", o.AppName))
 	}
 	opts = append(opts, o.Opts...)
 
