@@ -663,7 +663,7 @@ func (g *ModelGenerator) generateStream(ctx context.Context, req *ai.ModelReques
 	// without usage would otherwise report zero tokens for every stream.
 	g.request.StreamOptions.IncludeUsage = openai.Bool(true)
 
-	stream := g.client.Chat.Completions.NewStreaming(ctx, *g.request)
+	stream := g.client.Chat.Completions.NewStreaming(withStreamingRequest(ctx), *g.request)
 	defer func() {
 		_ = stream.Close()
 	}()
