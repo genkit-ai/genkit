@@ -152,6 +152,8 @@ export function defineProgrammableModel(ai: Genkit): ProgrammableModel {
       name: 'programmableModel',
       supports: {
         tools: true,
+        // Tests assert on the raw request, tool response content included.
+        toolResponseContent: true,
       },
     },
     async (request, { streamingRequested, sendChunk }) => {

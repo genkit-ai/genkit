@@ -3102,13 +3102,16 @@ describe('contextCompression middleware', () => {
     const ai = genkit({});
     let capturedRequest: GenerateRequest | undefined;
 
-    const pm = ai.defineModel({ name: 'multipartDedupModel' }, async (req) => {
-      capturedRequest = req;
-      return {
-        message: { role: 'model', content: [{ text: 'done' }] },
-        usage: { inputTokens: 50 },
-      };
-    });
+    const pm = ai.defineModel(
+      { name: 'multipartDedupModel', supports: { toolResponseContent: true } },
+      async (req) => {
+        capturedRequest = req;
+        return {
+          message: { role: 'model', content: [{ text: 'done' }] },
+          usage: { inputTokens: 50 },
+        };
+      }
+    );
 
     const oldMediaPart = {
       media: {
@@ -3955,13 +3958,16 @@ describe('contextCompression middleware', () => {
   it('enforces char limits, media approximation, and exact boundaries on multipart toolResponse.content', async () => {
     const ai = genkit({});
     let capturedRequest: GenerateRequest | undefined;
-    const pm = ai.defineModel({ name: 'multipartModel' }, async (req) => {
-      capturedRequest = req;
-      return {
-        message: { role: 'model', content: [{ text: 'done' }] },
-        usage: { inputTokens: 50 },
-      };
-    });
+    const pm = ai.defineModel(
+      { name: 'multipartModel', supports: { toolResponseContent: true } },
+      async (req) => {
+        capturedRequest = req;
+        return {
+          message: { role: 'model', content: [{ text: 'done' }] },
+          usage: { inputTokens: 50 },
+        };
+      }
+    );
 
     const runWithTool = (
       output: unknown,

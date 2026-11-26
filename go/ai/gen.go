@@ -322,6 +322,10 @@ type ModelSupports struct {
 	SystemRole bool `json:"systemRole,omitempty"`
 	// ToolChoice indicates whether the model supports controlling tool choice (e.g., forced tool calling).
 	ToolChoice bool `json:"toolChoice,omitempty"`
+	// ToolResponseContent indicates whether the model handles every part of a tool
+	// response's content (text, media, resources) natively, degrading unsupported
+	// parts itself.
+	ToolResponseContent bool `json:"toolResponseContent,omitempty"`
 	// Tools indicates whether the model can perform tool calls.
 	Tools bool `json:"tools,omitempty"`
 }

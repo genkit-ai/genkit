@@ -100,6 +100,13 @@ export const ModelInfoSchema = z.object({
       constrained: z.enum(['none', 'all', 'no-tools']).optional(),
       /** Model supports controlling tool choice, e.g. forced tool calling. */
       toolChoice: z.boolean().optional(),
+      /**
+       * Model delivers every part of `toolResponse.content` (text, media,
+       * resources) to the provider, degrading unsupported parts itself (e.g. to
+       * a text note) instead of failing or silently dropping them. Models that
+       * don't declare it get the `foldToolResponseContent` shim.
+       */
+      toolResponseContent: z.boolean().optional(),
     })
     .optional(),
   /** At which stage of development this model is.

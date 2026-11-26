@@ -174,6 +174,97 @@ export function simulateSystemPrompt(options?: {
   };
 }
 
+/** Options for the {@link foldToolResponseContent} middleware. */
+export interface FoldToolResponseContentOptions {
+  /**
+   * Whether the model accepts media in user messages. When true, media parts
+   * from tool responses are sent in a user message right after the tool
+   * message; otherwise they're replaced with a text note. Defaults to true.
+   */
+  media?: boolean;
+}
+
+/**
+ * Folds `toolResponse.content` into what models without native support for
+ * multipart tool responses can consume (see `supports.toolResponseContent`):
+ *
+ * - text parts (and resource parts, as a line with their URI) are appended to
+ *   the tool response `output`;
+ * - media parts are sent in a user message right after the tool message, or
+ *   replaced with a text note when `media` is false.
+ *
+ * Applied automatically to models that don't declare
+ * `supports.toolResponseContent`.
+ */
+export function foldToolResponseContent(
+  options?: FoldToolResponseContentOptions
+): ModelMiddleware {
+  const mediaSupported = options?.media ?? true;
+  return (req, next) => {
+    if (
+      !req.messages.some((m) =>
+        m.content.some((p) => p.toolResponse?.content !== undefined)
+      )
+    ) {
+      return next(req);
+    }
+    const messages: MessageData[] = [];
+    for (const message of req.messages) {
+      const media: Part[] = [];
+      const content = message.content.map((part): Part => {
+        if (!part.toolResponse || part.toolResponse.content === undefined) {
+          return part;
+        }
+        // `content` is always removed: providers without native support may
+        // reject the field even when it's empty.
+        const { content: toolContent, ...toolResponse } = part.toolResponse;
+        const notes: string[] = [];
+        const toolMedia: MediaPart[] = [];
+        for (const p of toolContent) {
+          if (p.text !== undefined) notes.push(p.text);
+          else if (p.resource) notes.push(`Resource: ${p.resource.uri}`);
+          else if (p.media && mediaSupported) toolMedia.push(p as MediaPart);
+          else if (p.media) {
+            notes.push(
+              `[${p.media.contentType || 'media'} omitted: the model does not accept media]`
+            );
+          } else notes.push(JSON.stringify(p.data ?? p));
+        }
+        if (toolMedia.length) {
+          media.push(
+            { text: `Media returned by tool "${toolResponse.name}":` },
+            ...toolMedia
+          );
+          notes.push(
+            `[${toolMedia.length} media part(s) follow in the next message]`
+          );
+        }
+        return {
+          ...part,
+          toolResponse: {
+            ...toolResponse,
+            output: foldText(toolResponse.output, notes.join('\n')),
+          },
+        };
+      });
+      messages.push({ ...message, content });
+      if (media.length) messages.push({ role: 'user', content: media });
+    }
+    return next({ ...req, messages });
+  };
+}
+
+/**
+ * Appends text to a tool output. Strings are concatenated; any other output is
+ * kept under `output` next to the text, so neither is lost.
+ */
+function foldText(output: unknown, text: string): unknown {
+  if (!text) return output;
+  if (output === undefined || output === null || output === '') return text;
+  if (typeof output === 'string') return `${output}\n\n${text}`;
+  return { output, text };
+}
+
 /** Options for the {@link augmentWithContext} middleware. */
 export interface AugmentWithContextOptions {
   /** Preceding text to place before the rendered context documents. */

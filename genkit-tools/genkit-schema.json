@@ -1230,6 +1230,9 @@
             "toolChoice": {
               "type": "boolean"
             },
+            "toolResponseContent": {
+              "type": "boolean"
+            },
             "longRunning": {
               "type": "boolean"
             }
