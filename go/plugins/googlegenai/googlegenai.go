@@ -528,6 +528,9 @@ func (v *VertexAI) DefineModel(g *genkit.Genkit, id string, opts *ai.ModelOption
 	if err := rejectBackgroundModel(vertexAIProvider, id); err != nil {
 		return nil, err
 	}
+	if ClassifyModel(id) == ModelTypeAntigravity {
+		return nil, errAntigravityVertex(id)
+	}
 	if opts != nil {
 		return newModel(v.gclient, id, *opts), nil
 	}

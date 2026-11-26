@@ -74,6 +74,11 @@ func resolveAction(client *genai.Client, c catalog, atype api.ActionType, id str
 		if mt == ModelTypeVeo {
 			return nil
 		}
+		// Antigravity models exist only on the Gemini API (interactions
+		// endpoint), so a Vertex AI client does not resolve them.
+		if mt == ModelTypeAntigravity && client.ClientConfig().Backend == genai.BackendVertexAI {
+			return nil
+		}
 		return newModel(client, id, c.modelOptions(id))
 
 	// A background model is a bundle: registering it registers both its start
