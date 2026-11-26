@@ -235,6 +235,52 @@ export function toOpenAITextAndMedia(
 }
 
 /**
+ * Converts a tool response content part to either text (folded into the tool
+ * message) or a user message content part (images, PDFs, wav/mp3 audio).
+ * Anything else becomes a text note.
+ */
+function toOpenAIToolResultContent(
+  part: Part,
+  visualDetailLevel: VisualDetailLevel,
+  mediaSupported: boolean
+): string | ChatCompletionContentPart {
+  if (part.text !== undefined) return part.text;
+  if (part.resource) return `Resource: ${part.resource.uri}`;
+  if (!part.media) return JSON.stringify(part.data ?? part);
+  const inline = extractDataFromBase64Url(part.media.url);
+  const contentType = part.media.contentType || inline?.contentType || '';
+  const note = `[${contentType || 'media'} content omitted: not supported by the model]`;
+  if (contentType.startsWith('text/') && inline) {
+    // atob/TextDecoder rather than Buffer: Genkit also runs outside Node.
+    try {
+      return new TextDecoder().decode(
+        Uint8Array.from(atob(inline.data), (c) => c.charCodeAt(0))
+      );
+    } catch {
+      return note;
+    }
+  }
+  if (!mediaSupported) return note;
+  if (inline && (contentType === 'audio/wav' || contentType === 'audio/mpeg')) {
+    return {
+      type: 'input_audio',
+      input_audio: {
+        data: inline.data,
+        format: contentType === 'audio/wav' ? 'wav' : 'mp3',
+      },
+    };
+  }
+  if (
+    !contentType ||
+    isImageContentType(contentType) ||
+    (inline && contentType === 'application/pdf')
+  ) {
+    return toOpenAITextAndMedia(part, visualDetailLevel);
+  }
+  return note;
+}
+
+/**
  * Converts a Genkit MessageData array to an OpenAI ChatCompletionMessageParam array.
  * @param messages The Genkit MessageData array to convert.
  * @param visualDetailLevel The visual detail level to use for media parts.
@@ -242,7 +288,14 @@ export function toOpenAITextAndMedia(
  */
 export function toOpenAIMessages(
   messages: MessageData[],
-  visualDetailLevel: VisualDetailLevel = 'auto'
+  visualDetailLevel: VisualDetailLevel = 'auto',
+  options?: {
+    /**
+     * Whether the model accepts media. Tool response media is sent in a user
+     * message when true, as a text note otherwise. Defaults to true.
+     */
+    media?: boolean;
+  }
 ): ChatCompletionMessageParam[] {
   const apiMessages: ChatCompletionMessageParam[] = [];
   for (const message of messages) {
@@ -321,17 +374,44 @@ export function toOpenAIMessages(
         break;
       }
       case 'tool': {
-        const toolResponseParts = msg.toolResponseParts();
-        toolResponseParts.map((part) => {
+        // Tool messages only carry text: text content is appended to the
+        // output, media is sent in a user message right after the tool
+        // messages (the plugin declares `supports.toolResponseContent`).
+        const media: ChatCompletionContentPart[] = [];
+        for (const part of msg.toolResponseParts()) {
+          const { name, ref, output, content = [] } = part.toolResponse;
+          const text: string[] =
+            output === undefined
+              ? []
+              : [typeof output === 'string' ? output : JSON.stringify(output)];
+          const toolMedia: ChatCompletionContentPart[] = [];
+          for (const p of content) {
+            const converted = toOpenAIToolResultContent(
+              p,
+              visualDetailLevel,
+              options?.media ?? true
+            );
+            if (typeof converted === 'string') text.push(converted);
+            else toolMedia.push(converted);
+          }
+          if (toolMedia.length) {
+            media.push(
+              { type: 'text', text: `Media returned by tool "${name}":` },
+              ...toolMedia
+            );
+            text.push(
+              `[${toolMedia.length} media part(s) follow in the next message]`
+            );
+          }
           apiMessages.push({
             role: role,
-            tool_call_id: part.toolResponse.ref ?? '',
-            content:
-              typeof part.toolResponse.output === 'string'
-                ? part.toolResponse.output
-                : JSON.stringify(part.toolResponse.output),
+            tool_call_id: ref ?? '',
+            content: text.join('\n\n'),
           });
-        });
+        }
+        if (media.length) {
+          apiMessages.push({ role: 'user', content: media });
+        }
         break;
       }
     }
@@ -576,11 +656,13 @@ export function fromOpenAIChunkChoice(
 export function toOpenAIRequestBody(
   modelName: string,
   request: GenerateRequest,
-  requestBuilder?: ModelRequestBuilder
+  requestBuilder?: ModelRequestBuilder,
+  mediaSupported = true
 ) {
   const messages = toOpenAIMessages(
     request.messages,
-    request.config?.visualDetailLevel
+    request.config?.visualDetailLevel,
+    { media: mediaSupported }
   );
   const {
     temperature,
@@ -676,7 +758,8 @@ export function openAIModelRunner(
   name: string,
   defaultClient: OpenAI,
   requestBuilder?: ModelRequestBuilder,
-  pluginOptions?: Omit<PluginOptions, 'apiKey'>
+  pluginOptions?: Omit<PluginOptions, 'apiKey'>,
+  info?: ModelInfo
 ) {
   return async (
     request: GenerateRequest,
@@ -693,7 +776,12 @@ export function openAIModelRunner(
     );
     try {
       let response: ChatCompletion;
-      const body = toOpenAIRequestBody(name, request, requestBuilder);
+      const body = toOpenAIRequestBody(
+        name,
+        request,
+        requestBuilder,
+        info?.supports?.media !== false
+      );
       if (options?.streamingRequested) {
         const stream = client.beta.chat.completions.stream(
           {
@@ -824,9 +912,17 @@ export function defineCompatOpenAIModel<
     {
       name: actionName,
       ...modelRef?.info,
+      // Tool response content is handled by toOpenAIMessages.
+      supports: { toolResponseContent: true, ...modelRef?.info?.supports },
       configSchema: modelRef?.configSchema,
     },
-    openAIModelRunner(modelName, client, requestBuilder, pluginOptions)
+    openAIModelRunner(
+      modelName,
+      client,
+      requestBuilder,
+      pluginOptions,
+      modelRef?.info
+    )
   );
 }
 

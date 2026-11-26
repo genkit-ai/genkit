@@ -363,6 +363,62 @@ describe('toOpenAiMessages', () => {
       ],
     },
     {
+      should: 'transform tool response multipart content correctly',
+      inputMessages: [
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                ref: 'call_1',
+                name: 'screenshot',
+                output: { title: 'Home' },
+                content: [
+                  { text: 'caption' },
+                  {
+                    media: {
+                      url: 'data:image/png;base64,AAA',
+                      contentType: 'image/png',
+                    },
+                  },
+                  {
+                    media: {
+                      url: 'data:application/gzip;base64,H4sI',
+                      contentType: 'application/gzip',
+                    },
+                  },
+                  { resource: { uri: 'demo://resource/1' } },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+      expectedOutput: [
+        {
+          role: 'tool',
+          tool_call_id: 'call_1',
+          content: [
+            '{"title":"Home"}',
+            'caption',
+            '[application/gzip content omitted: not supported by the model]',
+            'Resource: demo://resource/1',
+            '[1 media part(s) follow in the next message]',
+          ].join('\n\n'),
+        },
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'Media returned by tool "screenshot":' },
+            {
+              type: 'image_url',
+              image_url: { url: 'data:image/png;base64,AAA', detail: 'auto' },
+            },
+          ],
+        },
+      ],
+    },
+    {
       should: 'transform text content correctly',
       inputMessages: [
         { role: 'user', content: [{ text: 'hi' }] },
