@@ -60,6 +60,7 @@ function toImageGenerateParams(
   requestBuilder?: ImageRequestBuilder
 ): ImageGenerateParams {
   const {
+    apiKey,
     temperature,
     version: modelVersion,
     maxOutputTokens,
