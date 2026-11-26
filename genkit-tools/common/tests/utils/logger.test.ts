@@ -14,9 +14,12 @@
  * limitations under the License.
  */
 
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { stripVTControlCharacters } from 'util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { logger } from '../../src/utils/logger.js';
+import { debugToFile, logger } from '../../src/utils/logger.js';
 
 describe('logger', () => {
   const origLevel = logger.level;
@@ -30,13 +33,25 @@ describe('logger', () => {
     {
       level: 'debug' as const,
       message: 'debug msg',
-      expected: 'Debug: debug msg',
+      expected: 'Debug: debug msg\n',
     },
-    { level: 'info' as const, message: 'info msg', expected: 'info msg' },
-    { level: 'warn' as const, message: 'warn msg', expected: 'Warn:' },
-    { level: 'error' as const, message: 'error msg', expected: 'Error:' },
+    {
+      level: 'info' as const,
+      message: 'info msg',
+      expected: 'Info: info msg\n',
+    },
+    {
+      level: 'warn' as const,
+      message: 'warn msg',
+      expected: 'Warn: warn msg\n',
+    },
+    {
+      level: 'error' as const,
+      message: 'error msg',
+      expected: 'Error: error msg\n',
+    },
   ])(
-    'routes $level logs to process.stderr instead of process.stdout',
+    'routes $level logs with consistent prefix to process.stderr',
     ({ level, message, expected }) => {
       logger.level = 'debug';
       const stdoutSpy = vi
@@ -51,7 +66,78 @@ describe('logger', () => {
       expect(stdoutSpy).not.toHaveBeenCalled();
       expect(stderrSpy).toHaveBeenCalledOnce();
       const written = String(stderrSpy.mock.calls[0][0]);
-      expect(stripVTControlCharacters(written)).toContain(expected);
+      expect(stripVTControlCharacters(written)).toBe(expected);
     }
   );
+
+  it('filters out messages below the configured logger.level', () => {
+    logger.level = 'warn';
+    const stderrSpy = vi
+      .spyOn(process.stderr, 'write')
+      .mockImplementation(() => true);
+
+    logger.debug('hidden debug');
+    logger.info('hidden info');
+    logger.warn('visible warn');
+    logger.error('visible error');
+
+    const written = stderrSpy.mock.calls.map(([chunk]) =>
+      stripVTControlCharacters(String(chunk))
+    );
+    expect(written).toEqual(['Warn: visible warn\n', 'Error: visible error\n']);
+  });
+
+  it('formats multiple arguments using util.format', () => {
+    logger.level = 'debug';
+    const stderrSpy = vi
+      .spyOn(process.stderr, 'write')
+      .mockImplementation(() => true);
+
+    logger.error('Failed to connect:', new Error('ECONNREFUSED'));
+
+    expect(stderrSpy).toHaveBeenCalledOnce();
+    const written = stripVTControlCharacters(
+      String(stderrSpy.mock.calls[0][0])
+    );
+    expect(written).toContain('Error: Failed to connect: Error: ECONNREFUSED');
+  });
+
+  it('writes JSONL records and enables debug level when debugToFile is called', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'genkit-logger-'));
+    const stderrSpy = vi
+      .spyOn(process.stderr, 'write')
+      .mockImplementation(() => true);
+
+    try {
+      debugToFile(tmpDir);
+      expect(logger.level).toBe('debug');
+
+      logger.debug('trace details');
+      logger.warn('something looks off');
+
+      const logPath = path.join(tmpDir, 'genkit-debug.log');
+      const lines = fs
+        .readFileSync(logPath, 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+
+      expect(lines).toEqual([
+        {
+          level: 'debug',
+          message: 'trace details',
+          timestamp: expect.any(String),
+        },
+        {
+          level: 'warn',
+          message: 'something looks off',
+          timestamp: expect.any(String),
+        },
+      ]);
+      expect(stderrSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      debugToFile(null);
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });

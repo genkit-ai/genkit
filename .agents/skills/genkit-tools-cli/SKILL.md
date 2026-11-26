@@ -9,7 +9,8 @@ description: Guide for writing and reviewing CLI commands and MCP server tools i
 
 - **Naming**: Use `noun:verb` or `category:action` in kebab-case (e.g. `flow:run`, `eval:run`, `trace:get`). Use camelCase for code arguments and `<argName>` in help text.
 - **Runtime lifecycle**: Use `runWithManager(projectRoot, async (manager) => ...)` from `../utils/manager-utils.js` (with `findProjectRoot()` from `@genkit-ai/tools-common/utils`) for commands that interact with a project runtime (see `cli/src/commands/flow-run.ts`).
-- **Output & flags**: Log via `logger` from `@genkit-ai/tools-common/utils`; support `--output` (file/JSON output) and `--stream` where appropriate.
+- **Output channels**: Use `writeStdout` (primary command payload; no ANSI color on machine-readable output) and `writeStderr` (human-facing hints, labels, empty states) from `../utils/output.js`, and `logger.*` from `@genkit-ai/tools-common/utils` strictly for diagnostic/server logs. Gate interactive prompts on `isInteractive()` and TTY-only notices on `isStderrTTY()`.
+- **Flags**: Support `--output` (file/JSON output) and `--stream` where appropriate.
 - **Registration**: Register new commands in the `commands` array in `cli/src/cli.ts`.
 
 ## 2. MCP Tools (`cli/src/mcp/`)

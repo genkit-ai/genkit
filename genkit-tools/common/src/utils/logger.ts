@@ -15,50 +15,99 @@
  */
 
 import * as clc from 'colorette';
+import * as fs from 'fs';
 import * as path from 'path';
-import * as winston from 'winston';
+import { format, stripVTControlCharacters } from 'util';
 
-const defaultTransport = new winston.transports.Stream({
-  stream: process.stderr,
-});
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
-export function debugToFile(dirPath?: string) {
-  logger.add(
-    new winston.transports.File({
-      filename: dirPath
-        ? path.join(dirPath, 'genkit-debug.log')
-        : 'genkit-debug.log',
-      format: winston.format.combine(
-        winston.format.timestamp(),
-        winston.format.json()
-      ),
-    })
-  );
+const LEVEL_PRIORITY: Record<LogLevel, number> = {
+  debug: 0,
+  info: 1,
+  warn: 2,
+  error: 3,
+};
+
+let debugFilePath: string | undefined;
+
+export function debugToFile(dirPath?: string | null) {
+  if (dirPath === null) {
+    debugFilePath = undefined;
+    return;
+  }
+  debugFilePath = dirPath
+    ? path.join(dirPath, 'genkit-debug.log')
+    : 'genkit-debug.log';
   logger.level = 'debug';
 }
 
-export const logger = winston.createLogger({
-  level: process.env.DEBUG ? 'debug' : 'info',
-  format: winston.format.printf((log) => {
-    // Anything logged at 'info' level will show as just the plain message
-    if (log.level === 'info') return log.message as string;
+function shouldLog(currentLevel: string, targetLevel: LogLevel): boolean {
+  const currentPriority =
+    LEVEL_PRIORITY[currentLevel.toLowerCase() as LogLevel] ??
+    LEVEL_PRIORITY.info;
+  return currentPriority <= LEVEL_PRIORITY[targetLevel];
+}
 
-    let levelColor: clc.Color;
-    switch (log.level) {
-      case 'error':
-        levelColor = clc.red;
-        break;
-      case 'warn':
-        levelColor = clc.yellow;
-        break;
-      default:
-        // Default is nothing.
-        levelColor = (text) => text.toString();
-        break;
+function formatArgs(args: unknown[]): string {
+  if (args.length === 1 && typeof args[0] === 'string') {
+    return args[0];
+  }
+  return format(...args);
+}
+
+function formatLine(level: LogLevel, message: string): string {
+  let label = level.charAt(0).toUpperCase() + level.slice(1);
+  if (level === 'error') {
+    label = clc.red(label);
+  } else if (level === 'warn') {
+    label = clc.yellow(label);
+  }
+
+  return `${clc.bold(label)}: ${message}`;
+}
+
+function emit(level: LogLevel, args: unknown[]): void {
+  if (!shouldLog(logger.level, level)) {
+    return;
+  }
+
+  const message = formatArgs(args);
+  process.stderr.write(`${formatLine(level, message)}\n`);
+
+  if (debugFilePath) {
+    try {
+      const record = JSON.stringify({
+        level,
+        message: stripVTControlCharacters(message),
+        timestamp: new Date().toISOString(),
+      });
+      fs.appendFileSync(debugFilePath, `${record}\n`);
+    } catch {
+      // Ignore file-sink errors so logging never crashes the CLI.
     }
+  }
+}
 
-    const level = log.level.charAt(0).toUpperCase() + log.level.slice(1);
-    return `${clc.bold(levelColor(level))}: ${log.message}`;
-  }),
-  transports: [defaultTransport],
-});
+export interface Logger {
+  level: LogLevel;
+  debug(...args: unknown[]): void;
+  info(...args: unknown[]): void;
+  warn(...args: unknown[]): void;
+  error(...args: unknown[]): void;
+}
+
+export const logger: Logger = {
+  level: process.env.DEBUG ? 'debug' : 'info',
+  debug(...args: unknown[]) {
+    emit('debug', args);
+  },
+  info(...args: unknown[]) {
+    emit('info', args);
+  },
+  warn(...args: unknown[]) {
+    emit('warn', args);
+  },
+  error(...args: unknown[]) {
+    emit('error', args);
+  },
+};
