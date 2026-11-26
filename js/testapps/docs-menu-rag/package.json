@@ -24,6 +24,6 @@
   "devDependencies": {
     "rimraf": "^6.0.1",
     "@types/pdf-parse": "^1.1.4",
-    "typescript": "^5.9.3"
+    "typescript": "^7.0.2"
   }
 }
