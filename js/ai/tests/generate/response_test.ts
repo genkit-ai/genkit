@@ -89,6 +89,16 @@ describe('GenerateResponse', () => {
         },
         expectedOutput: { name: 'Bob' },
       },
+      ...[0, false, ''].map((value) => ({
+        should: `return a falsy data part (${JSON.stringify(value)})`,
+        responseData: {
+          message: new Message({ role: 'model', content: [{ data: value }] }),
+          finishReason: 'stop',
+          finishMessage: '',
+          usage: {},
+        },
+        expectedOutput: value,
+      })),
     ];
 
     for (const test of testCases) {
@@ -99,6 +109,31 @@ describe('GenerateResponse', () => {
         assert.deepStrictEqual(response.output, test.expectedOutput);
       });
     }
+  });
+
+  describe('#assertValidSchema() with a falsy scalar', () => {
+    it('accepts 0 for a number schema', () => {
+      const response = new GenerateResponse({
+        message: { role: 'model', content: [{ data: 0 }] },
+        finishReason: 'stop',
+      });
+      response.assertValidSchema({
+        messages: [],
+        output: { schema: toJsonSchema({ schema: z.number() }) },
+      } as GenerateRequest);
+    });
+
+    it('accepts false for a boolean schema', () => {
+      const response = new GenerateResponse({
+        message: { role: 'model', content: [{ data: false }] },
+        finishReason: 'stop',
+      });
+      assert.strictEqual(response.data, false);
+      response.assertValidSchema({
+        messages: [],
+        output: { schema: toJsonSchema({ schema: z.boolean() }) },
+      } as GenerateRequest);
+    });
   });
 
   describe('#assertValid()', () => {

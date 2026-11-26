@@ -523,6 +523,33 @@ describe('generate', () => {
     );
   });
 
+  it('returns a falsy data part as output for a scalar schema', async () => {
+    defineModel(registry, { name: 'zero' }, async (_, sendChunk) => {
+      sendChunk?.({ content: [{ data: 0 }] });
+      return {
+        message: { role: 'model', content: [{ data: 0 }] },
+        finishReason: 'stop',
+      };
+    });
+
+    const response = await generate(registry, {
+      model: 'zero',
+      prompt: 'How many?',
+      output: { schema: z.number() },
+    });
+    assert.strictEqual(response.output, 0);
+
+    const { stream, response: streamed } = generateStream(registry, {
+      model: 'zero',
+      prompt: 'How many?',
+      output: { schema: z.number() },
+    });
+    const chunkOutputs: unknown[] = [];
+    for await (const chunk of stream) chunkOutputs.push(chunk.output);
+    assert.deepStrictEqual(chunkOutputs, [0]);
+    assert.strictEqual((await streamed).output, 0);
+  });
+
   it('should preserve the request in the returned response, enabling .messages', async () => {
     const response = await generate(registry, {
       model: 'echo',

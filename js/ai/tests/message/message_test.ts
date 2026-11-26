@@ -52,4 +52,71 @@ describe('Message', () => {
       });
     }
   });
+
+  describe('.output / .data with falsy data parts', () => {
+    for (const value of [0, false, '', null]) {
+      it(`returns ${JSON.stringify(value)} from a data part`, () => {
+        const m = new Message({ role: 'model', content: [{ data: value }] });
+        assert.strictEqual(m.output, value);
+        assert.strictEqual(m.data, value);
+      });
+    }
+
+    it('returns null from .data when there is no data part', () => {
+      const m = new Message({ role: 'model', content: [{ text: 'hello' }] });
+      assert.strictEqual(m.data, null);
+    });
+
+    it('skips a null data part, as Go and Python do', () => {
+      const besideText = new Message({
+        role: 'model',
+        content: [{ text: '{"a": 1}', data: null }],
+      });
+      assert.deepStrictEqual(besideText.output, { a: 1 });
+      const beforeData = new Message({
+        role: 'model',
+        content: [{ data: null }, { data: { a: 1 } }],
+      });
+      assert.deepStrictEqual(beforeData.output, { a: 1 });
+      assert.deepStrictEqual(beforeData.data, { a: 1 });
+    });
+
+    it('returns the first data part even when it is falsy', () => {
+      const m = new Message({
+        role: 'model',
+        content: [{ data: 0 }, { data: { a: 1 } }],
+      });
+      assert.strictEqual(m.output, 0);
+      assert.strictEqual(m.data, 0);
+    });
+
+    it('falls back to a data part when the parser finds nothing', () => {
+      const m = new Message(
+        { role: 'model', content: [{ data: 0 }] },
+        { parser: () => null }
+      );
+      assert.strictEqual(m.output, 0);
+    });
+
+    it('keeps a falsy parser result', () => {
+      const m = new Message(
+        { role: 'model', content: [{ data: 0 }] },
+        { parser: () => false }
+      );
+      assert.strictEqual(m.output, false);
+    });
+
+    it('still prefers a truthy parser result', () => {
+      const m = new Message(
+        { role: 'model', content: [{ data: 0 }] },
+        { parser: () => 7 }
+      );
+      assert.strictEqual(m.output, 7);
+    });
+
+    it('still parses JSON text when there is no data part', () => {
+      const m = new Message({ role: 'model', content: [{ text: '[1,2]' }] });
+      assert.deepStrictEqual(m.output, [1, 2]);
+    });
+  });
 });
