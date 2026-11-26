@@ -69,15 +69,44 @@ The `define*` variants (`defineTool(spec)`, `defineFromTool(action, { name })`,
 ...) also register the proxy so it shows up in the Dev UI. `defineFrom*`
 proxies must be renamed, since the original already occupies its name.
 
-A boxed agent is available as an `AgentAPI`:
+## Agents
+
+Box a whole agent (model calls, tools, conversation state) and register it,
+so it is visible and chattable in the Dev UI like a local one:
 
 ```ts
-const agent = myBox.agent<CodingState>({
+// The agent lives only in the box (separate entry, or another language):
+// declare what the Dev UI needs to know.
+export const codingAgent = myBox.defineAgent<CodingState>({
   name: 'codingAgent',
-  context: { sessionId },
+  stateManagement: 'server', // must match the boxed agent (has a store)
+  abortable: true,
+  stateSchema: CodingStateSchema,
 });
-const res = await agent.chat({ sessionId }).send('fix the failing test');
+
+// Same language: hand over the real agent; its metadata is copied.
+export const boxedCoder = myBox.defineFromAgent(codingAgent, {
+  name: 'boxedCoder',
+});
+
+// Either way you get an Agent<State>:
+const res = await codingAgent.chat({ sessionId }).send('fix the failing test');
 ```
+
+`defineAgent` registers `/agent/<name>` with its `agent-snapshot` and
+`agent-abort` companions. Each input is one boxed turn. When a caller streams
+several inputs into one invocation, the proxy runs them turn by turn and
+threads the snapshot (or client state) between them; the box then records one
+trace per turn.
+
+For an unregistered handle, `myBox.agent({ name, context })` returns just the
+`AgentAPI`.
+
+To give each conversation its own box, use `route: sessionRoute` (see
+[One box per session](#one-box-per-session)). A registered agent has no
+per-proxy context, so it routes by the session in the agent's init
+(`chat({ sessionId })`, the Dev UI); give the boxed agent a durable store so
+turns that carry only a `snapshotId` can resume on the shared box.
 
 ## Lifecycle: route + retention
 
