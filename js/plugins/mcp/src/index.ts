@@ -196,7 +196,7 @@ export function defineMcpClient<M extends boolean = false>(
 }
 
 /**
- * Creates an MCP server based on the supplied Genkit instance. All tools and prompts
+ * Creates an MCP server based on the supplied Genkit instance. All tools, flows, and prompts
  * will be automatically converted to MCP compatibility.
  *
  * ```ts
@@ -206,7 +206,7 @@ export function defineMcpClient<M extends boolean = false>(
  * await mcpServer.start(customMcpTransport); // starts server using supplied transport
  * ```
  *
- * @param ai Your Genkit instance with registered tools and prompts.
+ * @param ai Your Genkit instance with registered tools, flows, and prompts.
  * @param options Configuration metadata for the server.
  * @returns GenkitMcpServer instance.
  */
