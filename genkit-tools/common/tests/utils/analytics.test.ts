@@ -112,10 +112,23 @@ describe('analytics', () => {
         const fetchSpy = vi
           .spyOn(globalThis, 'fetch')
           .mockResolvedValue(new Response(null, { status: 204 }));
-        vi.spyOn(console, 'log').mockImplementation(() => {});
+        const stderrSpy = vi
+          .spyOn(process.stderr, 'write')
+          .mockImplementation(() => true);
+        const stdoutSpy = vi
+          .spyOn(process.stdout, 'write')
+          .mockImplementation(() => true);
 
         await analyticsModule.notifyAnalyticsIfFirstRun(runtime);
 
+        expect(stdoutSpy).not.toHaveBeenCalled();
+        expect(stderrSpy).toHaveBeenCalledWith(
+          expect.stringContaining('Genkit CLI and Developer UI use cookies')
+        );
+        expect(readlinePromises.createInterface).toHaveBeenCalledWith({
+          input: process.stdin,
+          output: process.stderr,
+        });
         expect(store.get('analytics_notification')).toBe(true);
         expect(fetchSpy).toHaveBeenCalledOnce();
         const [, init] = fetchSpy.mock.calls[0];

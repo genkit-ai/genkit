@@ -53,6 +53,7 @@ describe('log:list command', () => {
     vi.spyOn(logger, 'info').mockImplementation((() => {}) as any);
     vi.spyOn(logger, 'error').mockImplementation((() => {}) as any);
     vi.spyOn(output, 'writeStdout').mockImplementation(() => {});
+    vi.spyOn(output, 'writeStderr').mockImplementation(() => {});
   });
 
   afterEach(() => {
@@ -83,7 +84,7 @@ describe('log:list command', () => {
       continuationToken: undefined,
       filter: undefined,
     });
-    expect(output.writeStdout).toHaveBeenCalledWith('Found 1 log:\n');
+    expect(output.writeStderr).toHaveBeenCalledWith('Found 1 log:\n');
     expect(output.writeStdout).toHaveBeenCalledWith(
       expect.stringContaining('INFO')
     );
@@ -126,7 +127,7 @@ describe('log:list command', () => {
       continuationToken: 'some-token',
       filter: undefined,
     });
-    expect(output.writeStdout).toHaveBeenCalledWith(
+    expect(output.writeStderr).toHaveBeenCalledWith(
       '\nTo get the next page, use: --continuation-token next-page-token'
     );
   });
@@ -249,14 +250,14 @@ describe('log:list command', () => {
     );
   });
 
-  it('should log info when no logs are found', async () => {
+  it('should write to stderr when no logs are found', async () => {
     mockManager.listLogs.mockResolvedValue({
       logs: [],
     });
 
     await logList.parseAsync(['node', 'log:list']);
 
-    expect(logger.info).toHaveBeenCalledWith('No logs found.');
+    expect(output.writeStderr).toHaveBeenCalledWith('No logs found.');
   });
 
   it('should handle and log errors', async () => {

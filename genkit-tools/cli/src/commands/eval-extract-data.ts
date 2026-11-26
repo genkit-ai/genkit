@@ -34,6 +34,7 @@ import {
   runWithManager,
 } from '../utils/manager-utils.js';
 import { parsePositiveInt } from '../utils/option-parsers.js';
+import { writeStderr, writeStdout } from '../utils/output.js';
 
 interface EvalDatasetOptions {
   /** --experimental-auth. */
@@ -136,8 +137,8 @@ export const evalExtractData = new Command('eval:extract-data')
         );
       } else {
         logger.debug(`Results will not be written to file.`);
-        logger.info(clc.green('Results:'));
-        logger.info(JSON.stringify(dataset, undefined, '  '));
+        writeStderr(clc.green('Results:'));
+        writeStdout(JSON.stringify(dataset, undefined, '  '));
       }
     };
 

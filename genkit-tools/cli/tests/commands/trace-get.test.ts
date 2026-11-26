@@ -16,7 +16,6 @@
 
 import {
   findProjectRoot,
-  forceStderr,
   logger,
   parseAndSanitizeJson,
   sanitizeBase64DataUrls,
@@ -44,7 +43,6 @@ const mockedFindProjectRoot = findProjectRoot as MockedFunction<
   typeof findProjectRoot
 >;
 const mockedLogger = logger as Mocked<typeof logger>;
-const mockedForceStderr = forceStderr as MockedFunction<typeof forceStderr>;
 const mockedRunWithManager = runWithManager as MockedFunction<
   typeof runWithManager
 >;
@@ -69,7 +67,6 @@ describe('trace:get', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockedFindProjectRoot.mockResolvedValue(mockProjectRoot);
-    mockedForceStderr.mockImplementation(() => {});
     (stackTraceSpans as MockedFunction<any>).mockImplementation(
       actualStackTraceSpans
     );
@@ -84,8 +81,9 @@ describe('trace:get', () => {
     traceGet.setOptionValue('format', undefined);
     traceGet.setOptionValue('keepBase64', undefined);
 
-    // Mock writeStdout to avoid spamming test output
+    // Mock writeStdout and writeStderr to avoid spamming test output
     vi.spyOn(output, 'writeStdout').mockImplementation(() => {});
+    vi.spyOn(output, 'writeStderr').mockImplementation(() => {});
 
     // Provide a default implementation for runWithManager
     mockedRunWithManager.mockImplementation(async (projectRoot, fn) => {
@@ -107,11 +105,10 @@ describe('trace:get', () => {
   it('should get and print trace details in tree format by default', async () => {
     await createCommand().parseAsync(['node', 'trace:get', 'test-trace-id']);
 
-    expect(mockedForceStderr).toHaveBeenCalled();
     expect(mockedFindProjectRoot).toHaveBeenCalled();
     expect(mockedRunWithManager).toHaveBeenCalled();
 
-    expect(mockedLogger.info).toHaveBeenCalledWith(
+    expect(output.writeStderr).toHaveBeenCalledWith(
       expect.stringContaining('Hint: pass `--format json` flag')
     );
     expect(output.writeStdout).toHaveBeenCalledWith(

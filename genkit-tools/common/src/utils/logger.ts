@@ -18,17 +18,9 @@ import * as clc from 'colorette';
 import * as path from 'path';
 import * as winston from 'winston';
 
-const defaultTransport = new winston.transports.Console();
-
-export function forceStderr() {
-  logger.remove(defaultTransport);
-  logger.add(
-    // log to stderr to avoid
-    new winston.transports.Stream({
-      stream: process.stderr,
-    })
-  );
-}
+const defaultTransport = new winston.transports.Stream({
+  stream: process.stderr,
+});
 
 export function debugToFile(dirPath?: string) {
   logger.add(

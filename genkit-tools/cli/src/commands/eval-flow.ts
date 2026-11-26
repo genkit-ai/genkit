@@ -44,6 +44,7 @@ import {
   runWithManager,
 } from '../utils/manager-utils.js';
 import { parseJson, parsePositiveInt } from '../utils/option-parsers.js';
+import { writeStderr } from '../utils/output.js';
 
 interface EvalFlowRunCliOptions {
   /** --experimental-auth. */
@@ -165,7 +166,7 @@ export const evalFlow = new Command('eval:flow')
               : `No evaluators found in your app`
           );
         }
-        logger.info(
+        writeStderr(
           `Using evaluators: ${evaluatorActions.map((action) => action.name).join(',')}`
         );
 
@@ -220,13 +221,13 @@ export const evalFlow = new Command('eval:flow')
 
         const toolsInfo = manager.getMostRecentDevUI();
         if (toolsInfo) {
-          logger.info(
+          writeStderr(
             clc.green(
               `\nView the evaluation results at: ${toolsInfo.url}/evaluate/${evalRun.key.evalRunId}`
             )
           );
         } else {
-          logger.info(`${clc.cyan('Evaluation ID:')} ${evalRun.key.evalRunId}`);
+          writeStderr(`${clc.cyan('Evaluation ID:')} ${evalRun.key.evalRunId}`);
         }
       };
 

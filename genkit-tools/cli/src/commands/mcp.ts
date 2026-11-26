@@ -14,11 +14,7 @@
  * limitations under the License.
  */
 
-import {
-  debugToFile,
-  findProjectRoot,
-  forceStderr,
-} from '@genkit-ai/tools-common/utils';
+import { debugToFile, findProjectRoot } from '@genkit-ai/tools-common/utils';
 import { Command, Option } from 'commander';
 import { startMcpServer } from '../mcp/server.js';
 import { EXPERIMENTAL_AUTH_OPTION_HELP } from '../utils/manager-utils.js';
@@ -56,7 +52,6 @@ export const mcp = new Command('mcp')
   .description('run MCP stdio server (EXPERIMENTAL, subject to change)')
   .option('--experimental-auth', EXPERIMENTAL_AUTH_OPTION_HELP)
   .action(async (options: McpOptions) => {
-    forceStderr();
     if (options.debug) {
       debugToFile(
         typeof options.debug === 'string' ? options.debug : undefined

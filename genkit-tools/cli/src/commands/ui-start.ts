@@ -31,6 +31,7 @@ import fs from 'fs/promises';
 import getPort, { portNumbers } from 'get-port';
 import open from 'open';
 import path from 'path';
+import { writeStderr } from '../utils/output.js';
 import { detectCLIRuntime } from '../utils/runtime-detector.js';
 import {
   buildServerHarnessSpawnConfig,
@@ -72,12 +73,12 @@ export const uiStart = new Command('ui:start')
       if (isValidDevToolsInfo(serverInfo)) {
         try {
           await axios.get(`${serverInfo.url}/api/__health`);
-          logger.info(
+          writeStderr(
             clc.green(
               `\n  Genkit Developer UI is already running at: ${serverInfo.url}`
             )
           );
-          logger.info(`  To stop the UI, run \`genkit ui:stop\`.\n`);
+          writeStderr(`  To stop the UI, run \`genkit ui:stop\`.\n`);
           return;
         } catch {
           logger.debug(
@@ -88,7 +89,7 @@ export const uiStart = new Command('ui:start')
     } catch {
       logger.debug('No UI running. Starting a new one...');
     }
-    logger.info('Starting...');
+    writeStderr('Starting...');
     try {
       await startAndWaitUntilHealthy(port, serversDir);
     } catch (error) {
@@ -113,14 +114,14 @@ export const uiStart = new Command('ui:start')
         `Failed to write UI server metadata. UI server will continue to run.`
       );
     }
-    logger.info(
+    writeStderr(
       `\n  ${clc.green(`Genkit Developer UI started at: http://localhost:${port}`)}`
     );
-    logger.info(`  To stop the UI, run \`genkit ui:stop\`.\n`);
+    writeStderr(`  To stop the UI, run \`genkit ui:stop\`.\n`);
     try {
       await axios.get(`http://localhost:${port}/api/trpc/listActions`);
     } catch {
-      logger.info(
+      writeStderr(
         'Set env variable `GENKIT_ENV` to `dev` and start your app code to interact with it in the UI.'
       );
     }

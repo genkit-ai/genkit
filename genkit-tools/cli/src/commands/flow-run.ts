@@ -24,7 +24,7 @@ import {
   runWithManager,
 } from '../utils/manager-utils.js';
 import { parseJson } from '../utils/option-parsers.js';
-import { writeStdout } from '../utils/output.js';
+import { writeStderr, writeStdout } from '../utils/output.js';
 
 interface FlowRunOptions {
   /** --experimental-auth. */
@@ -110,14 +110,14 @@ export const flowRun = new Command('flow:run')
 
       const result = response.result;
 
-      logger.info(clc.green('Result:'));
+      writeStderr(clc.green('Result:'));
       const resultOutput =
         typeof result === 'string'
           ? result
           : JSON.stringify(result, undefined, '  ');
-      logger.info(resultOutput);
+      writeStdout(resultOutput);
       if (traceId) {
-        logger.info(`${clc.cyan('Trace ID:')} ${traceId}`);
+        writeStderr(`${clc.cyan('Trace ID:')} ${traceId}`);
       }
 
       if (options.output && result !== undefined) {

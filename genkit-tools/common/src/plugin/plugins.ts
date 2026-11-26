@@ -17,7 +17,6 @@
 import { execSync } from 'child_process';
 import * as clc from 'colorette';
 import { z } from 'zod';
-import { logger } from '../utils/logger.js';
 
 const SupportedFlagValuesSchema = z.union([
   z.undefined(),
@@ -75,14 +74,14 @@ const SEPARATOR = '===========================';
  */
 export function cliCommand(command: string, options?: string): void {
   const commandString = command + (options ? ` ${options}` : '');
-  logger.info(`Running ${clc.bold(commandString)}...\n${SEPARATOR}`);
+  process.stderr.write(`Running ${clc.bold(commandString)}...\n${SEPARATOR}\n`);
 
   try {
     execSync(commandString, { stdio: 'inherit', encoding: 'utf8' });
   } catch (e) {
-    logger.info(`${SEPARATOR}\n`);
+    process.stderr.write(`${SEPARATOR}\n\n`);
     throw e;
   }
 
-  logger.info(`${SEPARATOR}\n`);
+  process.stderr.write(`${SEPARATOR}\n\n`);
 }

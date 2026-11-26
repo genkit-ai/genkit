@@ -63,6 +63,7 @@ describe('trace:list command', () => {
     vi.spyOn(logger, 'info').mockImplementation((() => {}) as any);
     vi.spyOn(logger, 'error').mockImplementation((() => {}) as any);
     vi.spyOn(output, 'writeStdout').mockImplementation(() => {});
+    vi.spyOn(output, 'writeStderr').mockImplementation(() => {});
   });
 
   afterEach(() => {
@@ -102,7 +103,7 @@ describe('trace:list command', () => {
         neq: { 'genkitx:ignore-trace': ['true'] },
       },
     });
-    expect(output.writeStdout).toHaveBeenCalledWith('Found 1 trace:\n');
+    expect(output.writeStderr).toHaveBeenCalledWith('Found 1 trace:\n');
     expect(output.writeStdout).toHaveBeenCalledWith('ID:       trace-1');
     expect(output.writeStdout).toHaveBeenCalledWith('Status:   success');
     expect(output.writeStdout).toHaveBeenCalledWith(
@@ -179,19 +180,19 @@ describe('trace:list command', () => {
         neq: { 'genkitx:ignore-trace': ['true'] },
       },
     });
-    expect(output.writeStdout).toHaveBeenCalledWith(
+    expect(output.writeStderr).toHaveBeenCalledWith(
       '\nTo get the next page, use: --continuation-token next-page-token'
     );
   });
 
-  it('should log info when no traces are found', async () => {
+  it('should write to stderr when no traces are found', async () => {
     mockManager.listTraces.mockResolvedValue({
       traces: [],
     });
 
     await traceList.parseAsync(['node', 'trace:list']);
 
-    expect(logger.info).toHaveBeenCalledWith('No traces found.');
+    expect(output.writeStderr).toHaveBeenCalledWith('No traces found.');
   });
 
   it('should handle and log errors', async () => {

@@ -27,6 +27,7 @@ import * as clc from 'colorette';
 import { Command } from 'commander';
 import fs from 'fs/promises';
 import path from 'path';
+import { writeStderr } from '../utils/output.js';
 
 /** Command to stop the Genkit Developer UI. */
 export const uiStop = new Command('ui:stop')
@@ -46,29 +47,29 @@ export const uiStop = new Command('ui:stop')
           await axios.get(`${serverInfo.url}/api/__health`);
         } catch {
           await fs.unlink(toolsJsonPath);
-          logger.info('Genkit Developer UI is not running in this directory.');
+          writeStderr('Genkit Developer UI is not running in this directory.');
           return;
         }
         // Kill the server and wait until it no longer responds as healthy then clean up metadata file.
         try {
-          logger.info('Stopping...');
+          writeStderr('Stopping...');
           await axios.post(`${serverInfo.url}/api/__quitquitquit`);
           if (await waitUntilUnresponsive(serverInfo.url)) {
             await fs.unlink(toolsJsonPath);
-            logger.info(clc.green('\n  Genkit Developer UI is stopped.'));
-            logger.info('  To start the UI, run `genkit start`.\n');
+            writeStderr(clc.green('\n  Genkit Developer UI is stopped.'));
+            writeStderr('  To start the UI, run `genkit start`.\n');
           } else {
-            logger.info('Failed to stop running UI before timing out.');
+            writeStderr('Failed to stop running UI before timing out.');
           }
         } catch {
-          logger.info('Failed to stop Genkit Developer UI.');
+          writeStderr('Failed to stop Genkit Developer UI.');
         }
       } else {
         logger.debug('tools.json is malformed.');
         await fs.unlink(toolsJsonPath);
-        logger.info('Genkit Developer UI is not running in this directory.');
+        writeStderr('Genkit Developer UI is not running in this directory.');
       }
     } catch {
-      logger.info('Genkit Developer UI is not running in this directory.');
+      writeStderr('Genkit Developer UI is not running in this directory.');
     }
   });

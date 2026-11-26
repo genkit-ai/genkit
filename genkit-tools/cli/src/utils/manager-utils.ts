@@ -486,7 +486,9 @@ export async function runWithManager(
       });
       const { envVars, telemetryServerUrl, reflectionV2Port } = devEnv;
 
-      logger.level = 'warn';
+      if (oldLevel === 'info') {
+        logger.level = 'warn';
+      }
 
       const result = await startDevProcessManager(
         projectRoot,

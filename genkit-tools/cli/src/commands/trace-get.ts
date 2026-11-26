@@ -15,15 +15,11 @@
  */
 
 import type { BaseRuntimeManager } from '@genkit-ai/tools-common/manager';
-import {
-  findProjectRoot,
-  forceStderr,
-  logger,
-} from '@genkit-ai/tools-common/utils';
+import { findProjectRoot, logger } from '@genkit-ai/tools-common/utils';
 import { yellow } from 'colorette';
 import { Command, Option } from 'commander';
 import { runWithManager } from '../utils/manager-utils.js';
-import { writeStdout } from '../utils/output.js';
+import { writeStderr, writeStdout } from '../utils/output.js';
 import { cleanTraceJson, formatTraceTree } from '../utils/trace-formatter.js';
 
 /**
@@ -47,8 +43,6 @@ export const traceGet = new Command('trace:get')
   )
   .option('--keep-base64', 'do not strip base64 data URLs in output', false)
   .action(async (traceId: string, options: TraceGetOptions) => {
-    // Redirect logging to stderr for clean JSON
-    forceStderr();
     const projectRoot = await findProjectRoot();
 
     const runAction = async (manager: BaseRuntimeManager) => {
@@ -66,7 +60,7 @@ export const traceGet = new Command('trace:get')
         if (options.format === 'json') {
           writeStdout(JSON.stringify(processedTrace, undefined, 2));
         } else {
-          logger.info(
+          writeStderr(
             yellow(
               'Hint: pass `--format json` flag to get trace data in JSON format\n'
             )
