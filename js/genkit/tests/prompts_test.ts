@@ -1295,15 +1295,12 @@ describe('prompt', () => {
       type: 'object',
     });
 
-    assert.deepStrictEqual(
-      (await (await prompt.asTool())({ foo: 'bar' })).messages,
-      [
-        {
-          role: 'user',
-          content: [{ text: 'Write a poem about bar.' }],
-        },
-      ]
-    );
+    assert.deepStrictEqual((await prompt.render({ foo: 'bar' })).messages, [
+      {
+        role: 'user',
+        content: [{ text: 'Write a poem about bar.' }],
+      },
+    ]);
   });
 
   it('lazily resolved schema refs', async () => {

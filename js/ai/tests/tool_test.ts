@@ -25,6 +25,7 @@ import {
   interrupt,
   isDynamicTool,
   isMultipartTool,
+  resolveTools,
   respondTool,
   restartTool,
   tool,
@@ -700,6 +701,25 @@ describe('restartTool', () => {
           replacedInput: {},
         },
       }
+    );
+  });
+});
+
+describe('resolveTools', () => {
+  it('rejects prompts', async () => {
+    const registry = new Registry();
+    const prompt = action(
+      { actionType: 'prompt', name: 'myPrompt' },
+      async () => ({ messages: [] })
+    );
+    registry.registerAction('prompt', prompt);
+    await assert.rejects(
+      resolveTools(registry, [prompt]),
+      /cannot be used as a tool/
+    );
+    await assert.rejects(
+      resolveTools(registry, ['/prompt/myPrompt']),
+      /cannot be used as a tool/
     );
   });
 });
