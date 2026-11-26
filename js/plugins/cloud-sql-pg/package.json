@@ -16,6 +16,9 @@
   ],
   "version": "1.44.0",
   "type": "commonjs",
+  "engines": {
+    "node": ">=22.12"
+  },
   "scripts": {
     "check": "tsc",
     "compile": "tsup-node",
@@ -42,7 +45,7 @@
     "genkit": "workspace:^"
   },
   "devDependencies": {
-    "@types/node": "^20.11.16",
+    "@types/node": "^22.15.3",
     "@types/uuid": "^10.0.0",
     "dotenv": "^16.4.5",
     "rimraf": "^6.0.1",

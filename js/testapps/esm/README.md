@@ -32,7 +32,7 @@ plugin and core module to ensure there are no CommonJS/ESM interop issues.
 
 ### Prerequisites
 
-- **Node.js** (v18 or higher)
+- **Node.js** (v22.12 or higher)
 - **pnpm** package manager
 
 ### Build and Install

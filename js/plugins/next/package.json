@@ -16,6 +16,9 @@
   ],
   "version": "1.44.0",
   "type": "commonjs",
+  "engines": {
+    "node": ">=22.12"
+  },
   "main": "lib/index.js",
   "scripts": {
     "check": "tsc",
@@ -38,7 +41,7 @@
     "zod": "^4.2.0"
   },
   "devDependencies": {
-    "@types/node": "^20.11.16",
+    "@types/node": "^22.15.3",
     "genkit": "workspace:*",
     "next": "^16.3.3",
     "rimraf": "^6.0.1",

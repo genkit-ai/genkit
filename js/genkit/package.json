@@ -9,6 +9,9 @@
   ],
   "version": "1.44.0",
   "type": "commonjs",
+  "engines": {
+    "node": ">=22.12"
+  },
   "main": "./lib/cjs/index.js",
   "scripts": {
     "check": "tsc -p tsconfig.test.json",

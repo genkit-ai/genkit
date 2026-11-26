@@ -12,6 +12,9 @@
   ],
   "version": "0.12.0",
   "type": "commonjs",
+  "engines": {
+    "node": ">=22.12"
+  },
   "scripts": {
     "check": "tsc",
     "compile": "tsup-node",
@@ -33,7 +36,7 @@
   "devDependencies": {
     "@genkit-ai/google-genai": "workspace:^",
     "@types/mime-types": "^3.0.1",
-    "@types/node": "^20.11.16",
+    "@types/node": "^22.15.3",
     "rimraf": "^6.0.1",
     "tsup": "^8.3.5",
     "tsx": "^4.19.2",

@@ -18,6 +18,9 @@
   ],
   "version": "0.7.0",
   "type": "commonjs",
+  "engines": {
+    "node": ">=22.12"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/genkit-ai/genkit.git",
@@ -32,7 +35,7 @@
     "@anthropic-ai/sdk": "^0.97.1"
   },
   "devDependencies": {
-    "@types/node": "^20.11.16",
+    "@types/node": "^22.15.3",
     "check-node-version": "^4.2.1",
     "genkit": "workspace:*",
     "rimraf": "^6.0.1",
