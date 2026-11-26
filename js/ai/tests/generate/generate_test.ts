@@ -425,6 +425,27 @@ describe('toGenerateActionOptions', () => {
       { role: 'user', content: [{ text: 'hello' }] },
     ]);
   });
+
+  it('carries the output schema as JSON Schema only', async () => {
+    // A recursive zod v4 schema holds a real object cycle once used, so the
+    // live schema must not ride along: the options are traced as span input.
+    type Node = { name: string; children?: Node[] };
+    const NodeSchema: z.ZodType<Node> = z.object({
+      name: z.string(),
+      children: z.lazy(() => NodeSchema.array().optional()),
+    });
+    NodeSchema.parse({ name: 'a', children: [{ name: 'b' }] });
+
+    const actionOptions = await toGenerateActionOptions(registry, {
+      prompt: 'hello',
+      output: { schema: NodeSchema },
+    });
+
+    assert.ok(!('schema' in (actionOptions.output ?? {})));
+    assert.strictEqual(actionOptions.output?.format, 'json');
+    assert.ok(actionOptions.output?.jsonSchema);
+    assert.doesNotThrow(() => JSON.stringify(actionOptions));
+  });
 });
 
 describe('generate', () => {
