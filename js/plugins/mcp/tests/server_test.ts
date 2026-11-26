@@ -55,6 +55,43 @@ describe('createMcpServer', async () => {
       },
       async (input) => `yep ${JSON.stringify(input)}`
     );
+    ai.defineTool(
+      {
+        name: 'weatherTool',
+        description: 'weather tool',
+        inputSchema: z.object({ city: z.string() }),
+        outputSchema: z.object({ temp: z.number() }),
+      },
+      async () => ({ temp: 21 })
+    );
+    ai.defineTool(
+      {
+        name: 'screenshotTool',
+        description: 'screenshot tool',
+        multipart: true,
+      },
+      async () => ({
+        output: 'ok',
+        content: [
+          { text: 'note' },
+          {
+            media: {
+              url: 'data:image/png;base64,iVBORw0KGgo=',
+              contentType: 'image/png',
+            },
+          },
+          { media: { url: 'data:application/pdf;base64,JVBERi0=' } },
+          {
+            media: {
+              url: 'https://example.com/a.png',
+              contentType: 'image/png',
+            },
+          },
+          { resource: { uri: 'my://resource' } },
+          { media: { url: 'data:text/plain,hello%20world' } },
+        ],
+      })
+    );
     ai.defineResource(
       {
         name: 'testResouces',
@@ -131,22 +168,91 @@ describe('createMcpServer', async () => {
     it('should list tools', async () => {
       const r = await client.listTools();
 
-      assert.deepStrictEqual(r.tools, [
-        {
-          description: 'test tool',
-          inputSchema: {
-            $schema: 'http://json-schema.org/draft-07/schema#',
-            properties: {
-              foo: {
-                type: 'string',
-              },
-            },
-            required: ['foo'],
-            type: 'object',
-          },
-          name: 'testTool',
-        },
+      assert.deepStrictEqual(r.tools.map((t) => t.name).sort(), [
+        'screenshotTool',
+        'testTool',
+        'weatherTool',
       ]);
+      assert.deepStrictEqual(
+        r.tools.find((t) => t.name === 'weatherTool')?.outputSchema,
+        {
+          $schema: 'http://json-schema.org/draft-07/schema#',
+          properties: { temp: { type: 'number' } },
+          required: ['temp'],
+          type: 'object',
+        }
+      );
+      assert.deepStrictEqual(
+        r.tools.filter((t) => t.name === 'testTool'),
+        [
+          {
+            description: 'test tool',
+            inputSchema: {
+              $schema: 'http://json-schema.org/draft-07/schema#',
+              properties: {
+                foo: {
+                  type: 'string',
+                },
+              },
+              required: ['foo'],
+              type: 'object',
+            },
+            name: 'testTool',
+          },
+        ]
+      );
+    });
+
+    it('should return object output as structuredContent', async () => {
+      const response = await client.callTool({
+        name: 'weatherTool',
+        arguments: { city: 'Paris' },
+      });
+      assert.deepStrictEqual(response, {
+        content: [{ type: 'text', text: '{"temp":21}' }],
+        structuredContent: { temp: 21 },
+      });
+    });
+
+    it('should map multipart content to content blocks', async () => {
+      const response = await client.callTool({
+        name: 'screenshotTool',
+        arguments: {},
+      });
+      assert.deepStrictEqual(response, {
+        content: [
+          { type: 'text', text: 'ok' },
+          { type: 'text', text: 'note' },
+          { type: 'image', mimeType: 'image/png', data: 'iVBORw0KGgo=' },
+          {
+            type: 'resource',
+            resource: {
+              uri: 'genkit://tool/screenshotTool/content/2',
+              mimeType: 'application/pdf',
+              blob: 'JVBERi0=',
+            },
+          },
+          {
+            type: 'resource_link',
+            uri: 'https://example.com/a.png',
+            name: 'https://example.com/a.png',
+            mimeType: 'image/png',
+          },
+          {
+            type: 'resource_link',
+            uri: 'my://resource',
+            name: 'my://resource',
+          },
+          {
+            type: 'resource',
+            resource: {
+              uri: 'genkit://tool/screenshotTool/content/5',
+              mimeType: 'text/plain',
+              blob: btoa('hello world'),
+            },
+          },
+        ],
+      });
     });
 
     it('should call the tool', async () => {
