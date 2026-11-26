@@ -14,16 +14,16 @@
     "generative-ai"
   ],
   "version": "1.44.0",
-  "type": "commonjs",
+  "type": "module",
   "engines": {
     "node": ">=22.12"
   },
   "scripts": {
-    "check": "tsc",
-    "compile": "tsup-node",
+    "check": "tsc --noEmit",
+    "compile": "tsc",
     "build:clean": "rimraf ./lib",
-    "build": "pnpm build:clean && pnpm check && pnpm compile",
-    "build:watch": "tsup-node --watch",
+    "build": "rimraf ./lib && tsc",
+    "build:watch": "tsc --watch",
     "test": "tsx --test ./tests/**/*_test.ts"
   },
   "repository": {
@@ -46,16 +46,14 @@
     "@types/sinon": "^17.0.4",
     "rimraf": "^6.0.1",
     "sinon": "^21.0.0",
-    "tsup": "^8.3.5",
     "tsx": "^4.19.2",
     "typescript": "^5.9.3"
   },
+  "main": "./lib/index.js",
   "types": "./lib/index.d.ts",
   "exports": {
     ".": {
       "types": "./lib/index.d.ts",
-      "require": "./lib/index.js",
-      "import": "./lib/index.mjs",
       "default": "./lib/index.js"
     }
   }

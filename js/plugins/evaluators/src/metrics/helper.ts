@@ -16,10 +16,12 @@
 
 import { Dotprompt, type PromptFunction } from 'dotprompt';
 import { readFileSync } from 'fs';
+import { dirname } from 'path';
+import { fileURLToPath } from 'url';
 
-/** Helper function to get current directory, isolated in a separate file to work with ESM */
+/** Directory of the compiled metrics module (lib/metrics), used to locate bundled prompt files. */
 export function getDirName() {
-  return __dirname;
+  return dirname(fileURLToPath(import.meta.url));
 }
 
 const dp = new Dotprompt();

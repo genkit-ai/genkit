@@ -1,7 +1,7 @@
 {
   "compilerOptions": {
     "target": "es2022",
-    "module": "commonjs",
+    "module": "nodenext",
     "lib": ["es2022"],
     "strict": true,
     "esModuleInterop": true,

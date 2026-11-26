@@ -1,4 +1,3 @@
 node_modules
 vitest.config.mts
 tsconfig.json
-tsup.config.ts

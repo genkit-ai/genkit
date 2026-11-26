@@ -18,16 +18,16 @@
     "generative-ai"
   ],
   "version": "1.44.0",
-  "type": "commonjs",
+  "type": "module",
   "engines": {
     "node": ">=22.12"
   },
   "scripts": {
-    "check": "tsc",
-    "compile": "cross-env NODE_OPTIONS=\"--max-old-space-size=16384\" npx tsup-node",
+    "check": "tsc --noEmit",
+    "compile": "tsc",
     "build:clean": "rimraf ./lib",
-    "build": "pnpm build:clean && pnpm check && pnpm compile",
-    "build:watch": "cross-env NODE_OPTIONS=\"--max-old-space-size=16384\" tsup-node --watch",
+    "build": "rimraf ./lib && tsc",
+    "build:watch": "tsc --watch",
     "test": "tsx --test ./tests/*_test.ts ./tests/**/*_test.ts ./tests/**/**/*_test.ts"
   },
   "repository": {
@@ -58,43 +58,32 @@
   "devDependencies": {
     "@types/node": "^22.15.3",
     "@types/sinon": "^17.0.4",
-    "cross-env": "10.1.0",
     "google-gax": "^4.4.1",
     "rimraf": "^6.0.1",
     "sinon": "^21.0.0",
-    "tsup": "^8.3.5",
     "tsx": "^4.19.2",
     "typescript": "^5.9.3"
   },
+  "main": "./lib/index.js",
   "types": "./lib/index.d.ts",
   "exports": {
     ".": {
-      "require": "./lib/index.js",
-      "import": "./lib/index.mjs",
       "types": "./lib/index.d.ts",
       "default": "./lib/index.js"
     },
     "./rerankers": {
-      "require": "./lib/rerankers/index.js",
-      "import": "./lib/rerankers/index.mjs",
       "types": "./lib/rerankers/index.d.ts",
       "default": "./lib/rerankers/index.js"
     },
     "./evaluation": {
-      "require": "./lib/evaluation/index.js",
-      "import": "./lib/evaluation/index.mjs",
       "types": "./lib/evaluation/index.d.ts",
       "default": "./lib/evaluation/index.js"
     },
     "./modelgarden": {
-      "require": "./lib/modelgarden/index.js",
-      "import": "./lib/modelgarden/index.mjs",
       "types": "./lib/modelgarden/index.d.ts",
       "default": "./lib/modelgarden/index.js"
     },
     "./vectorsearch": {
-      "require": "./lib/vectorsearch/index.js",
-      "import": "./lib/vectorsearch/index.mjs",
       "types": "./lib/vectorsearch/index.d.ts",
       "default": "./lib/vectorsearch/index.js"
     }
@@ -102,16 +91,16 @@
   "typesVersions": {
     "*": {
       "rerankers": [
-        "./lib/rerankers/index"
+        "lib/rerankers/index.d.ts"
       ],
       "evaluation": [
-        "./lib/evaluation/index"
+        "lib/evaluation/index.d.ts"
       ],
       "modelgarden": [
-        "./lib/modelgarden/index"
+        "lib/modelgarden/index.d.ts"
       ],
       "vectorsearch": [
-        "./lib/vectorsearch/index"
+        "lib/vectorsearch/index.d.ts"
       ]
     }
   }
