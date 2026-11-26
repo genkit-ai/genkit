@@ -58,6 +58,7 @@ import {
   unwrapValue,
   wrapSchemaRoot,
 } from './schema-root.js';
+import { closeObjectSchemas } from './strict-schema.js';
 import { maybeCreateRequestScopedOpenAIClient, toModelName } from './utils.js';
 
 /**
@@ -680,13 +681,15 @@ export function toOpenAIRequestBody(
   }
   if (response_format === 'json') {
     if (request.output?.schema) {
+      const schema = needsRootWrapper(request, pluginOptions)
+        ? wrapSchemaRoot(request.output.schema)
+        : request.output.schema;
       body.response_format = {
         type: 'json_schema',
         json_schema: {
           name: 'output',
-          schema: needsRootWrapper(request, pluginOptions)
-            ? wrapSchemaRoot(request.output!.schema!)
-            : request.output!.schema,
+          // Strict mode requires every object to be closed.
+          schema: strict === true ? closeObjectSchemas(schema) : schema,
           ...(strict !== undefined ? { strict } : {}),
         },
       };
