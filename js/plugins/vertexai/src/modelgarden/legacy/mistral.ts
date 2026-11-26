@@ -30,7 +30,6 @@ import {
   type UserMessage,
 } from '@mistralai/mistralai-gcp/models/components/index.js';
 import {
-  GenerationCommonConfigSchema,
   z,
   type GenerateRequest,
   type Genkit,
@@ -41,27 +40,48 @@ import {
   type Role,
   type ToolRequestPart,
 } from 'genkit';
-import {
-  GenerationCommonConfigDescriptions,
-  modelRef,
-  type ModelAction,
-} from 'genkit/model';
+import { modelRef, type ModelAction } from 'genkit/model';
 import { getGenkitClientHeader } from '../../common/index.js';
 
 /**
  * See https://docs.mistral.ai/api/#tag/chat/operation/chat_completion_v1_chat_completions_post
  * @deprecated
  */
-export const MistralConfigSchema = GenerationCommonConfigSchema.extend({
+export const MistralConfigSchema = z.looseObject({
   // TODO: Update this with all the parameters in
   // https://docs.mistral.ai/api/#tag/chat/operation/chat_completion_v1_chat_completions_post.
-  location: z.string().optional(),
+  version: z
+    .string()
+    .describe('A specific model version to call instead of the selected model.')
+    .optional(),
+  temperature: z
+    .number()
+    .describe(
+      'Controls the degree of randomness in token selection. A lower value is ' +
+        'good for a more predictable response. A higher value leads to more ' +
+        'diverse or unexpected results.'
+    )
+    .optional(),
+  maxOutputTokens: z
+    .number()
+    .describe('The maximum number of tokens to include in the response.')
+    .optional(),
   topP: z
     .number()
     .describe(
-      GenerationCommonConfigDescriptions.topP + ' The default value is 1.'
+      'Decides how many possible words to consider. A higher value means ' +
+        'that the model looks at more possible words, even the less likely ' +
+        'ones, which makes the generated text more diverse. The default value is 1.'
     )
     .optional(),
+  stopSequences: z
+    .array(z.string())
+    .max(5)
+    .describe(
+      'Set of character sequences (up to 5) that will stop output generation.'
+    )
+    .optional(),
+  location: z.string().optional(),
 });
 
 /**

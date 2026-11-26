@@ -69,7 +69,6 @@ export { Message } from './message.js';
 export { GENKIT_UI_METADATA, GENKIT_UI_WIDGETS } from './metadata.js';
 export {
   GenerateResponseChunkSchema,
-  GenerationCommonConfigSchema,
   MessageSchema,
   MiddlewareRefSchema,
   ModelReferenceSchema,

@@ -21,7 +21,7 @@ import type {
   GenkitSchema,
   ModelReference,
 } from 'genkit';
-import { GenerationCommonConfigSchema, Message, modelRef, z } from 'genkit';
+import { Message, modelRef, z } from 'genkit';
 import type { ModelAction, ModelInfo } from 'genkit/model';
 import { model } from 'genkit/plugin';
 import OpenAI from 'openai';
@@ -47,9 +47,15 @@ export const TRANSLATION_MODEL_INFO: ModelInfo = {
   },
 };
 
-export const TranslationConfigSchema = GenerationCommonConfigSchema.pick({
-  temperature: true,
-}).extend({
+export const TranslationConfigSchema = z.looseObject({
+  temperature: z
+    .number()
+    .describe(
+      'Controls the degree of randomness in token selection. A lower value is ' +
+        'good for a more predictable response. A higher value leads to more ' +
+        'diverse or unexpected results.'
+    )
+    .optional(),
   response_format: z
     .enum(['json', 'text', 'srt', 'verbose_json', 'vtt'])
     .optional(),

@@ -28,7 +28,6 @@ import type {
   ToolRequestPart,
 } from 'genkit';
 import {
-  GenerationCommonConfigSchema,
   GenkitError,
   Message,
   StatusName,
@@ -77,14 +76,39 @@ export type ModelRequestBuilder = (
   params: ChatCompletionCreateParams
 ) => void;
 
-export const ChatCompletionCommonConfigSchema =
-  GenerationCommonConfigSchema.extend({
-    temperature: z.number().min(0).max(2).optional(),
-    frequencyPenalty: z.number().min(-2).max(2).optional(),
-    logProbs: z.boolean().optional(),
-    presencePenalty: z.number().min(-2).max(2).optional(),
-    topLogProbs: z.number().int().min(0).max(20).optional(),
-  });
+// Unknown keys are forwarded to the Chat Completions request body.
+export const ChatCompletionCommonConfigSchema = z.looseObject({
+  version: z
+    .string()
+    .describe('A specific model version to call instead of the selected model.')
+    .optional(),
+  temperature: z.number().min(0).max(2).optional(),
+  topP: z
+    .number()
+    .describe(
+      'Decides how many possible words to consider. A higher value means ' +
+        'that the model looks at more possible words, even the less likely ' +
+        'ones, which makes the generated text more diverse.'
+    )
+    .optional(),
+  stopSequences: z
+    .array(z.string())
+    .max(5)
+    .describe(
+      'Set of character sequences (up to 5) that will stop output generation.'
+    )
+    .optional(),
+  apiKey: z
+    .string()
+    .describe(
+      'API Key to use for the model call, overrides API key provided in plugin config.'
+    )
+    .optional(),
+  frequencyPenalty: z.number().min(-2).max(2).optional(),
+  logProbs: z.boolean().optional(),
+  presencePenalty: z.number().min(-2).max(2).optional(),
+  topLogProbs: z.number().int().min(0).max(20).optional(),
+});
 
 export function toOpenAIRole(role: Role): ChatCompletionRole {
   switch (role) {
@@ -584,8 +608,9 @@ export function toOpenAIRequestBody(
   );
   const {
     temperature,
-    maxOutputTokens, // unused
-    topK, // unused
+    // Not in the schema and not mapped; stripped so they aren't forwarded.
+    maxOutputTokens,
+    topK,
     topP: top_p,
     frequencyPenalty: frequency_penalty,
     logProbs: logprobs,

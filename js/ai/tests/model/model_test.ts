@@ -24,7 +24,6 @@ import { z as z3 } from 'zod/v3';
 import {
   GenerateResponseChunkData,
   GenerateResponseData,
-  GenerationCommonConfigSchema,
   defineModel,
   model,
   type ModelMiddleware,
@@ -153,8 +152,9 @@ describe('model configSchema checks', () => {
           registry,
           {
             name: 'legacy',
-            // A plugin extending a genkit schema with its own zod v3.
-            configSchema: GenerationCommonConfigSchema.extend({
+            // A plugin mixing its own zod v3 into a zod v4 schema.
+            configSchema: z.object({
+              temperature: z.number().optional(),
               seed: z3
                 .number()
                 .optional() as unknown as z.ZodOptional<z.ZodNumber>,

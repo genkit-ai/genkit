@@ -16,7 +16,6 @@
 
 import { z, type Genkit, type GenkitSchema } from 'genkit';
 import {
-  GenerationCommonConfigSchema,
   getBasicUsageStats,
   modelRef,
   type CandidateData,
@@ -34,10 +33,12 @@ import { predictModel, type PredictClient } from './predict.js';
  * See https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/imagen-api.
  * @deprecated
  */
-export const ImagenConfigSchema = GenerationCommonConfigSchema.extend({
-  // TODO: Remove common config schema extension since Imagen models don't support
-  // most of the common config parameters. Also, add more parameters like sampleCount
-  // from the above reference.
+export const ImagenConfigSchema = z.looseObject({
+  // TODO: add more parameters like sampleCount from the above reference.
+  version: z
+    .string()
+    .describe('A specific model version to call instead of the selected model.')
+    .optional(),
   language: z
     .enum(['auto', 'en', 'es', 'hi', 'ja', 'ko', 'pt', 'zh-TW', 'zh', 'zh-CN'])
     .describe('Language of the prompt text.')
@@ -162,7 +163,7 @@ export const ImagenConfigSchema = GenerationCommonConfigSchema.extend({
     })
     .describe('Configuration for upscaling.')
     .optional(),
-}).passthrough();
+});
 
 /** @deprecated */
 export const imagen2 = modelRef({
