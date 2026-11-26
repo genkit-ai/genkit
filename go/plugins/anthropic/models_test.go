@@ -65,7 +65,8 @@ func TestNoRetiredModels(t *testing.T) {
 }
 
 // TestSupportedModelsAreServableLive sends one small request to every curated
-// model, so a retirement is caught here rather than by an application.
+// model, so a retired model still marked stable is caught here rather than by
+// an application. Deprecated entries are skipped.
 //
 // A curated ID is not checked against anything at build time: a model
 // Anthropic has retired still resolves, registers, and advertises curated
@@ -95,7 +96,9 @@ func TestSupportedModelsAreServableLive(t *testing.T) {
 				ai.WithModelName(provider+"/"+id),
 				// No temperature: it is deprecated on Claude 4.7 and later and
 				// returns 400 when set, so the request must not carry one.
-				ai.WithConfig(&anthropic.MessageNewParams{MaxTokens: 16}),
+				// The budget leaves room for a model that thinks by default
+				// to finish thinking and still reach a text block.
+				ai.WithConfig(&anthropic.MessageNewParams{MaxTokens: 1024}),
 				ai.WithPrompt("Reply with the single word: ok"))
 			if err != nil {
 				t.Fatalf("%s is curated but not servable: %v", id, err)

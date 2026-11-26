@@ -112,15 +112,16 @@ func (c ChatConfig) ApplyToChatCompletion(params *openai.ChatCompletionNewParams
 	}
 }
 
-// Capability sets shared by the entries below. The Claude 3 generation
-// predates Anthropic's system-role support on the compatible endpoint.
-// Models from the 4.5 generation on support structured outputs natively:
-// the compatible endpoint takes response_format in its json_schema form and
-// rejects every other form with a 400, so no set lists "json" among its
-// native output formats and a schema-less JSON request rides the injected
-// format instructions. The schema may have an array or enum at its root, so
-// the constrained set lists those formats. See
-// https://platform.claude.com/docs/en/api/openai-sdk.
+// Capability sets for Claude models. multimodalConstrained describes the
+// curated models, which support structured outputs natively, and multimodal
+// describes models that resolve dynamically. The compatible endpoint takes
+// response_format in its json_schema form and rejects every other form with a
+// 400, so no set lists "json" among its native output formats and a
+// schema-less JSON request rides the injected format instructions. The schema
+// may have an array or enum at its root, so the constrained set lists those
+// formats. See
+// https://platform.claude.com/docs/en/cli-sdks-libraries/libraries/openai-sdk
+// and https://platform.claude.com/docs/en/build-with-claude/structured-outputs.
 var (
 	multimodal = ai.ModelSupports{
 		Multiturn:  true,
@@ -139,20 +140,23 @@ var (
 		Output:      []string{"text", "array", "enum"},
 		Constrained: ai.ConstrainedSupportAll,
 	}
-	multimodalNoSystemRole = ai.ModelSupports{
-		Multiturn:  true,
-		Tools:      true,
-		ToolChoice: true,
-		SystemRole: false,
-		Media:      true,
-		Output:     []string{"text"},
-	}
 )
 
 // mediaTypes are the media Anthropic's OpenAI SDK compatibility layer reads.
 // It strips file and input_audio parts without an error, so they are refused
 // here rather than lost; PDFs need the native anthropic plugin.
 var mediaTypes = []string{"image/*"}
+
+// claudeModel builds a curated entry with the structured-output capability set
+// and a stable stage. versions lists the IDs the version config field accepts.
+func claudeModel(label string, versions ...string) ai.ModelOptions {
+	return ai.ModelOptions{
+		Label:    label,
+		Supports: &multimodalConstrained,
+		Versions: versions,
+		Stage:    ai.ModelStageStable,
+	}
+}
 
 // supportedModels curates capabilities for well-known Claude models. It is not
 // the set of usable models: any Claude model resolves on demand and takes
@@ -161,92 +165,44 @@ var mediaTypes = []string{"image/*"}
 // generations alias by bare name (claude-sonnet-4-5, never -latest), and IDs
 // from the 4.6 generation on are dateless pinned snapshots.
 //
-// Catalog: https://platform.claude.com/docs/en/about-claude/models/overview
+// Claude Mythos models are left out: they are open only to verified
+// organizations, so registering them would offer most accounts a model they
+// cannot call. They still resolve on demand like any other ID.
+//
+// Catalog: https://platform.claude.com/docs/en/models/overview
+// Retirements: https://platform.claude.com/docs/en/about-claude/model-deprecations
 var supportedModels = map[string]ai.ModelOptions{
-	"claude-fable-5": {
-		Label:    "Claude Fable 5",
-		Supports: &multimodalConstrained,
-		Versions: []string{"claude-fable-5"},
-	},
-	"claude-opus-5": {
-		Label:    "Claude Opus 5",
-		Supports: &multimodalConstrained,
-		Versions: []string{"claude-opus-5"},
-	},
-	"claude-sonnet-5": {
-		Label:    "Claude Sonnet 5",
-		Supports: &multimodalConstrained,
-		Versions: []string{"claude-sonnet-5"},
-	},
-	"claude-opus-4-8": {
-		Label:    "Claude Opus 4.8",
-		Supports: &multimodalConstrained,
-		Versions: []string{"claude-opus-4-8"},
-	},
-	"claude-opus-4-7": {
-		Label:    "Claude Opus 4.7",
-		Supports: &multimodalConstrained,
-		Versions: []string{"claude-opus-4-7"},
-	},
-	"claude-opus-4-6": {
-		Label:    "Claude Opus 4.6",
-		Supports: &multimodalConstrained,
-		Versions: []string{"claude-opus-4-6"},
-	},
-	"claude-sonnet-4-6": {
-		Label:    "Claude Sonnet 4.6",
-		Supports: &multimodalConstrained,
-		Versions: []string{"claude-sonnet-4-6"},
-	},
-	"claude-opus-4-5-20251101": {
-		Label:    "Claude Opus 4.5",
-		Supports: &multimodalConstrained,
-		Versions: []string{"claude-opus-4-5", "claude-opus-4-5-20251101"},
-	},
-	"claude-sonnet-4-5-20250929": {
-		Label:    "Claude Sonnet 4.5",
-		Supports: &multimodalConstrained,
-		Versions: []string{"claude-sonnet-4-5", "claude-sonnet-4-5-20250929"},
-	},
-	"claude-haiku-4-5-20251001": {
-		Label:    "Claude Haiku 4.5",
-		Supports: &multimodalConstrained,
-		Versions: []string{"claude-haiku-4-5", "claude-haiku-4-5-20251001"},
-	},
-	"claude-opus-4-1-20250805": {
-		Label:    "Claude Opus 4.1",
-		Supports: &multimodal,
-		Versions: []string{"claude-opus-4-1", "claude-opus-4-1-20250805"},
-	},
-	"claude-3-7-sonnet-20250219": {
-		Label:    "Claude 3.7 Sonnet",
-		Supports: &multimodal,
-		Versions: []string{"claude-3-7-sonnet-latest", "claude-3-7-sonnet-20250219"},
-	},
-	"claude-3-5-haiku-20241022": {
-		Label:    "Claude 3.5 Haiku",
-		Supports: &multimodal,
-		Versions: []string{"claude-3-5-haiku-latest", "claude-3-5-haiku-20241022"},
-	},
-	"claude-3-5-sonnet-20240620": {
-		Label:    "Claude 3.5 Sonnet",
-		Supports: &multimodalNoSystemRole,
-		Versions: []string{"claude-3-5-sonnet-20240620"},
-	},
-	"claude-3-opus-20240229": {
-		Label:    "Claude 3 Opus",
-		Supports: &multimodalNoSystemRole,
-		Versions: []string{"claude-3-opus-latest", "claude-3-opus-20240229"},
-	},
-	"claude-3-haiku-20240307": {
-		Label:    "Claude 3 Haiku",
-		Supports: &multimodalNoSystemRole,
-		Versions: []string{"claude-3-haiku-20240307"},
-	},
+	"claude-fable-5-2":         claudeModel("Claude Fable 5.2", "claude-fable-5-2"),
+	"claude-fable-5-1":         claudeModel("Claude Fable 5.1", "claude-fable-5-1"),
+	"claude-fable-5":           claudeModel("Claude Fable 5", "claude-fable-5"),
+	"claude-opus-5-5":          claudeModel("Claude Opus 5.5", "claude-opus-5-5"),
+	"claude-opus-5":            claudeModel("Claude Opus 5", "claude-opus-5"),
+	"claude-opus-4-8":          claudeModel("Claude Opus 4.8", "claude-opus-4-8"),
+	"claude-opus-4-7":          claudeModel("Claude Opus 4.7", "claude-opus-4-7"),
+	"claude-opus-4-6":          claudeModel("Claude Opus 4.6", "claude-opus-4-6"),
+	"claude-opus-4-5-20251101": claudeModel("Claude Opus 4.5", "claude-opus-4-5", "claude-opus-4-5-20251101"),
+	"claude-sonnet-5-5":        claudeModel("Claude Sonnet 5.5", "claude-sonnet-5-5"),
+	"claude-sonnet-5":          claudeModel("Claude Sonnet 5", "claude-sonnet-5"),
+	"claude-sonnet-4-6":        claudeModel("Claude Sonnet 4.6", "claude-sonnet-4-6"),
+	// Deprecated September 30, 2026; retires November 30, 2026, replaced by
+	// claude-sonnet-5-5.
+	"claude-sonnet-4-5-20250929": deprecatedModel(claudeModel("Claude Sonnet 4.5", "claude-sonnet-4-5", "claude-sonnet-4-5-20250929")),
+	"claude-haiku-5-5":           claudeModel("Claude Haiku 5.5", "claude-haiku-5-5"),
+	"claude-haiku-4-5-20251001":  claudeModel("Claude Haiku 4.5", "claude-haiku-4-5", "claude-haiku-4-5-20251001"),
+}
+
+// deprecatedModel marks opts as a model Anthropic has deprecated: it still
+// serves it until its retirement date, but the framework warns on each use.
+func deprecatedModel(opts ai.ModelOptions) ai.ModelOptions {
+	opts.Stage = ai.ModelStageDeprecated
+	return opts
 }
 
 // dynamicModelOptions is advertised for Claude models that resolve dynamically
-// rather than appearing in supportedModels.
+// rather than appearing in supportedModels. It claims no constrained
+// generation: the base URL can point at a gateway serving models that predate
+// Structured Outputs, and schema instructions in the prompt work on every
+// Claude model.
 var dynamicModelOptions = ai.ModelOptions{
 	Supports: &multimodal,
 	Versions: []string{},
@@ -277,7 +233,7 @@ type Anthropic struct {
 	// the plugin.
 	//
 	//	&anthropic.Anthropic{Models: map[string]ai.ModelOptions{
-	//		"claude-sonnet-4-5-20250929": {Supports: &ai.ModelSupports{Multiturn: true, Tools: true}},
+	//		"claude-haiku-4-5-20251001": {Supports: &ai.ModelSupports{Multiturn: true, Tools: true}},
 	//	}}
 	//
 	// Fields left at their zero value keep what the plugin resolves, so an
@@ -361,7 +317,7 @@ func (a *Anthropic) modelOptions(id string) ai.ModelOptions {
 // the config is typed at the call site instead of an any the model checks at
 // runtime. A nil config leaves the request's config unset.
 //
-//	ai.WithModel(anthropic.ModelRef("claude-3-5-haiku-20241022", &anthropic.ChatConfig{
+//	ai.WithModel(anthropic.ModelRef("claude-haiku-4-5-20251001", &anthropic.ChatConfig{
 //		MaxOutputTokens: 1024,
 //	}))
 //
@@ -384,9 +340,10 @@ func (a *Anthropic) DefineModel(id string, opts ai.ModelOptions) ai.Model {
 // Model returns a previously registered model.
 //
 // Deprecated: Generation resolves a model from its name, so looking one up
-// first is rarely necessary: pass ai.WithModelName("anthropic/claude-3-5-haiku-20241022")
-// or, to carry config with it, [ModelRef]. Use [genkit.LookupModel] when the
-// action itself is what you need.
+// first is rarely necessary: pass
+// ai.WithModelName("anthropic/claude-haiku-4-5-20251001") or, to carry config
+// with it, [ModelRef]. Use [genkit.LookupModel] when the action itself is what
+// you need.
 func (a *Anthropic) Model(g *genkit.Genkit, id string) ai.Model {
 	return genkit.LookupModel(g, compat_oai.ActionName(provider, id))
 }

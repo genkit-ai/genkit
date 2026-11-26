@@ -63,13 +63,13 @@ type JokeRequest struct {
 }
 
 // model pins the model and its config in one place, so switching either is a
-// one-line change. Sonnet 5 thinks adaptively, choosing its own budget per
+// one-line change. Sonnet 5.5 thinks adaptively, choosing its own budget per
 // request, so a fixed Thinking.OfEnabled budget is rejected outright; Effort is
 // the knob instead, and low keeps a quick joke quick.
 //
 // This package and the Anthropic SDK are both named anthropic, so one of them
 // needs an import alias; the import above aliases the SDK to sdk.
-var model = anthropic.ModelRef("claude-sonnet-5", &sdk.MessageNewParams{
+var model = anthropic.ModelRef("claude-sonnet-5-5", &sdk.MessageNewParams{
 	MaxTokens: 4000,
 	Thinking: sdk.ThinkingConfigParamUnion{
 		OfAdaptive: &sdk.ThinkingConfigAdaptiveParam{},

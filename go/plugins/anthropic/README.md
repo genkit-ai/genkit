@@ -43,7 +43,7 @@ ctx := context.Background()
 g := genkit.Init(
     ctx,
     genkit.WithPlugins(&anthropic.Anthropic{}),
-    genkit.WithDefaultModel("anthropic/claude-sonnet-5"),
+    genkit.WithDefaultModel("anthropic/claude-sonnet-5-5"),
 )
 
 response, err := genkit.Generate(ctx, g, ai.WithPrompt("Explain constitutional AI."))
@@ -57,11 +57,12 @@ multi-turn conversations replay their thinking intact.
 
 Init registers nothing: every Claude model resolves on first use, and the
 plugin lists Anthropic's current catalog through the models API, cached for an
-hour. Curated entries describe the current families (`claude-fable-5`,
-`claude-opus-5`, `claude-sonnet-5`, the Claude 4 line, `claude-haiku-4-5`),
-dated snapshots such as `claude-opus-4-5-20251101` resolve to the same
-descriptions, and the `Models` field describes or corrects any model, most
-often one released after this plugin:
+hour. Curated entries describe the current families (`claude-fable-5-2`,
+`claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`) and the earlier
+releases Anthropic still serves, back to the 4.5 generation. Dated snapshots
+such as `claude-opus-4-5-20251101` resolve to the same descriptions, and the
+`Models` field describes or corrects any model, most often one released after
+this plugin:
 
 ```go
 plugin := &anthropic.Anthropic{Models: map[string]ai.ModelOptions{
@@ -70,7 +71,7 @@ plugin := &anthropic.Anthropic{Models: map[string]ai.ModelOptions{
 ```
 
 The current model list is at
-https://platform.claude.com/docs/en/about-claude/models/overview.
+https://platform.claude.com/docs/en/models/overview.
 
 ## Config
 
@@ -110,8 +111,10 @@ The API reference is at https://platform.claude.com/docs/en/api/overview.
 
 ## Live tests
 
-Live tests are skipped unless `ANTHROPIC_API_KEY` is set:
+Live tests are skipped unless `GENKIT_LIVE` and `ANTHROPIC_API_KEY` are set.
+`GENKIT_LIVE=1` runs the standard cases, and `GENKIT_LIVE=all` adds the
+expensive ones, such as a request to every curated model:
 
 ```bash
-go test -v ./plugins/anthropic
+GENKIT_LIVE=1 go test -v ./plugins/anthropic
 ```
