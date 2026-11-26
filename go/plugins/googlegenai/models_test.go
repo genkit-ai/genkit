@@ -69,6 +69,43 @@ func TestNewGeminiModelsResolveToRegisteredEntries(t *testing.T) {
 	}
 }
 
+// gemmaModels are the concrete Gemma models registered for Google AI, with
+// the labels from their model cards. Matching the JS google-genai plugin they
+// advertise the standard Gemini capabilities (Gemma 4 supports function
+// calling, system instructions and image input per its model card). The
+// Gemma-specific behavior, stripping prior thoughts, is covered in
+// gemma_test.go.
+var gemmaModels = map[string]string{
+	gemma426bA4bIT: "Gemma 4 26B A4B",
+	gemma431bIT:    "Gemma 4 31B",
+}
+
+func TestGemmaModelOptions(t *testing.T) {
+	for name, label := range gemmaModels {
+		t.Run(name, func(t *testing.T) {
+			if got := ClassifyModel(name); got != ModelTypeGemini {
+				t.Errorf("ClassifyModel = %v, want ModelTypeGemini", got)
+			}
+			opts := GetModelOptions(name, googleAIProvider)
+			if hitUnknownModelFallback(opts, name) {
+				t.Fatalf("Label = %q: fell through to the unknown-model fallback, the model is not registered", opts.Label)
+			}
+			if want := "Google AI - " + label; opts.Label != want {
+				t.Errorf("Label = %q, want %q", opts.Label, want)
+			}
+			if opts.Stage != ai.ModelStageStable {
+				t.Errorf("Stage = %q, want %q", opts.Stage, ai.ModelStageStable)
+			}
+			if opts.Supports != &Multimodal {
+				t.Errorf("Supports = %#v, want Multimodal", opts.Supports)
+			}
+			if opts.ConfigSchema == nil {
+				t.Error("ConfigSchema is nil")
+			}
+		})
+	}
+}
+
 // TestNewGeminiModelsProviderSplit pins that both backends register the same
 // Gemini models. gemini-3.1-flash-lite used to be withheld from Google AI, but
 // the Gemini API documents it as stable there, so the split is gone.
@@ -136,6 +173,17 @@ func TestNewlyRegisteredModels(t *testing.T) {
 		}
 		if !slices.Contains(googleAIModels, name) {
 			t.Errorf("googleAIModels missing %q", name)
+		}
+	}
+}
+
+func TestGemmaModelsRegisteredForGoogleAIOnly(t *testing.T) {
+	for name := range gemmaModels {
+		if !slices.Contains(googleAIModels, name) {
+			t.Errorf("googleAIModels missing %q", name)
+		}
+		if slices.Contains(vertexAIModels, name) {
+			t.Errorf("vertexAIModels should not contain %q (Gemma is Google AI only)", name)
 		}
 	}
 }

@@ -176,7 +176,10 @@ Genkit automatically discovers available models supported by the [Go GenAI SDK](
 Commonly used models include:
 
 - **Gemini Series**: `gemini-flash-latest`, `gemini-3.7-flash`, `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`
+- **Gemma Series** (Google AI only): `gemma-4-26b-a4b-it`, `gemma-4-31b-it`
 - **Veo Series**: `veo-3.1-generate-preview`
+
+> **Gemma:** The Gemma models are served by the Gemini API only, so they are registered for the Google AI backend and not for Vertex AI. Gemma does not accept previous thoughts, so on Google AI the plugin leaves reasoning parts and thought signatures out of the history it sends to a `gemma-*` model. Other `gemma-*` IDs resolve with the same default Gemini capabilities as any unlisted model, which you can correct through the `Models` field below.
 
 > **Note:** You can use any model ID supported by the underlying SDK. For a complete and up-to-date list of models and their specific capabilities, refer to the [Google Generative AI models documentation](https://ai.google.dev/gemini-api/docs/models). On Vertex AI, see the [Vertex AI model documentation](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models).
 

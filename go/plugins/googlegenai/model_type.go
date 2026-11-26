@@ -35,7 +35,7 @@ func ClassifyModel(name string) ModelType {
 		// multimodalembedding, gemini-embedding-*. Checked before the gemini
 		// prefix so gemini-embedding-* classifies as an embedder, not a model.
 		return ModelTypeEmbedder
-	case strings.HasPrefix(name, "gemini"), strings.HasPrefix(name, "gemma"):
+	case strings.HasPrefix(name, "gemini"), isGemmaModelName(name):
 		return ModelTypeGemini
 	case isTunedGeminiName(name):
 		// Vertex tuned Gemini models, addressed either by `endpoints/ID` or a
