@@ -41,6 +41,11 @@ func listActions(ctx context.Context, client *genai.Client, c catalog) []api.Act
 		actions = append(actions, newVeoModel(client, name, c.modelOptions(name)).Desc())
 	}
 
+	// Virtual try-on models
+	for _, name := range models.virtualTryOn {
+		actions = append(actions, newModel(client, name, c.modelOptions(name)).Desc())
+	}
+
 	// Embedders
 	for _, name := range models.embedders {
 		opts := c.embedderOptions(name)
@@ -72,6 +77,11 @@ func resolveAction(client *genai.Client, c catalog, atype api.ActionType, id str
 	case api.ActionTypeModel:
 		// Veo models should not be resolved as regular models
 		if mt == ModelTypeVeo {
+			return nil
+		}
+		// Virtual try-on is served only by Vertex AI; refuse it at
+		// registration rather than failing on the first call.
+		if mt == ModelTypeVirtualTryOn && client.ClientConfig().Backend != genai.BackendVertexAI {
 			return nil
 		}
 		return newModel(client, id, c.modelOptions(id))

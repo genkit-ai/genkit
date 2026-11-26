@@ -168,6 +168,34 @@ var gvcOverrides = internal.SchemaOverrides{
 	},
 }
 
+// ricOverrides controls dev UI presentation of [genai.RecontextImageConfig],
+// the config of the virtual try-on models. The call takes no prompt, so the
+// prompt-shaping fields the image config has are absent here.
+var ricOverrides = internal.SchemaOverrides{
+	Descriptions: map[string]string{
+		"numberOfImages":           "Number of try-on images to generate.",
+		"baseSteps":                "Number of sampling steps. Higher values improve image quality at the cost of latency.",
+		"seed":                     "Deterministic seed for image generation. Cannot be combined with addWatermark.",
+		"safetyFilterLevel":        "How strictly to block unsafe content. Lower thresholds (e.g. BLOCK_LOW_AND_ABOVE) block more aggressively.",
+		"personGeneration":         "Controls generation of people: ALLOW_ALL, ALLOW_ADULT (no minors), or DONT_ALLOW.",
+		"outputMimeType":           "MIME type of the generated image (e.g. image/png, image/jpeg).",
+		"outputCompressionQuality": "JPEG compression quality (only applies when outputMimeType is image/jpeg).",
+		"addWatermark":             "Whether to embed a SynthID watermark in the generated images.",
+		"enhancePrompt":            "Lets the service rewrite the prompt for better results. Not supported by virtual try-on, which takes no prompt.",
+		"outputGcsUri":             "Cloud Storage URI to write generated images to. When unset, images are returned inline.",
+		"labels":                   "User-defined key/value metadata used to break down billed charges.",
+		"httpOptions":              "Per-request HTTP overrides — base URL, API version, headers, timeout — applied on top of plugin-level defaults.",
+
+		// httpOptions sub-fields.
+		"httpOptions.baseUrl":              "Overrides the plugin-configured API endpoint for this request.",
+		"httpOptions.apiVersion":           "Overrides the plugin-configured API version for this request (e.g. v1, v1beta).",
+		"httpOptions.timeout":              "Per-request timeout in milliseconds.",
+		"httpOptions.headers":              "Additional HTTP headers to send with this request.",
+		"httpOptions.extraBody":            "Extra fields merged into the request body. Must match the underlying REST API's shape.",
+		"httpOptions.baseUrlResourceScope": "Scope at which baseUrl applies (PROJECT, LOCATION, etc.). Vertex AI only.",
+	},
+}
+
 // overridesFor returns the overrides matching a config struct value, or a zero
 // (no-op) value for unknown types.
 func overridesFor(config any) internal.SchemaOverrides {
@@ -178,6 +206,8 @@ func overridesFor(config any) internal.SchemaOverrides {
 		return gicOverrides
 	case genai.GenerateVideosConfig, *genai.GenerateVideosConfig:
 		return gvcOverrides
+	case genai.RecontextImageConfig, *genai.RecontextImageConfig:
+		return ricOverrides
 	}
 	return internal.SchemaOverrides{}
 }
