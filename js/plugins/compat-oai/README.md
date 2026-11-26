@@ -76,11 +76,9 @@ const response = await ai.generate({
   model: openAI.model('gpt-5'),
   prompt: 'Extract the answer from the text.',
   output: {
-    schema: z
-      .object({
-        answer: z.string(),
-      })
-      .strict(),
+    schema: z.object({
+      answer: z.string(),
+    }),
   },
   config: {
     strict: true,
@@ -90,7 +88,7 @@ const response = await ai.generate({
 console.log(response.output);
 ```
 
-Apply `.strict()` to every object in the schema; Genkit does not automatically set `additionalProperties: false`.
+With `strict: true`, Genkit sets `additionalProperties: false` on every object in the schema, so `.strict()` is optional. This applies to any host configured through `openAICompatible`, not only OpenAI. Strict mode still rejects some schemas, such as ones with optional fields (`.optional()`) or `z.record`.
 See the [Structured Outputs guide](https://developers.openai.com/api/docs/guides/structured-outputs).
 
 OpenAI only accepts an object at the root of a schema, so `openAI()` sends any other schema (an array, enum or scalar) as the `value` property of an object and unwraps the reply. `response.output` and the streamed chunks hold the value itself, but `response.raw` is the reply as OpenAI sent it, so its message content is still `{"value": ...}`.

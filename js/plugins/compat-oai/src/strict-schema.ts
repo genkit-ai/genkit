@@ -1,5 +1,5 @@
 /**
- * Copyright 2025 Google LLC
+ * Copyright 2026 Google LLC
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,10 +16,13 @@
 
 type JsonSchema = Record<string, unknown>;
 
-/** Keywords whose value is a single subschema. */
-const SCHEMA_KEYWORDS = ['items', 'not', 'if', 'then', 'else'];
-/** Keywords whose value is a list of subschemas. */
-const SCHEMA_LIST_KEYWORDS = ['anyOf', 'oneOf', 'allOf', 'prefixItems'];
+// Only keywords where closing each subschema on its own keeps the schema's
+// meaning. Under allOf, not and if/then/else it would not, and strict mode
+// rejects those anyway.
+
+/** Keywords whose value is a list of subschemas. `items` is one in its
+ * array form (a tuple). */
+const SCHEMA_LIST_KEYWORDS = ['anyOf', 'oneOf', 'prefixItems', 'items'];
 /** Keywords whose value maps names to subschemas. */
 const SCHEMA_MAP_KEYWORDS = ['properties', '$defs', 'definitions'];
 
@@ -37,22 +40,13 @@ function isSchema(value: unknown): value is JsonSchema {
 }
 
 /**
- * Returns a copy of `schema` with `additionalProperties: false` on every
- * object schema that allows additional properties by default or with `true`.
- *
- * OpenAI's strict structured output rejects any object schema whose
- * `additionalProperties` isn't `false`, and genkit's zod conversion emits
- * `true` for every `z.object`. Under strict mode such a schema always fails
- * with a 400, so closing it only changes requests that couldn't succeed.
- * A schema-valued `additionalProperties` (e.g. `z.record`) is left alone:
- * strict mode can't express it, and the host's error is clearer than a
- * silent change.
+ * OpenAI strict structured output requires `additionalProperties: false` on
+ * every object. A schema-valued `additionalProperties` is kept, and objects
+ * inside it are closed.
  */
 export function closeObjectSchemas(schema: JsonSchema): JsonSchema {
   const out: JsonSchema = { ...schema };
-  for (const key of SCHEMA_KEYWORDS) {
-    if (isSchema(out[key])) out[key] = closeObjectSchemas(out[key]);
-  }
+  if (isSchema(out.items)) out.items = closeObjectSchemas(out.items);
   for (const key of SCHEMA_LIST_KEYWORDS) {
     const list = out[key];
     if (Array.isArray(list)) {

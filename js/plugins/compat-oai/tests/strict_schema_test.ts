@@ -1,5 +1,5 @@
 /**
- * Copyright 2025 Google LLC
+ * Copyright 2026 Google LLC
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,7 +15,9 @@
  */
 
 import { describe, expect, it } from '@jest/globals';
+import { z } from 'genkit';
 import type { GenerateRequest } from 'genkit/model';
+import { toJsonSchema } from 'genkit/schema';
 import { toOpenAIRequestBody } from '../src/model';
 import { closeObjectSchemas } from '../src/strict-schema';
 
@@ -51,6 +53,49 @@ describe('closeObjectSchemas', () => {
     expect(closed.properties.tuple.prefixItems[0].additionalProperties).toBe(
       false
     );
+  });
+
+  it('closes objects in a tuple', () => {
+    const closed = closeObjectSchemas({
+      type: 'array',
+      items: [person, { type: 'string' }],
+    }) as any;
+    expect(closed.items[0].additionalProperties).toBe(false);
+    expect(closed.items[1]).toStrictEqual({ type: 'string' });
+  });
+
+  it('leaves subschemas under allOf, not and if/then/else open', () => {
+    const schema = {
+      type: 'object',
+      properties: { a: { type: 'string' } },
+      additionalProperties: false,
+      allOf: [person],
+      not: person,
+      if: person,
+      then: person,
+      else: person,
+    };
+    expect(closeObjectSchemas(schema)).toStrictEqual(schema);
+  });
+
+  it('closes every object in a schema converted from zod', () => {
+    const schema = toJsonSchema({
+      schema: z.object({
+        name: z.string(),
+        address: z.object({ city: z.string() }),
+        tags: z.array(z.object({ label: z.string() })),
+        pair: z.tuple([z.object({ x: z.number() }), z.string()]),
+        pick: z.union([z.object({ a: z.string() }), z.number()]),
+      }),
+    }) as any;
+    expect(schema.additionalProperties).toBe(true);
+    const closed = closeObjectSchemas(schema) as any;
+    expect(closed.additionalProperties).toBe(false);
+    const p = closed.properties;
+    expect(p.address.additionalProperties).toBe(false);
+    expect(p.tags.items.additionalProperties).toBe(false);
+    expect(p.pair.items[0].additionalProperties).toBe(false);
+    expect(p.pick.anyOf[0].additionalProperties).toBe(false);
   });
 
   it('closes objects in $defs and definitions', () => {
