@@ -47,9 +47,9 @@ describe('docs CLI commands', () => {
       await docsList.parseAsync(['node', 'docs:list']);
       const output = stdoutLines.join('\n');
       expect(docsUtils.detectProjectLanguage).toHaveBeenCalled();
-      expect(output).toContain('Genkit Documentation Index (python):');
       expect(output).toContain('Path: python/flows.md');
       expect(stderrLines).toEqual([
+        'Genkit Documentation Index (python):\n',
         "Use 'genkit docs:read <path>' to read a document.",
       ]);
     });
@@ -59,8 +59,11 @@ describe('docs CLI commands', () => {
 
       await docsList.parseAsync(['node', 'docs:list', 'dart']);
       const output = stdoutLines.join('\n');
-      expect(output).toContain('Genkit Documentation Index (dart):');
       expect(output).toContain('Path: dart/flows.md');
+      expect(stderrLines).toEqual([
+        'Genkit Documentation Index (dart):\n',
+        "Use 'genkit docs:read <path>' to read a document.",
+      ]);
     });
   });
 
@@ -72,6 +75,9 @@ describe('docs CLI commands', () => {
       const output = stdoutLines.join('\n');
       expect(docsUtils.detectProjectLanguage).toHaveBeenCalled();
       expect(output).toContain('Path: go/flows.md');
+      expect(stderrLines).toEqual([
+        expect.stringContaining('matching documents for "Flows":'),
+      ]);
     });
 
     it('respects an explicit [language] argument over the detected project language', async () => {

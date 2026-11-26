@@ -44,7 +44,7 @@ export const docsList = new Command('docs:list')
         return;
       }
 
-      writeStdout(`Genkit Documentation Index (${lang}):\n`);
+      writeStderr(`Genkit Documentation Index (${lang}):\n`);
       fileList.forEach((file) => {
         const doc = documents[file];
         writeStdout(`${clc.bold(doc.title)}`);
@@ -84,7 +84,7 @@ export const docsSearch = new Command('docs:search')
         return;
       }
 
-      writeStdout(
+      writeStderr(
         `Found ${results.length} matching documents for "${query}":\n`
       );
       results.forEach((r) => {

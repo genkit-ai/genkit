@@ -103,7 +103,7 @@ describe('trace:list command', () => {
         neq: { 'genkitx:ignore-trace': ['true'] },
       },
     });
-    expect(output.writeStdout).toHaveBeenCalledWith('Found 1 trace:\n');
+    expect(output.writeStderr).toHaveBeenCalledWith('Found 1 trace:\n');
     expect(output.writeStdout).toHaveBeenCalledWith('ID:       trace-1');
     expect(output.writeStdout).toHaveBeenCalledWith('Status:   success');
     expect(output.writeStdout).toHaveBeenCalledWith(

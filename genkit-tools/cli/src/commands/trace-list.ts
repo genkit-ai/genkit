@@ -97,7 +97,7 @@ export const traceList = new Command('trace:list')
           return;
         }
 
-        writeStdout(
+        writeStderr(
           `Found ${response.traces.length} trace${response.traces.length === 1 ? '' : 's'}:\n`
         );
 

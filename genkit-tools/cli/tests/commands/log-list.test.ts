@@ -84,7 +84,7 @@ describe('log:list command', () => {
       continuationToken: undefined,
       filter: undefined,
     });
-    expect(output.writeStdout).toHaveBeenCalledWith('Found 1 log:\n');
+    expect(output.writeStderr).toHaveBeenCalledWith('Found 1 log:\n');
     expect(output.writeStdout).toHaveBeenCalledWith(
       expect.stringContaining('INFO')
     );

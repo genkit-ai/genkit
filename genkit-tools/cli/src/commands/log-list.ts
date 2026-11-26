@@ -107,7 +107,7 @@ export const logList = new Command('log:list')
             writeStdout(JSON.stringify(log));
           });
         } else {
-          writeStdout(
+          writeStderr(
             `Found ${logs.length} log${logs.length === 1 ? '' : 's'}:\n`
           );
           logs.forEach((log) => {
