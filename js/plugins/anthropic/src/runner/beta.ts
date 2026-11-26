@@ -134,7 +134,8 @@ interface BetaRunnerTypes extends RunnerTypes {
   StreamingRequestBody: BetaMessageCreateParamsStreaming;
   Tool: BetaTool;
   MessageParam: BetaMessageParam;
-  ToolResponseContent: BetaTextBlockParam | BetaImageBlockParam;
+  ToolResponseContent:
+    BetaTextBlockParam | BetaImageBlockParam | BetaRequestDocumentBlock;
   ContentBlockParam:
     | BetaTextBlockParam
     | BetaImageBlockParam
@@ -282,7 +283,7 @@ export class BetaRunner extends BaseRunner<BetaRunnerTypes> {
       const betaResult: BetaToolResultBlockParam = {
         type: 'tool_result',
         tool_use_id: part.toolResponse.ref,
-        content: [this.toAnthropicToolResponseContent(part)],
+        content: this.toAnthropicToolResultContent(part),
       };
       return betaResult;
     }

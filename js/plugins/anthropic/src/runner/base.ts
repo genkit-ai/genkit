@@ -293,6 +293,72 @@ export abstract class BaseRunner<ApiTypes extends RunnerTypes> {
     };
   }
 
+  /**
+   * Converts a tool response to `tool_result` content blocks: the output (see
+   * {@link toAnthropicToolResponseContent}) followed by every `content` part.
+   */
+  protected toAnthropicToolResultContent(
+    part: Part
+  ): RunnerToolResponseContent<ApiTypes>[] {
+    const content = part.toolResponse?.content ?? [];
+    const blocks: RunnerToolResponseContent<ApiTypes>[] = [];
+    if (part.toolResponse?.output !== undefined || content.length === 0) {
+      blocks.push(this.toAnthropicToolResponseContent(part));
+    }
+    for (const p of content) {
+      blocks.push(this.toAnthropicToolResultContentPart(p));
+    }
+    return blocks;
+  }
+
+  /**
+   * Converts a tool response content part to a `tool_result` block. Parts
+   * Anthropic doesn't accept in tool results (audio, video, other files,
+   * resources) are degraded to text notes instead of failing the request (the
+   * plugin declares `supports.toolResponseContent`).
+   */
+  protected toAnthropicToolResultContentPart(
+    part: Part
+  ): RunnerToolResponseContent<ApiTypes> {
+    const text = (text: string) =>
+      ({ type: 'text', text }) as RunnerToolResponseContent<ApiTypes>;
+    if (part.text !== undefined) return text(part.text);
+    if (part.resource) return text(`Resource: ${part.resource.uri}`);
+    if (!part.media) return text(JSON.stringify(part.data ?? part));
+
+    const { url } = part.media;
+    const inline = this.extractDataFromBase64Url(url);
+    const contentType = part.media.contentType || inline?.contentType || '';
+    if (contentType === 'application/pdf') {
+      return {
+        type: 'document',
+        source: this.toPdfDocumentSource({ url, contentType }),
+      } as RunnerToolResponseContent<ApiTypes>;
+    }
+    if (this.isMediaType(contentType)) {
+      return {
+        type: 'image',
+        source: inline
+          ? { type: 'base64', data: inline.data, media_type: contentType }
+          : { type: 'url', url },
+      } as RunnerToolResponseContent<ApiTypes>;
+    }
+    if (contentType.startsWith('text/') && inline) {
+      try {
+        return text(
+          new TextDecoder().decode(
+            Uint8Array.from(atob(inline.data), (c) => c.charCodeAt(0))
+          )
+        );
+      } catch {
+        // Malformed base64: fall through to the note below.
+      }
+    }
+    return text(
+      `[${contentType || 'media'} content omitted: not supported by the model]`
+    );
+  }
+
   protected getThinkingSignature(part: Part): string | undefined {
     const metadata = part.metadata as Record<string, unknown> | undefined;
     return typeof metadata?.thoughtSignature === 'string'

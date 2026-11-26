@@ -69,6 +69,7 @@ export const GENERIC_MODEL_INFO: ModelInfo = {
   supports: {
     multiturn: true,
     tools: true,
+    toolResponseContent: true,
     media: true,
     systemRole: true,
     output: ['text'],
@@ -82,6 +83,7 @@ export const ADVANCED_MODEL_INFO: ModelInfo = {
   supports: {
     multiturn: true,
     tools: true,
+    toolResponseContent: true,
     media: true,
     systemRole: true,
     output: ['text', 'json'],

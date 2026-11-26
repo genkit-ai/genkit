@@ -134,6 +134,92 @@ describe('BetaRunner.toAnthropicMessageContent', () => {
     assert.deepStrictEqual(result.content, [{ type: 'text', text: 'done' }]);
   });
 
+  it('maps tool response content into tool_result blocks', () => {
+    const runner = createRunner();
+    const part: Part = {
+      toolResponse: {
+        name: 'files',
+        ref: 'tool-files',
+        output: { status: 'ok' },
+        content: [
+          { text: 'caption' },
+          {
+            media: {
+              url: 'data:image/png;base64,AAA',
+              contentType: 'image/png',
+            },
+          },
+          { media: { url: 'data:application/pdf;base64,JVBERi0=' } },
+          {
+            media: {
+              url: `data:text/plain;base64,${Buffer.from('hello').toString('base64')}`,
+              contentType: 'text/plain',
+            },
+          },
+          {
+            media: {
+              url: 'data:audio/wav;base64,UklG',
+              contentType: 'audio/wav',
+            },
+          },
+          { resource: { uri: 'demo://resource/1' } },
+        ],
+      },
+    };
+
+    const result = (runner as any).toAnthropicMessageContent(part);
+
+    assert.deepStrictEqual(result.content, [
+      { type: 'text', text: '{"status":"ok"}' },
+      { type: 'text', text: 'caption' },
+      {
+        type: 'image',
+        source: { type: 'base64', data: 'AAA', media_type: 'image/png' },
+      },
+      {
+        type: 'document',
+        source: {
+          type: 'base64',
+          media_type: 'application/pdf',
+          data: 'JVBERi0=',
+        },
+      },
+      { type: 'text', text: 'hello' },
+      {
+        type: 'text',
+        text: '[audio/wav content omitted: not supported by the model]',
+      },
+      { type: 'text', text: 'Resource: demo://resource/1' },
+    ]);
+  });
+
+  it('maps content-only tool responses without an output block', () => {
+    const runner = createRunner();
+    const part: Part = {
+      toolResponse: {
+        name: 'shot',
+        ref: 'tool-shot',
+        content: [
+          {
+            media: {
+              url: 'https://example.com/a.png',
+              contentType: 'image/png',
+            },
+          },
+        ],
+      },
+    };
+
+    const result = (runner as any).toAnthropicMessageContent(part);
+
+    assert.deepStrictEqual(result.content, [
+      {
+        type: 'image',
+        source: { type: 'url', url: 'https://example.com/a.png' },
+      },
+    ]);
+  });
+
   it('should handle WEBP image data URLs', () => {
     const runner = createRunner();
     const part: Part = {
