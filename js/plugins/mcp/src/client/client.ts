@@ -28,7 +28,6 @@ import {
   type DynamicResourceAction,
   type ExecutablePrompt,
   type Genkit,
-  type MultipartToolAction,
   type PromptGenerateOptions,
   type ToolAction,
 } from 'genkit';
@@ -40,6 +39,7 @@ import {
   transportFrom,
 } from '../util/index.js';
 import { fetchDynamicResources } from '../util/resource.js';
+import type { McpToolResponseMode } from '../util/tools.js';
 
 interface McpServerRef {
   client: Client;
@@ -54,6 +54,13 @@ export interface McpServerControls {
 
   // MCP roots configuration. See: https://modelcontextprotocol.io/docs/concepts/roots
   roots?: Root[];
+
+  /**
+   * How this server's tool results are mapped to Genkit tool responses.
+   * Overrides the client/host-level `toolResponseMode`. See
+   * {@link McpToolResponseMode}.
+   */
+  toolResponseMode?: McpToolResponseMode;
 }
 
 export type McpStdioServerConfig = StdioServerParameters & {
@@ -90,7 +97,7 @@ export type McpServerConfig = (
  * Configuration options for an individual `GenkitMcpClient` instance.
  * This defines how the client connects to a single MCP server and how it behaves.
  */
-export type McpClientOptions<M extends boolean = false> = {
+export type McpClientOptions = {
   /** Client name to advertise to the server. */
   name: string;
   /** Name for the server, defaults to the server's advertised name. */
@@ -102,23 +109,19 @@ export type McpClientOptions<M extends boolean = false> = {
    */
   version?: string;
   /**
-   * If true, tool responses from the MCP server will be returned in their raw
-   * MCP format. Otherwise (default), they are processed and potentially
-   * simplified for better compatibility with Genkit's typical data structures.
+   * How tool results are mapped to Genkit tool responses. Defaults to
+   * `'content'`. See {@link McpToolResponseMode}.
    */
-  rawToolResponses?: boolean;
-  /** If true, tools will be registered as multipart tool.v2 actions. */
-  multipart?: M;
+  toolResponseMode?: McpToolResponseMode;
   /** The server configuration to connect. */
   mcpServer: McpServerConfig;
   /** Manually supply a session id for HTTP streaming clients if desired. */
   sessionId?: string;
 };
 
-export type McpClientOptionsWithCache<M extends boolean = false> =
-  McpClientOptions<M> & {
-    cacheTtlMillis?: number;
-  };
+export type McpClientOptionsWithCache = McpClientOptions & {
+  cacheTtlMillis?: number;
+};
 
 /**
  * Represents a client connection to a single MCP (Model Context Protocol) server.
@@ -128,7 +131,7 @@ export type McpClientOptionsWithCache<M extends boolean = false> =
  * An instance of `GenkitMcpClient` is typically managed by a `GenkitMcpHost`
  * when dealing with multiple MCP server connections.
  */
-export class GenkitMcpClient<Multipart extends boolean = false> {
+export class GenkitMcpClient {
   _server?: McpServerRef;
   private _dynamicActionProvider: DynamicActionProviderAction | undefined;
 
@@ -137,8 +140,7 @@ export class GenkitMcpClient<Multipart extends boolean = false> {
   readonly suppliedServerName?: string;
   private version: string;
   private serverConfig: McpServerConfig;
-  private rawToolResponses?: boolean;
-  private multipart?: boolean;
+  private toolResponseMode?: McpToolResponseMode;
   private disabled: boolean;
   private roots?: Root[];
 
@@ -148,13 +150,13 @@ export class GenkitMcpClient<Multipart extends boolean = false> {
   }[] = [];
   private _ready = false;
 
-  constructor(options: McpClientOptions<Multipart>) {
+  constructor(options: McpClientOptions) {
     this.name = options.name;
     this.suppliedServerName = options.serverName;
     this.version = options.version || '1.0.0';
     this.serverConfig = options.mcpServer;
-    this.rawToolResponses = !!options.rawToolResponses;
-    this.multipart = !!options.multipart;
+    this.toolResponseMode =
+      options.mcpServer.toolResponseMode ?? options.toolResponseMode;
     this.disabled = !!options.mcpServer.disabled;
     this.roots = options.mcpServer.roots;
     this.sessionId = options.sessionId;
@@ -345,41 +347,21 @@ export class GenkitMcpClient<Multipart extends boolean = false> {
    * Fetches all tools available through this client, if the server
    * configuration is not disabled.
    */
-  async getActiveTools(
-    ai: Genkit
-  ): Promise<(Multipart extends true ? MultipartToolAction : ToolAction)[]> {
+  async getActiveTools(ai: Genkit): Promise<ToolAction[]> {
     await this.ready();
 
     if (this._server) {
       const capabilities = this._server.client.getServerCapabilities();
       if (capabilities?.tools) {
-        if (this.multipart) {
-          const tools = await fetchDynamicTools(ai, this._server.client, {
-            rawToolResponses: this.rawToolResponses,
-            multipart: true,
-            serverName: this.serverName,
-            name: this.name,
-          });
-          return tools as unknown as (Multipart extends true
-            ? MultipartToolAction
-            : ToolAction)[];
-        } else {
-          const tools = await fetchDynamicTools(ai, this._server.client, {
-            rawToolResponses: this.rawToolResponses,
-            multipart: false,
-            serverName: this.serverName,
-            name: this.name,
-          });
-          return tools as unknown as (Multipart extends true
-            ? MultipartToolAction
-            : ToolAction)[];
-        }
+        return fetchDynamicTools(ai, this._server.client, {
+          toolResponseMode: this.toolResponseMode,
+          serverName: this.serverName,
+          name: this.name,
+        });
       }
     }
 
-    return [] as unknown as (Multipart extends true
-      ? MultipartToolAction
-      : ToolAction)[];
+    return [];
   }
 
   /**

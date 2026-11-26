@@ -239,7 +239,8 @@ describe('createMcpHost', () => {
         { context: { mcp: { _meta: { soMeta: true } } } }
       );
       assert.deepStrictEqual(response, {
-        output: 'yep {"foo":"bar"}{"soMeta":true}',
+        // The fake transport echoes _meta as an extra text block.
+        content: [{ text: 'yep {"foo":"bar"}' }, { text: '{"soMeta":true}' }],
       });
     });
 
@@ -257,64 +258,41 @@ describe('createMcpHost', () => {
       const response = await tool({
         foo: 'bar',
       });
-      assert.deepStrictEqual(response, { output: 'yep {"foo":"bar"}' });
+      assert.deepStrictEqual(response, {
+        content: [{ text: 'yep {"foo":"bar"}' }],
+      });
     });
 
-    it('should call the multipart tool', async () => {
-      const multipartHost = createMcpHost({
-        name: 'test-multipart-host',
-        multipart: true,
-        mcpServers: {
-          'test-server': {
-            transport: fakeTransport,
-          },
-        },
-      });
-      await multipartHost.ready();
-
+    it('maps every content block to a part (content mode)', async () => {
       fakeTransport.callToolResult = {
         content: [
+          { type: 'text', text: 'yep' },
+          { type: 'image', data: 'base64data', mimeType: 'image/png' },
           {
-            type: 'text',
-            text: 'yep {"foo":"bar"}',
-          },
-          {
-            type: 'image',
-            data: 'base64data',
-            mimeType: 'image/png',
+            type: 'resource',
+            resource: { uri: 'file:///foo.txt', text: 'hello resource' },
           },
           {
             type: 'resource',
-            resource: {
-              uri: 'file:///foo.txt',
-              text: 'hello resource',
-            },
+            resource: { uri: 'file:///blob.bin', blob: 'base64blob' },
           },
           {
-            type: 'resource',
-            resource: {
-              uri: 'file:///blob.bin',
-              blob: 'base64blob',
-              mimeType: 'application/octet-stream',
-            },
+            type: 'resource_link',
+            uri: 'demo://res/1',
+            name: 'Res 1',
+            mimeType: 'text/plain',
           },
         ],
-        _meta: {
-          someData: true,
-        },
+        structuredContent: { status: 'ok' },
+        _meta: { someData: true },
       };
 
-      const tools = await multipartHost.getActiveTools(ai);
-      const tool = tools[0];
-      const response = await tool(
-        { foo: 'bar' },
-        { context: { mcp: { _meta: { soMeta: true } } } }
-      );
+      const tool = (await clientHost.getActiveTools(ai))[0];
+      const response = await tool({ foo: 'bar' });
 
       assert.deepStrictEqual(response, {
-        output:
-          'yep {"foo":"bar"}\n\nResource (file:///foo.txt):\nhello resource{"soMeta":true}',
         content: [
+          { text: 'yep' },
           {
             media: {
               url: 'data:image/png;base64,base64data',
@@ -322,91 +300,144 @@ describe('createMcpHost', () => {
             },
           },
           {
+            text: 'hello resource',
+            metadata: { mcp: { uri: 'file:///foo.txt' } },
+          },
+          {
             media: {
               url: 'data:application/octet-stream;base64,base64blob',
               contentType: 'application/octet-stream',
             },
+            metadata: { mcp: { uri: 'file:///blob.bin' } },
+          },
+          {
+            resource: { uri: 'demo://res/1' },
+            metadata: { mcp: { name: 'Res 1', mimeType: 'text/plain' } },
           },
         ],
         metadata: {
-          someData: true,
+          mcp: {
+            structuredContent: { status: 'ok' },
+            _meta: { someData: true },
+          },
         },
       });
     });
 
-    it('should call the multipart tool and handle errors', async () => {
-      const multipartHost = createMcpHost({
-        name: 'test-multipart-host',
-        multipart: true,
-        mcpServers: {
-          'test-server': {
-            transport: fakeTransport,
-          },
-        },
-      });
-      await multipartHost.ready();
-
+    it('keeps error content and flags the error', async () => {
       fakeTransport.callToolResult = {
         isError: true,
-        content: [
-          {
-            type: 'text',
-            text: 'Simulated tool failure',
-          },
-        ],
-        _meta: {
-          errorCode: 500,
-        },
+        content: [{ type: 'text', text: 'Simulated tool failure' }],
       };
 
-      const tools = await multipartHost.getActiveTools(ai);
-      const tool = tools[0];
+      const tool = (await clientHost.getActiveTools(ai))[0];
       const response = await tool({ foo: 'bar' });
 
       assert.deepStrictEqual(response, {
-        output: { error: 'Simulated tool failure' },
-        metadata: {
-          errorCode: 500,
-        },
+        content: [{ text: 'Simulated tool failure' }],
+        metadata: { mcp: { isError: true } },
       });
     });
 
-    it('should return raw tool response when rawToolResponses is true alongside multipart', async () => {
-      const multipartHost = createMcpHost({
-        name: 'test-multipart-host',
-        multipart: true,
-        rawToolResponses: true,
+    it('sends structuredContent as text when the server returns no content', async () => {
+      fakeTransport.callToolResult = {
+        content: [],
+        structuredContent: { status: 'ok' },
+      };
+
+      const tool = (await clientHost.getActiveTools(ai))[0];
+      const response = await tool({ foo: 'bar' });
+
+      assert.deepStrictEqual(response, {
+        content: [{ text: '{"status":"ok"}' }],
+        metadata: { mcp: { structuredContent: { status: 'ok' } } },
+      });
+    });
+
+    it('uses structuredContent as output in structured mode (per-server override)', async () => {
+      const structuredHost = createMcpHost({
+        name: 'test-structured-host',
+        mcpServers: {
+          'test-server': {
+            transport: fakeTransport,
+            toolResponseMode: 'structured',
+          },
+        },
+      });
+      await structuredHost.ready();
+
+      fakeTransport.callToolResult = {
+        content: [
+          { type: 'text', text: '{"code":1,"status":"ok"}' },
+          { type: 'text', text: 'All good.' },
+        ],
+        // Same data, different key order: still recognized as a duplicate.
+        structuredContent: { status: 'ok', code: 1 },
+      };
+
+      const tool = (await structuredHost.getActiveTools(ai))[0];
+      const response = await tool({ foo: 'bar' });
+      await structuredHost.close();
+
+      assert.deepStrictEqual(response, {
+        output: { status: 'ok', code: 1 },
+        content: [{ text: 'All good.' }],
+        metadata: { mcp: { structuredContent: { status: 'ok', code: 1 } } },
+      });
+    });
+
+    it('returns the raw result in raw mode', async () => {
+      const rawHost = createMcpHost({
+        name: 'test-raw-host',
+        toolResponseMode: 'raw',
         mcpServers: {
           'test-server': {
             transport: fakeTransport,
           },
         },
       });
-      await multipartHost.ready();
+      await rawHost.ready();
 
       fakeTransport.callToolResult = {
-        content: [
-          {
-            type: 'text',
-            text: 'yep {"foo":"bar"}',
-          },
-        ],
+        content: [{ type: 'text', text: 'yep {"foo":"bar"}' }],
       };
 
-      const tools = await multipartHost.getActiveTools(ai);
-      const tool = tools[0];
+      const tool = (await rawHost.getActiveTools(ai))[0];
       const response = await tool({ foo: 'bar' });
+      await rawHost.close();
 
-      // Genkit output schema for multipart expects `{ output: ... }` when returning raw responses
       assert.deepStrictEqual(response, {
-        output: {
-          content: [
-            {
-              type: 'text',
-              text: 'yep {"foo":"bar"}',
-            },
-          ],
+        output: { content: [{ type: 'text', text: 'yep {"foo":"bar"}' }] },
+      });
+    });
+
+    it('supports a custom mapping function', async () => {
+      const customHost = createMcpHost({
+        name: 'test-custom-host',
+        toolResponseMode: (result, tool) => ({
+          output: {
+            tool: `${tool.server}/${tool.name}`,
+            n: result.content.length,
+          },
+        }),
+        mcpServers: {
+          'test-server': {
+            transport: fakeTransport,
+          },
         },
+      });
+      await customHost.ready();
+
+      fakeTransport.callToolResult = {
+        content: [{ type: 'text', text: 'yep' }],
+      };
+
+      const tool = (await customHost.getActiveTools(ai))[0];
+      const response = await tool({ foo: 'bar' });
+      await customHost.close();
+
+      assert.deepStrictEqual(response, {
+        output: { tool: 'test-server/testTool', n: 1 },
       });
     });
   });

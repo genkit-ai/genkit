@@ -53,7 +53,10 @@ logger.setLogLevel('debug'); // Set the logging level to debug for detailed outp
 
 export const mcpHost = defineMcpHost(ai, {
   name: 'test-mcp-manager',
-  multipart: true,
+  // How MCP tool results become tool responses. 'content' (the default) sends
+  // only `content` to the model and keeps `structuredContent` in
+  // `metadata.mcp`; servers can override it (see `structured` below).
+  toolResponseMode: 'content',
   mcpServers: {
     'git-client': {
       command: 'uvx',
@@ -70,6 +73,12 @@ export const mcpHost = defineMcpHost(ai, {
     everything: {
       command: 'npx',
       args: ['-y', '@modelcontextprotocol/server-everything'],
+    },
+    // Same server, but its `structuredContent` becomes the tool `output`.
+    structured: {
+      command: 'npx',
+      args: ['-y', '@modelcontextprotocol/server-everything'],
+      toolResponseMode: 'structured',
     },
     inmemory: {
       transport: clientTransport,
@@ -166,6 +175,34 @@ ai.defineFlow('dynamic-disable-enable', async (q) => {
     '<br/>After Enable: <br/>' +
     text3
   );
+});
+
+ai.defineFlow('tool-response-modes', async () => {
+  const tools = await mcpHost.getActiveTools(ai);
+  const find = (name: string) => tools.find((t) => t.__action.name === name)!;
+  const input = { location: 'Chicago' };
+
+  // 'content': the model sees the text content; structured data is in metadata.
+  const content = await find('everything/get-structured-content')(input);
+  // 'structured': structuredContent is the tool output.
+  const structured = await find('structured/get-structured-content')(input);
+
+  return {
+    content: {
+      content: content.content,
+      structuredContent: content.metadata?.mcp,
+    },
+    structured: { output: structured.output, content: structured.content },
+  };
+});
+
+ai.defineFlow('tool-media', async () => {
+  // MCP image content reaches the model as media parts.
+  const { text } = await ai.generate({
+    prompt: 'Call get-tiny-image and describe the image in one sentence.',
+    tools: ['test-mcp-manager:tool/everything/get-tiny-image'],
+  });
+  return text;
 });
 
 ai.defineFlow('test-resource', async (q) => {

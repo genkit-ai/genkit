@@ -73,11 +73,12 @@ The `createMcpHost` function initializes a `GenkitMcpHost` instance, which handl
 
 -   **`name`**: (optional, string) A name for the MCP host plugin itself. Defaults to 'genkitx-mcp'.
 -   **`version`**: (optional, string) The version of the MCP host plugin. Defaults to "1.0.0".
--   **`rawToolResponses`**: (optional, boolean) When `true`, tool responses are returned in their raw MCP format; otherwise, they are processed for Genkit compatibility. Defaults to `false`.
+-   **`toolResponseMode`**: (optional) How MCP tool results map to Genkit tool responses. Defaults to `'content'`. See [Tool responses](#tool-responses).
 -   **`mcpServers`**: (required, object) An object where each key is a client-side name (namespace) for an MCP server, and the value is the configuration for that server.
 
     Each server configuration object can include:
     -   **`disabled`**: (optional, boolean) If `true`, this server connection will not be attempted. Defaults to `false`.
+    -   **`toolResponseMode`**: (optional) Overrides the host-level `toolResponseMode` for this server.
     -   One of the following server connection configurations:
         -   Parameters for launching a local server process using the stdio MCP transport.
             -   **`command`**: (required, string) Shell command path for launching the MCP server (e.g., `npx`, `python`).
@@ -102,7 +103,7 @@ const myFsClient = createMcpClient({
     command: 'npx',
     args: ['-y', '@modelcontextprotocol/server-filesystem', process.cwd()],
   },
-  // rawToolResponses: true, // Optional: get raw MCP responses
+  // toolResponseMode: 'raw', // Optional: get raw MCP responses
 });
 
 // In your Genkit configuration:
@@ -132,7 +133,30 @@ const ai = genkit({
 The `createMcpClient` function takes an `McpClientOptions` object:
 -   **`name`**: (required, string) A unique name for this client instance. This name will be used as the namespace for its tools and prompts.
 -   **`version`**: (optional, string) Version for this client instance. Defaults to "1.0.0".
--   Additionally, it supports all options from `McpServerConfig` (e.g., `disabled`, `rawToolResponses`, and transport configurations), as detailed in the `createMcpHost` options section.
+-   Additionally, it supports all options from `McpServerConfig` (e.g., `disabled`, `toolResponseMode`, and transport configurations), as detailed in the `createMcpHost` options section.
+
+### Tool responses
+
+MCP tool results (`CallToolResult`) become Genkit tool responses according to `toolResponseMode`:
+
+-   **`'content'`** (default): only `content` reaches the model, each block mapped to a part (text, images and audio as media, embedded resources as text or media, resource links as resource parts). `structuredContent`, `isError` and `_meta` are kept for your code under `metadata.mcp`. This follows the MCP spec, where `content` stands on its own.
+-   **`'structured'`**: `structuredContent` becomes the tool response `output` (the model sees it), and `content` is mapped as above minus text blocks that just repeat `structuredContent` as JSON. Useful for servers whose text is only a summary.
+-   **`'raw'`**: the whole `CallToolResult` becomes the `output`.
+-   A function `(result, { server, name }) => ({ output?, content?, metadata? })` for custom mapping.
+
+```ts
+const mcpHost = defineMcpHost(ai, {
+  name: 'myMcpClients',
+  mcpServers: {
+    fs: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', process.cwd()] },
+    analytics: { url: 'https://analytics.example.com/mcp', toolResponseMode: 'structured' },
+  },
+});
+
+// Reading structured data in the default 'content' mode:
+const { metadata } = await someMcpTool(input);
+metadata?.mcp?.structuredContent;
+```
 
 ### Using MCP Actions (Tools, Prompts)
 
