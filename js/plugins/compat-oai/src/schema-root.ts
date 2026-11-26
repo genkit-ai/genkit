@@ -312,13 +312,10 @@ function matchPrefix(text: string): number | 'partial' | 'no' {
 export class WrapperStreamUnwrapper {
   private started = false;
   private wrapped = false;
-  private valueStarted = false;
-  private passing = false;
   private head = '';
   private held = '';
 
   push(delta: string): string {
-    if (this.passing) return delta;
     if (this.started) return this.release(delta);
     this.head += delta;
     const match = matchPrefix(this.head);
@@ -334,33 +331,15 @@ export class WrapperStreamUnwrapper {
   }
 
   private release(text: string): string {
-    let all = this.held + text;
-    // Whitespace after the colon belongs to the wrapper too, however much of
-    // it arrives after the opening matched.
-    if (this.wrapped && !this.valueStarted) {
-      all = all.trimStart();
-      this.valueStarted = all.length > 0;
-    }
+    const all = this.held + text;
     const tail = /[\s}]*$/.exec(all)![0];
     this.held = tail;
     return all.slice(0, all.length - tail.length);
   }
 
-  /** Gives up unwrapping, for a reply that turns out not to be the output
-   * (text before a tool call), and returns the text held back so far. */
-  passThrough(): string {
-    const out = this.head + this.held;
-    this.started = true;
-    this.passing = true;
-    this.head = '';
-    this.held = '';
-    return out;
-  }
-
   /** Emits what is left: anything held except the wrapper's closing brace
    * (and the whitespace around it). */
   flush(): string {
-    if (this.passing) return '';
     const text = this.started ? this.held : this.head;
     this.head = '';
     this.held = '';

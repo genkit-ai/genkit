@@ -799,13 +799,6 @@ export function openAIModelRunner(
                 unwrapper = new WrapperStreamUnwrapper();
                 unwrappers.set(chunk.index, unwrapper);
               }
-              // Text beside a tool call is a preamble, not the output, so once
-              // a tool call arrives the rest of the text passes through as
-              // sent.
-              if (chunk.delta?.tool_calls?.length) {
-                const rest = unwrapper.passThrough();
-                if (rest) content = [{ text: rest }, ...content];
-              }
               content = unwrapStreamedText(content, unwrapper);
             }
             options?.sendChunk!({

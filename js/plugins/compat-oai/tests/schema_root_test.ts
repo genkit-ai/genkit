@@ -541,25 +541,6 @@ describe('WrapperStreamUnwrapper', () => {
     expect(run(spaced.split(''))).toBe('1');
   });
 
-  it('drops whitespace after the colon however the stream is split', () => {
-    const spaced = '{ "value" :\n  [1, 2] }\n';
-    for (let i = 0; i <= spaced.length; i++) {
-      expect(run([spaced.slice(0, i), spaced.slice(i)])).toBe('[1, 2]');
-    }
-    expect(run(spaced.split(''))).toBe('[1, 2]');
-  });
-
-  it('passes text through unchanged after passThrough', () => {
-    const u = new WrapperStreamUnwrapper();
-    expect(u.push('Let me check. ')).toBe('Let me check.');
-    expect(u.passThrough()).toBe(' ');
-    expect(u.push('More }')).toBe('More }');
-    expect(u.flush()).toBe('');
-    const opening = new WrapperStreamUnwrapper();
-    expect(opening.push('{"val')).toBe('');
-    expect(opening.passThrough()).toBe('{"val');
-  });
-
   it('passes through output that is not a wrapper', () => {
     expect(run(['[1,', '2]'])).toBe('[1,2]');
     expect(run('{"valuable":1}'.split(''))).toBe('{"valuable":1}');
@@ -774,23 +755,17 @@ describe('openAIModelRunner with a wrapped root', () => {
       });
       let text = '';
       let sawToolRequest = false;
-      let textAfterToolRequest = false;
       const res = await runner()(toolRequest, {
         streamingRequested: true,
         sendChunk: (c) => {
           for (const p of c.content) {
-            if (p.text) {
-              text += p.text;
-              textAfterToolRequest ||= sawToolRequest;
-            }
+            if (p.text) text += p.text;
             if (p.toolRequest) sawToolRequest = true;
           }
         },
       });
       expect(text).toBe('Let me check. ');
       expect(sawToolRequest).toBe(true);
-      // The preamble's trailing space is not held back to the end.
-      expect(textAfterToolRequest).toBe(false);
       expect(res.message?.content).toContainEqual({
         toolRequest: { ref: 'call_1', name: 'lookup', input: {} },
       });
