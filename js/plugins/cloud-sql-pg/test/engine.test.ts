@@ -19,15 +19,15 @@ import {
   Connector,
   IpAddressTypes,
 } from '@google-cloud/cloud-sql-connector';
-import { afterAll, beforeAll, describe, expect, test } from '@jest/globals';
 import * as dotenv from 'dotenv';
 import knex from 'knex';
+import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import {
   Column,
   PostgresEngine,
   PostgresEngineArgs,
   VectorStoreTableArgs,
-} from '../src/engine';
+} from '../src/engine.js';
 
 dotenv.config();
 

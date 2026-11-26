@@ -15,14 +15,6 @@
  * limitations under the License.
  */
 
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  jest,
-} from '@jest/globals';
 import type {
   GenerateRequest,
   GenerateResponseChunkData,
@@ -38,6 +30,7 @@ import type {
   ChatCompletionMessageToolCall,
   ChatCompletionRole,
 } from 'openai/resources/index.mjs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ModelRequestBuilder,
   fromOpenAIChoice,
@@ -48,15 +41,15 @@ import {
   toOpenAIRequestBody,
   toOpenAIRole,
   toOpenAITextAndMedia,
-} from '../src/model';
-import { FakeOpenAIServer } from './fake_openai_server';
+} from '../src/model.js';
+import { FakeOpenAIServer } from './fake_openai_server.js';
 
-jest.mock('genkit/model', () => {
+vi.mock('genkit/model', async () => {
   const originalModule =
-    jest.requireActual<typeof import('genkit/model')>('genkit/model');
+    await vi.importActual<typeof import('genkit/model')>('genkit/model');
   return {
     ...originalModule,
-    defineModel: jest.fn((_, runner) => {
+    defineModel: vi.fn((_, runner) => {
       return runner;
     }),
   };
@@ -1874,7 +1867,7 @@ describe('openAIModelRunner', () => {
     const openaiClient = {
       chat: {
         completions: {
-          create: jest.fn(async () => ({
+          create: vi.fn(async () => ({
             choices: [{ message: { content: 'response' } }],
           })),
         },
@@ -1898,7 +1891,7 @@ describe('openAIModelRunner', () => {
       beta: {
         chat: {
           completions: {
-            stream: jest.fn(
+            stream: vi.fn(
               () =>
                 // Simulate OpenAI SDK request streaming
                 new (class {
@@ -1928,8 +1921,8 @@ describe('openAIModelRunner', () => {
         },
       },
     };
-    const sendChunk = jest.fn();
-    const abortSignal = jest.fn();
+    const sendChunk = vi.fn();
+    const abortSignal = vi.fn();
     const runner = openAIModelRunner(
       'gpt-4o',
       openaiClient as unknown as OpenAI
@@ -1990,7 +1983,7 @@ describe('openAIModelRunner', () => {
       beta: {
         chat: {
           completions: {
-            stream: jest.fn(
+            stream: vi.fn(
               () =>
                 new (class {
                   i = 0;
@@ -2089,7 +2082,7 @@ describe('openAIModelRunner', () => {
       beta: {
         chat: {
           completions: {
-            stream: jest.fn(
+            stream: vi.fn(
               () =>
                 new (class {
                   i = 0;
@@ -2174,7 +2167,7 @@ describe('openAIModelRunner', () => {
       beta: {
         chat: {
           completions: {
-            stream: jest.fn(
+            stream: vi.fn(
               () =>
                 new (class {
                   i = 0;
@@ -2290,7 +2283,7 @@ describe('openAIModelRunner', () => {
       beta: {
         chat: {
           completions: {
-            stream: jest.fn(
+            stream: vi.fn(
               () =>
                 new (class {
                   i = 0;
@@ -2365,7 +2358,7 @@ describe('openAIModelRunner', () => {
     const openaiClient = {
       chat: {
         completions: {
-          create: jest.fn(async () => ({
+          create: vi.fn(async () => ({
             choices: [{ message: { content: 'response' } }],
           })),
         },
@@ -2595,7 +2588,7 @@ describe('openAIModelRunner', () => {
         const openaiClient = {
           chat: {
             completions: {
-              create: jest.fn(async () => {
+              create: vi.fn(async () => {
                 throw tc.error;
               }),
             },
@@ -2618,7 +2611,7 @@ describe('openAIModelRunner', () => {
       const openaiClient = {
         chat: {
           completions: {
-            create: jest.fn(async () => {
+            create: vi.fn(async () => {
               throw error;
             }),
           },

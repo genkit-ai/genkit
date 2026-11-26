@@ -19,11 +19,11 @@
 // only smoke-tests the thin Firebase wrapper, verifying it derives a Firestore
 // instance from a Firebase app and round-trips a snapshot end to end.
 
-import { afterEach, beforeEach, describe, it } from '@jest/globals';
 import * as assert from 'assert';
 import { deleteApp, initializeApp, type App } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
-import { FirestoreSessionStore } from '../src/session-store/firestore';
+import { afterEach, beforeEach, describe, it } from 'vitest';
+import { FirestoreSessionStore } from '../src/session-store/firestore.js';
 
 describe('FirestoreSessionStore (Firebase wrapper)', () => {
   let app: App;

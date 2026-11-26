@@ -15,19 +15,19 @@
  * limitations under the License.
  */
 
-import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { modelRef, type GenerateRequest } from 'genkit/model';
 import type OpenAI from 'openai';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   ChatCompletionCommonConfigSchema,
   defineCompatOpenAIModel,
   toOpenAIRequestBody,
-} from '../src/model';
-import { SUPPORTED_GPT_MODELS } from '../src/openai/gpt';
+} from '../src/model.js';
+import { SUPPORTED_GPT_MODELS } from '../src/openai/gpt.js';
 
 describe('gptModel', () => {
   afterEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   it('should correctly define supported GPT models', () => {

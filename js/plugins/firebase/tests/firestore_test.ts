@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-import { afterEach, beforeEach, describe, it } from '@jest/globals';
 import * as assert from 'assert';
 import { deleteApp, initializeApp, type App } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
-import { FirestoreStreamManager } from '../src/stream-manager/firestore';
+import { afterEach, beforeEach, describe, it } from 'vitest';
+import { FirestoreStreamManager } from '../src/stream-manager/firestore.js';
 
 describe('FirestoreStreamManager', () => {
   let app: App;
@@ -38,7 +38,7 @@ describe('FirestoreStreamManager', () => {
   afterEach(async () => {
     const db = getFirestore(app);
     // Only delete this suite's own collection so it can run in parallel with
-    // the other Firestore emulator test files (jest runs files concurrently
+    // the other Firestore emulator test files (test files run concurrently
     // against the one shared emulator).
     await db.recursiveDelete(db.collection('genkit-streams'));
     await deleteApp(app);
@@ -121,37 +121,34 @@ describe('FirestoreStreamManager', () => {
     assert.ok(data.updatedAt);
   });
 
-  it('should subscribe to a stream', (done) => {
+  it('should subscribe to a stream', async () => {
     const streamId = 'test-stream-4';
     const chunks: any[] = [];
-    let finalOutput: any;
 
     const db = getFirestore(app);
     const streamDoc = db.collection('genkit-streams').doc(streamId);
-    streamDoc
-      .set({
-        stream: [
-          { type: 'chunk', chunk: { foo: 'bar' } },
-          { type: 'chunk', chunk: { bar: 'baz' } },
-          { type: 'done', output: { result: 'success' } },
-        ],
-      })
-      .then(() => {
-        streamManager.subscribe(streamId, {
+    await streamDoc.set({
+      stream: [
+        { type: 'chunk', chunk: { foo: 'bar' } },
+        { type: 'chunk', chunk: { bar: 'baz' } },
+        { type: 'done', output: { result: 'success' } },
+      ],
+    });
+
+    const finalOutput = await new Promise((resolve, reject) => {
+      streamManager
+        .subscribe(streamId, {
           onChunk: (chunk) => {
             chunks.push(chunk);
           },
-          onDone: (output) => {
-            finalOutput = output;
-            assert.deepStrictEqual(chunks, [{ foo: 'bar' }, { bar: 'baz' }]);
-            assert.deepStrictEqual(finalOutput, { result: 'success' });
-            done();
-          },
-          onError(error) {
-            console.log(error);
-          },
-        });
-      });
+          onDone: resolve,
+          onError: reject,
+        })
+        .catch(reject);
+    });
+
+    assert.deepStrictEqual(chunks, [{ foo: 'bar' }, { bar: 'baz' }]);
+    assert.deepStrictEqual(finalOutput, { result: 'success' });
   });
 
   it('should throw an error when subscribing to a non-existent stream', async () => {
@@ -168,26 +165,25 @@ describe('FirestoreStreamManager', () => {
     );
   });
 
-  it('should time out when no chunks are received', (done) => {
+  it('should time out when no chunks are received', async () => {
     const streamId = 'test-stream-5';
     streamManager = new FirestoreStreamManager({
       firebaseApp: app,
       collection: 'genkit-streams',
       timeout: 100,
     });
-    streamManager.open(streamId).then(() => {
-      streamManager.subscribe(streamId, {
-        onChunk: () => {
-          assert.fail('should not have received a chunk');
-        },
-        onDone: () => {
-          assert.fail('should not have received done');
-        },
-        onError: (err) => {
-          assert.strictEqual(err.status, 'DEADLINE_EXCEEDED');
-          done();
-        },
-      });
+    await streamManager.open(streamId);
+
+    const err = await new Promise<any>((resolve, reject) => {
+      streamManager
+        .subscribe(streamId, {
+          onChunk: () => reject(new Error('should not have received a chunk')),
+          onDone: () => reject(new Error('should not have received done')),
+          onError: resolve,
+        })
+        .catch(reject);
     });
+
+    assert.strictEqual(err.status, 'DEADLINE_EXCEEDED');
   });
 });
