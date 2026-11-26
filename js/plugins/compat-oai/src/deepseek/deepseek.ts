@@ -22,16 +22,44 @@ import {
   compatOaiModelRef,
 } from '../model.js';
 
+const DeepSeekReasoningEffortSchema = z
+  .enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
+  .describe(
+    'How much effort the model spends thinking before answering. ' +
+      'Sent as the top-level `reasoning_effort` request field.'
+  );
+const DeepSeekThinkingSchema = z
+  .object({
+    type: z.enum(['adaptive', 'enabled', 'disabled']),
+  })
+  .describe(
+    'Whether the model thinks before answering: always (enabled), ' +
+      'never (disabled), or as needed (adaptive).'
+  );
+
 /** DeepSeek Custom configuration schema. */
 export const DeepSeekChatCompletionConfigSchema =
   ChatCompletionCommonConfigSchema.extend({
     maxTokens: z.number().int().min(1).max(8192).optional(),
+    reasoningEffort: DeepSeekReasoningEffortSchema.optional(),
+    thinking: DeepSeekThinkingSchema.optional(),
   });
 
+interface DeepSeekRequestFieldsBeyondOpenAISdk {
+  reasoning_effort?: z.infer<typeof DeepSeekReasoningEffortSchema>;
+  thinking?: z.infer<typeof DeepSeekThinkingSchema>;
+}
+
 export const deepSeekRequestBuilder: ModelRequestBuilder = (req, params) => {
-  const { maxTokens } = req.config;
+  const { maxTokens, reasoningEffort, thinking } = req.config as z.infer<
+    typeof DeepSeekChatCompletionConfigSchema
+  >;
   // DeepSeek still uses max_tokens
   params.max_tokens = maxTokens;
+  Object.assign(params, {
+    reasoning_effort: reasoningEffort,
+    thinking,
+  } satisfies DeepSeekRequestFieldsBeyondOpenAISdk);
 };
 
 /** DeepSeek ModelRef helper, with DeepSeek specific config. */
