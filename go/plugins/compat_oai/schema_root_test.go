@@ -88,6 +88,29 @@ func TestWrapSchemaRoot(t *testing.T) {
 	}
 }
 
+func TestWrapSchemaRootMovesRefWithSiblingsIntoAnyOf(t *testing.T) {
+	person := map[string]any{"type": "object", "properties": map[string]any{"name": map[string]any{"type": "string"}}}
+	schema := map[string]any{
+		"$ref":        "#/$defs/Person",
+		"description": "a person",
+		"$defs":       map[string]any{"Person": person},
+	}
+	got := wrapSchemaRoot(schema)
+	want := map[string]any{
+		"type": "object",
+		"properties": map[string]any{"value": map[string]any{
+			"anyOf":       []any{map[string]any{"$ref": "#/$defs/Person"}},
+			"description": "a person",
+		}},
+		"required":             []any{"value"},
+		"additionalProperties": false,
+		"$defs":                map[string]any{"Person": person},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("wrapSchemaRoot() = %v, want %v", got, want)
+	}
+}
+
 func TestWrapSchemaRootKeepsDefinitionsAtRoot(t *testing.T) {
 	schema := map[string]any{
 		"$schema":     "https://json-schema.org/draft/2020-12/schema",
@@ -334,6 +357,17 @@ func TestUnwrapText(t *testing.T) {
 		{`[1,2]`, `[1,2]`},
 		{`{"other":1}`, `{"other":1}`},
 		{`not json`, `not json`},
+		// Only an object whose sole key is value is the wrapper.
+		{`{"value":1,"other":2}`, `{"value":1,"other":2}`},
+		{`{"other":2,"value":1}`, `{"other":2,"value":1}`},
+		// A reply cut off mid-value (finish_reason length) loses the prefix.
+		{`{"value":[{"name":"a"},{"na`, `[{"name":"a"},{"na`},
+		{`{"value": [1, 2`, `[1, 2`},
+		// A fenced reply, with or without its closing fence.
+		{"```json\n{\"value\":[1,2]}\n```", `[1,2]`},
+		{"```\n{\"value\":[1,2]}\n```\n", `[1,2]`},
+		{"```json\n{\"value\":[1,", `[1,`},
+		{"```json\n[1,2]\n```", "```json\n[1,2]\n```"},
 	} {
 		if got := unwrapText(tc.in); got != tc.want {
 			t.Errorf("unwrapText(%q) = %q, want %q", tc.in, got, tc.want)
@@ -514,6 +548,33 @@ func TestGenerateUnwrapsWrappedRoot(t *testing.T) {
 	}
 	if got := resp.Message.Text(); got != `[{"name":"a"}]` {
 		t.Errorf("response text = %q, want the unwrapped array", got)
+	}
+}
+
+func TestGenerateStreamUnwrapsCutOffReply(t *testing.T) {
+	events := []string{
+		deltaEvent(`{"value":[`),
+		deltaEvent(`{"name":"a"},{"na`),
+		`{"id":"1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{},"finish_reason":"length"}]}`,
+	}
+	client, _ := newWrappedRootServer(t, events, "")
+	req := wrappedRootRequest()
+	var streamed strings.Builder
+	resp, err := NewModelGenerator(client, "m").withObjectSchemaRoot(true).
+		WithMessages(req.Messages).
+		Generate(context.Background(), req, func(_ context.Context, c *ai.ModelResponseChunk) error {
+			streamed.WriteString(c.Text())
+			return nil
+		})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	want := `[{"name":"a"},{"na`
+	if got := streamed.String(); got != want {
+		t.Errorf("streamed text = %q, want %q", got, want)
+	}
+	if got := resp.Message.Text(); got != want {
+		t.Errorf("final text = %q, want %q", got, want)
 	}
 }
 

@@ -596,8 +596,6 @@ func (g *ModelGenerator) applyResponseFormat(output *ai.ModelOutputConfig) {
 			format = jsonSchemaFormat(output.Schema)
 		}
 	}
-	// A host that takes only an object at the schema root gets any other
-	// root wrapped in one, and the reply is unwrapped.
 	if g.objectSchemaRoot && format.OfJSONSchema != nil && output.Format == ai.OutputFormatJSON && !hasObjectRoot(output.Schema) {
 		format = jsonSchemaFormat(wrapSchemaRoot(output.Schema))
 		g.unwrapRoot = true
@@ -721,8 +719,6 @@ func (g *ModelGenerator) generateStream(ctx context.Context, req *ai.ModelReques
 	// instead, which ends the stream rather than reaching this loop. See
 	// [wrapStreamError].
 	var failure map[string]any
-	// A wrapped schema's reply streams as {"value": ...}; the unwrapper
-	// strips that so chunks read as the caller's value.
 	var unwrapper *streamUnwrapper
 	if g.unwrapRoot {
 		unwrapper = &streamUnwrapper{}
@@ -765,7 +761,6 @@ func (g *ModelGenerator) generateStream(ctx context.Context, req *ai.ModelReques
 			modelChunk.Content = append(modelChunk.Content, ai.NewReasoningPart(reasoningDelta, nil))
 		}
 
-		// Handle content delta
 		// Text beside a tool call is a preamble, not the output, so once a
 		// tool call arrives the rest of the text passes through as sent, as
 		// it does in the final message.
@@ -775,6 +770,7 @@ func (g *ModelGenerator) generateStream(ctx context.Context, req *ai.ModelReques
 			}
 			unwrapper = nil
 		}
+		// Handle content delta
 		if text := chunk.Choices[0].Delta.Content; text != "" {
 			if unwrapper != nil {
 				text = unwrapper.push(text)

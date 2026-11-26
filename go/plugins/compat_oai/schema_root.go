@@ -18,6 +18,7 @@ package compat_oai
 
 import (
 	"encoding/json"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -32,13 +33,6 @@ func init() {
 	}
 }
 
-// Some OpenAI-compatible hosts (OpenAI itself, and gateways that forward to
-// it) only accept a json_schema response format whose root is type "object".
-// For those hosts, a schema with any other root (array, enum, scalar, anyOf)
-// is sent wrapped in an object, and the reply is unwrapped before the
-// framework parses it. Only the openai plugin turns this on, through
-// [hooks.SetObjectSchemaRoot].
-
 // wrapperKey is the property that holds the caller's value inside the
 // wrapper object.
 const wrapperKey = "value"
@@ -48,9 +42,10 @@ const wrapperKey = "value"
 // which OpenAI accepts unwrapped. Anything else, including properties without
 // a type (which also allows non-object values), is wrapped.
 //
-// OpenAI rejects a $ref with sibling keywords (description, title, ...) and
-// does not resolve escaped names (~0, ~1) at the root, while non-strict
-// requests accept both once wrapped, so those roots are wrapped.
+// A root $ref with sibling keywords (description, title, ...) is wrapped,
+// because strict mode rejects those siblings; see [wrapSchemaRoot]. So is a
+// $ref to an escaped name (~0, ~1), which OpenAI does not resolve wrapped or
+// not.
 func hasObjectRoot(schema map[string]any) bool {
 	seen := map[string]bool{}
 	node := schema
@@ -100,6 +95,9 @@ func topLevelDef(ref string) (keyword, name string, ok bool) {
 // schema, which is no longer the root. Strict hosts accept references only to
 // top-level definitions, so each referenced subschema moves into $defs and
 // both its old place and every reference to it point there instead.
+//
+// Strict mode also rejects a $ref with sibling keywords, so a root $ref that
+// has them moves into a one-branch anyOf, which takes siblings.
 func wrapSchemaRoot(schema map[string]any) map[string]any {
 	h := newRefHoister(schema)
 	inner := make(map[string]any, len(schema))
@@ -122,7 +120,14 @@ func wrapSchemaRoot(schema map[string]any) map[string]any {
 			inner[k] = v
 		}
 	}
-	wrapped["properties"] = map[string]any{wrapperKey: h.walk(inner, "#")}
+	value := h.walk(inner, "#")
+	if v, ok := value.(map[string]any); ok {
+		if ref, isRef := v["$ref"]; isRef && len(v) > 1 && v["anyOf"] == nil {
+			delete(v, "$ref")
+			v["anyOf"] = []any{map[string]any{"$ref": ref}}
+		}
+	}
+	wrapped["properties"] = map[string]any{wrapperKey: value}
 	if len(h.defs) > 0 {
 		wrapped["$defs"] = h.defs
 	}
@@ -347,19 +352,37 @@ func uniqueDefName(ref string, taken map[string]bool) string {
 	return name
 }
 
+// fenced matches a reply in a markdown code fence; the closing fence may be
+// cut off.
+var fenced = regexp.MustCompile("(?s)^\\s*```(?:json)?\\s*(.*?)\\s*(?:```\\s*)?$")
+
 // unwrapText returns the wrapped value's JSON from text, or text unchanged
-// when it isn't a wrapper object. The value's raw JSON is kept as sent, so
-// key order and number formatting survive.
+// when it isn't a wrapper object (a host that ignored the schema may reply
+// with the bare value, or with an object that merely has a value key).
+//
+// The wrapper is stripped as text, as [streamUnwrapper] does, so a reply cut
+// off mid-value is unwrapped as far as it goes and the value keeps its key
+// order and number formatting.
 func unwrapText(text string) string {
+	body := text
+	if m := fenced.FindStringSubmatch(text); m != nil {
+		body = m[1]
+	}
 	var obj map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(text), &obj); err != nil {
+	if err := json.Unmarshal([]byte(body), &obj); err == nil {
+		if _, ok := obj[wrapperKey]; !ok || len(obj) != 1 {
+			return text
+		}
+	} else if _, invalid := err.(*json.SyntaxError); !invalid {
+		// Valid JSON, but not an object.
 		return text
 	}
-	value, ok := obj[wrapperKey]
-	if !ok {
+	var u streamUnwrapper
+	unwrapped := u.push(body) + u.flush()
+	if unwrapped == body {
 		return text
 	}
-	return string(value)
+	return unwrapped
 }
 
 // prefixTokens is the wrapper's opening, as the tokens it is made of.
