@@ -18,7 +18,6 @@ import {
   CommittedTurnError,
   GenerateOptions,
   GenerateResponseData,
-  GenerationCommonConfigSchema,
   SessionRunner,
   defineAgent,
   defineCustomAgent,
@@ -266,11 +265,9 @@ export class GenkitBeta extends Genkit {
    */
   generateOperation<
     O extends GenkitSchema = GenkitSchema,
-    CustomOptions extends GenkitSchema = typeof GenerationCommonConfigSchema,
+    CustomOptions extends GenkitSchema = GenkitSchema,
   >(
-    opts:
-      | GenerateOptions<O, CustomOptions>
-      | PromiseLike<GenerateOptions<O, CustomOptions>>
+    opts: GenerateOptions<O, CustomOptions>
   ): Promise<Operation<GenerateResponseData>> {
     return generateOperation(this.registry, opts);
   }

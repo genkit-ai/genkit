@@ -24,9 +24,9 @@ const ai = genkit({
 });
 
 async function main() {
-  const { text } = await ai.generate(
-    'Invent a menu item for a pirate themed restaurant.'
-  );
+  const { text } = await ai.generate({
+    prompt: 'Invent a menu item for a pirate themed restaurant.',
+  });
   console.log(text);
 }
 
