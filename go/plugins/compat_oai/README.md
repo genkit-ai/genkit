@@ -197,6 +197,15 @@ format, since OpenAI accepts only an object at the schema root and rejects the
 rest with a 400. List `"array"` and `"enum"` only where the provider takes
 those roots, as xAI, Kimi, and Anthropic's compatible endpoint do.
 
+The `json` format sends whatever schema it is given, and `ai.WithOutputType`
+of a slice gives it an array root. OpenAI accepts only an object at the root,
+so the `openai` plugin sends a schema whose root is not `type: "object"` (an
+array or `anyOf`) wrapped as the single property `value` of an object, and
+unwraps the reply, streamed or not, before the framework parses it.
+Subschemas that local `$ref`s point at move into `$defs`, because strict mode
+accepts references only to top-level definitions. Other providers send the
+schema as given.
+
 A provider that answers with a misleading HTTP code, such as an unknown model
 answered with 400 rather than 404, sets `OpenAICompatible.ClassifyError` to
 read the real status out of the error body, so retry and fallback middleware
