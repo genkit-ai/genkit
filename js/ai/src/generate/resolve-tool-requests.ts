@@ -19,7 +19,6 @@ import {
   GenkitError,
   getErrorMessage,
   stripUndefinedProps,
-  z,
 } from '@genkit-ai/core';
 import { logger } from '@genkit-ai/core/logging';
 import type { Registry } from '@genkit-ai/core/registry';
@@ -31,7 +30,7 @@ import type {
   ToolRequestPart,
   ToolResponsePart,
 } from '../model.js';
-import { MultipartToolResponseSchema, ToolResponse } from '../parts.js';
+import type { ToolResponse } from '../parts.js';
 
 import {
   ToolInterruptError,
@@ -225,29 +224,16 @@ export async function resolveToolRequest(
     ctx: ActionRunOptions<any>
   ): Promise<ToolResponsePart> => {
     // execute the tool and catch interrupts
-    const output = await tool(req.toolRequest.input, ctx as ToolRunOptions);
-    if (tool.__action.actionType === 'tool.v2') {
-      const multipartResponse = output as z.infer<
-        typeof MultipartToolResponseSchema
-      >;
-      return stripUndefinedProps({
-        toolResponse: {
-          name: req.toolRequest.name,
-          ref: req.toolRequest.ref,
-          output: multipartResponse.output,
-          content: multipartResponse.content,
-        } as ToolResponse,
-        metadata: multipartResponse.metadata,
-      });
-    } else {
-      return stripUndefinedProps({
-        toolResponse: {
-          name: req.toolRequest.name,
-          ref: req.toolRequest.ref,
-          output,
-        },
-      });
-    }
+    const response = await tool(req.toolRequest.input, ctx as ToolRunOptions);
+    return stripUndefinedProps({
+      toolResponse: {
+        name: req.toolRequest.name,
+        ref: req.toolRequest.ref,
+        output: response.output,
+        content: response.content,
+      } as ToolResponse,
+      metadata: response.metadata,
+    });
   };
 
   const initialCtx = runOptions ?? toRunOptions(part);

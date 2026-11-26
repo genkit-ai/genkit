@@ -55,7 +55,7 @@ const modelResponse = {
 
 const toolInfo = info({
   metadata: { name: 'getWeather', input: { city: 'SF' } },
-  labels: { 'genkit:metadata:subtype': 'tool' },
+  labels: { 'genkit:metadata:subtype': 'tool.v2' },
 });
 
 async function runAndGetSpan(
@@ -130,7 +130,7 @@ describe('GenAiInstrumentation', () => {
     const off = new GenAiInstrumentation({ tracer });
     const genericSpan = await runAndGetSpan(off, toolInfo, 'ok');
     assert.strictEqual(genericSpan.name, 'getWeather');
-    assert.strictEqual(genericSpan.attributes['genkit.action.type'], 'tool');
+    assert.strictEqual(genericSpan.attributes['genkit.action.type'], 'tool.v2');
 
     exporter.reset();
     const on = new GenAiInstrumentation({ tracer, emitToolSpans: true });
@@ -392,7 +392,7 @@ describe('GenAiInstrumentation', () => {
   it('forwards labels', async () => {
     const inst = new GenAiInstrumentation({ tracer, emitToolSpans: true });
     const labels = {
-      'genkit:metadata:subtype': 'tool',
+      'genkit:metadata:subtype': 'tool.v2',
       team: 'search',
       // A label must not clobber a GenAI attribute.
       'gen_ai.tool.name': 'spoofed',

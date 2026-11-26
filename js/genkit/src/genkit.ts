@@ -85,12 +85,7 @@ import {
   type RetrieverFn,
   type SimpleRetrieverOptions,
 } from '@genkit-ai/ai/retriever';
-import {
-  dynamicTool,
-  type MultipartToolAction,
-  type MultipartToolFn,
-  type ToolFn,
-} from '@genkit-ai/ai/tool';
+import { type MultipartToolFn, type ToolFn } from '@genkit-ai/ai/tool';
 import {
   GenkitError,
   ReflectionServer,
@@ -251,7 +246,7 @@ export class Genkit extends GenkitAI implements HasRegistry {
   defineTool<I extends GenkitSchema, O extends GenkitSchema>(
     config: { multipart: true } & ToolConfig<I, O>,
     fn: MultipartToolFn<I, O>
-  ): MultipartToolAction<I, O>;
+  ): ToolAction<I, O>;
 
   /**
    * Defines and registers a tool.
@@ -266,19 +261,8 @@ export class Genkit extends GenkitAI implements HasRegistry {
   defineTool<I extends GenkitSchema, O extends GenkitSchema>(
     config: ({ multipart?: true } & ToolConfig<I, O>) | string,
     fn: ToolFn<I, O> | MultipartToolFn<I, O>
-  ): ToolAction<I, O> | MultipartToolAction<I, O> {
-    return defineTool(this.registry, config as any, fn as any);
-  }
-
-  /**
-   * Defines a dynamic tool. Dynamic tools are just like regular tools ({@link Genkit.defineTool}) but will not be registered in the
-   * Genkit registry and can be defined dynamically at runtime.
-   */
-  dynamicTool<I extends GenkitSchema, O extends GenkitSchema>(
-    config: ToolConfig<I, O>,
-    fn?: ToolFn<I, O>
   ): ToolAction<I, O> {
-    return dynamicTool(config, fn) as ToolAction<I, O>;
+    return defineTool(this.registry, config as any, fn as any);
   }
 
   /**

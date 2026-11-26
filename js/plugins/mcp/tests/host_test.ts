@@ -238,7 +238,9 @@ describe('createMcpHost', () => {
         },
         { context: { mcp: { _meta: { soMeta: true } } } }
       );
-      assert.deepStrictEqual(response, 'yep {"foo":"bar"}{"soMeta":true}');
+      assert.deepStrictEqual(response, {
+        output: 'yep {"foo":"bar"}{"soMeta":true}',
+      });
     });
 
     it('should call the tool with _meta', async () => {
@@ -255,7 +257,7 @@ describe('createMcpHost', () => {
       const response = await tool({
         foo: 'bar',
       });
-      assert.deepStrictEqual(response, 'yep {"foo":"bar"}');
+      assert.deepStrictEqual(response, { output: 'yep {"foo":"bar"}' });
     });
 
     it('should call the multipart tool', async () => {

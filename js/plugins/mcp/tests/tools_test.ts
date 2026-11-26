@@ -47,7 +47,9 @@ describe('registerAllTools', () => {
       serverName: 'test-server',
     });
 
-    const action = await ai.registry.lookupAction('/tool/test-server/testTool');
+    const action = await ai.registry.lookupAction(
+      '/tool.v2/test-server/testTool'
+    );
     assert.ok(action);
 
     const result = await action(
@@ -56,7 +58,9 @@ describe('registerAllTools', () => {
     );
 
     // The fake transport appends the _meta object to the result content
-    assert.deepStrictEqual(result, 'response{"progressToken":"token-123"}');
+    assert.deepStrictEqual(result, {
+      output: 'response{"progressToken":"token-123"}',
+    });
   });
 
   it('should pass _meta from context to callTool request for multipart tools', async () => {

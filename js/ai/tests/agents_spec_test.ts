@@ -324,7 +324,7 @@ function setupHarness(
     inputSchema: z.object({ query: z.string() }),
     outputSchema: z.object({ answer: z.string() }),
   });
-  registry.registerAction('tool', interruptToolDef);
+  registry.registerAction('tool.v2', interruptToolDef);
 
   // restartTool is a regular tool that uses ToolInterruptError to pause
   // execution on first call, then succeeds on restart when `resumed`

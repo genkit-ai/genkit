@@ -148,7 +148,7 @@ export class GenkitMcpServer {
     const promptList: PromptAction[] = [];
     const resourceList: ResourceAction[] = [];
     for (const k in allActions) {
-      if (k.startsWith('/tool/')) {
+      if (k.startsWith('/tool.v2/')) {
         toolList.push(allActions[k] as ToolAction);
       } else if (k.startsWith('/prompt/')) {
         promptList.push(allActions[k] as PromptAction);
@@ -201,12 +201,15 @@ export class GenkitMcpServer {
         status: 'NOT_FOUND',
         message: `Tried to call tool '${req.params.name}' but it could not be found.`,
       });
-    const result = await tool(req.params.arguments);
+    const { output } = await tool(req.params.arguments);
     return {
       content: [
         {
           type: 'text',
-          text: typeof result === 'string' ? result : JSON.stringify(result),
+          text:
+            typeof output === 'string'
+              ? output
+              : (JSON.stringify(output) ?? ''),
         },
       ],
     };

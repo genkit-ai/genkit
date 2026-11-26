@@ -1696,7 +1696,7 @@ describe('agents middleware (async)', () => {
     // Whichever wins, the deadline or the follow's first read, the row is
     // settled and the report must say so: a timeout returns the current
     // statuses, not the follow's last look at them.
-    const out = await waitTool({
+    const { output: out } = await waitTool({
       taskIds: [`researcher:${task.snapshotId}`],
       timeoutSeconds: 0.000001,
     });
@@ -1831,13 +1831,13 @@ describe('agents middleware (async)', () => {
     const abortTool = def.tools!.find((t) => t.__action.name === ABORT_TOOL)!;
     const waitTool = def.tools!.find((t) => t.__action.name === WAIT_TOOL)!;
     const taskIds = [`researcher:${task.snapshotId}`];
-    const out = await abortTool({ taskIds });
+    const { output: out } = await abortTool({ taskIds });
     assert.strictEqual(out.tasks[0].status, 'aborting');
     assert.match(out.tasks[0].error, /cannot signal its worker/);
 
     // The worker runs to its end, and only then does the row settle.
     gate.release();
-    const settled = await waitTool({ taskIds });
+    const { output: settled } = await waitTool({ taskIds });
     assert.strictEqual(settled.tasks[0].status, 'aborted');
     assert.match(settled.tasks[0].error, /cannot signal its worker/);
     const row = await researcher.getSnapshotData({
@@ -2128,7 +2128,9 @@ describe('agents middleware (async)', () => {
       launchHistory([['researcher', `researcher:${task.snapshotId}`]])
     );
     const abortTool = def.tools!.find((t) => t.__action.name === ABORT_TOOL)!;
-    const out = await abortTool({ taskIds: [`researcher:${task.snapshotId}`] });
+    const { output: out } = await abortTool({
+      taskIds: [`researcher:${task.snapshotId}`],
+    });
     const report = out.tasks[0];
     assert.strictEqual(report.status, 'completed');
     assert.strictEqual(report.response, 'research complete');
@@ -2239,7 +2241,9 @@ describe('agents middleware (async)', () => {
     const checkTool = def.tools!.find((t) => t.__action.name === CHECK_TOOL)!;
     // Neither agent is registered, so each report fails at resolution and
     // names the agent the handle was parsed to.
-    const out = await checkTool({ taskIds: ['a:b:1234', 'a:5678', 'a:'] });
+    const { output: out } = await checkTool({
+      taskIds: ['a:b:1234', 'a:5678', 'a:'],
+    });
     assert.strictEqual(out.tasks[0].agent, 'a:b');
     assert.strictEqual(out.tasks[1].agent, 'a');
     assert.match(out.tasks[1].error, /not registered/);
@@ -2261,7 +2265,7 @@ describe('agents middleware (async)', () => {
     );
     const waitTool = def.tools!.find((t) => t.__action.name === WAIT_TOOL)!;
     // No timeoutSeconds: "until every task settles", which the bound caps.
-    const out = await waitTool({ taskIds: [taskId] });
+    const { output: out } = await waitTool({ taskIds: [taskId] });
     assert.strictEqual(out.timedOut, true);
     assert.strictEqual(out.tasks[0].status, 'pending');
     gate.release();
@@ -2285,7 +2289,7 @@ describe('agents middleware (async)', () => {
     const waitTool = def.tools!.find((t) => t.__action.name === WAIT_TOOL)!;
     const waiting = waitTool({ taskIds: [taskId] });
     setTimeout(gate.release, 50);
-    const out = await waiting;
+    const { output: out } = await waiting;
     assert.strictEqual(out.tasks[0].status, 'completed');
     assert.strictEqual(out.timedOut, undefined);
   });
@@ -2303,7 +2307,9 @@ describe('agents middleware (async)', () => {
       []
     );
     const abortTool = def.tools!.find((t) => t.__action.name === ABORT_TOOL)!;
-    const out = await abortTool({ taskIds: [`researcher:${task.snapshotId}`] });
+    const { output: out } = await abortTool({
+      taskIds: [`researcher:${task.snapshotId}`],
+    });
     assert.strictEqual(out.tasks[0].status, 'unknown');
     assert.match(out.tasks[0].error, /not issued in this conversation/);
     const row = await researcher.getSnapshotData({
@@ -2325,7 +2331,7 @@ describe('agents middleware (async)', () => {
       assert.ok(t, `tool ${name} should be registered`);
       // An omitted taskIds must decode: a required field would fail the whole
       // generate call rather than a turn the model can correct.
-      const out = await t!({});
+      const { output: out } = await t!({});
       assert.match(out.note, /No task IDs given/);
     }
   });
@@ -2732,7 +2738,7 @@ describe('agents middleware (continue)', () => {
       mintedBy(taskId, CONTINUE_TOOL)
     );
     const checkTool = def.tools!.find((t) => t.__action.name === CHECK_TOOL)!;
-    const out = await checkTool({ taskIds: [taskId] });
+    const { output: out } = await checkTool({ taskIds: [taskId] });
     assert.strictEqual(out.tasks[0].status, 'completed');
   });
 
@@ -3087,7 +3093,7 @@ describe('agents middleware (continue)', () => {
     const delegate = def.tools!.find(
       (t) => t.__action.name === 'delegate_to_keeper'
     )!;
-    const delegated = await delegate({ task: 'fresh' });
+    const { output: delegated } = await delegate({ task: 'fresh' });
     assert.strictEqual(delegated.response, 'kept going');
   });
 

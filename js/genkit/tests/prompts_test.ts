@@ -1276,7 +1276,7 @@ describe('prompt', () => {
       },
       returnToolRequests: true,
       toolChoice: 'required',
-      tools: ['/tool/toolA', '/tool/toolB'],
+      tools: ['/tool.v2/toolA', '/tool.v2/toolB'],
     });
   });
 

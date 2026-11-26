@@ -441,7 +441,7 @@ describe('generate', () => {
               outputSchema: {
                 $schema: 'http://json-schema.org/draft-07/schema#',
               },
-              key: '/tool/testTool',
+              key: '/tool.v2/testTool',
             },
           ],
         }
@@ -508,7 +508,7 @@ describe('generate', () => {
         },
         async () => 'tool called 1'
       );
-      const dynamicTestTool2 = ai.dynamicTool(
+      const dynamicTestTool2 = tool(
         {
           name: 'dynamicTestTool2',
           inputJsonSchema: schema,
@@ -651,7 +651,7 @@ describe('generate', () => {
             outputSchema: {
               $schema: 'http://json-schema.org/draft-07/schema#',
             },
-            key: '/tool/dynamicTestTool1',
+            key: '/tool.v2/dynamicTestTool1',
           },
           {
             description: 'description 2',
@@ -660,7 +660,7 @@ describe('generate', () => {
             outputSchema: {
               $schema: 'http://json-schema.org/draft-07/schema#',
             },
-            key: '/tool/dynamicTestTool2',
+            key: '/tool.v2/dynamicTestTool2',
           },
           {
             description: 'description',
@@ -674,7 +674,6 @@ describe('generate', () => {
             name: 'dynamicMultipartTool',
             outputSchema: {
               $schema: 'http://json-schema.org/draft-07/schema#',
-              type: 'object',
             },
             key: '/tool.v2/dynamicMultipartTool',
           },
@@ -746,7 +745,7 @@ describe('generate', () => {
           foo: { type: 'string' },
         },
       } as JSONSchema7;
-      const dynamicTestTool = ai.dynamicTool({
+      const dynamicTestTool = tool({
         name: 'dynamicTestTool',
         inputJsonSchema: schema,
         description: 'description',
@@ -1282,7 +1281,7 @@ describe('generate', () => {
             outputSchema: {
               $schema: 'http://json-schema.org/draft-07/schema#',
             },
-            key: '/tool/interruptingTool',
+            key: '/tool.v2/interruptingTool',
           },
           {
             description: 'description',
@@ -1293,7 +1292,7 @@ describe('generate', () => {
             outputSchema: {
               $schema: 'http://json-schema.org/draft-07/schema#',
             },
-            key: '/tool/simpleTool',
+            key: '/tool.v2/simpleTool',
           },
           {
             description: 'description',
@@ -1304,7 +1303,7 @@ describe('generate', () => {
             outputSchema: {
               $schema: 'http://json-schema.org/draft-07/schema#',
             },
-            key: '/tool/resumableTool',
+            key: '/tool.v2/resumableTool',
           },
           {
             description: 'description',
@@ -1315,7 +1314,7 @@ describe('generate', () => {
             outputSchema: {
               $schema: 'http://json-schema.org/draft-07/schema#',
             },
-            key: '/tool/dynamicInterrupt',
+            key: '/tool.v2/dynamicInterrupt',
           },
         ],
       });

@@ -1977,7 +1977,7 @@ describe('Agent', () => {
         inputSchema: z.object({ query: z.string() }),
         outputSchema: z.object({ answer: z.string() }),
       });
-      registry.registerAction('tool', myInterrupt);
+      registry.registerAction('tool.v2', myInterrupt);
 
       definePrompt(registry, {
         name: 'interruptPrompt',
@@ -2333,7 +2333,7 @@ describe('Agent', () => {
         inputSchema: z.object({ q: z.string() }),
         outputSchema: z.object({ a: z.string() }),
       });
-      registry.registerAction('tool', myInterrupt);
+      registry.registerAction('tool.v2', myInterrupt);
 
       definePrompt(registry, {
         name: 'fakeRespondPrompt',

@@ -95,7 +95,7 @@ describe('spec', () => {
         test.expectResponse.request.tools =
           test.expectResponse.request.tools.map((t: any) => ({
             ...t,
-            key: `/tool/${t.name}`,
+            key: `/tool.v2/${t.name}`,
           }));
       }
 
