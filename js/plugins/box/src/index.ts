@@ -69,6 +69,12 @@ export {
   type ExecRunnerOptions,
 } from './runners/exec-runner.js';
 export {
+  PodmanRunner,
+  podmanRunner,
+  type PodmanMount,
+  type PodmanRunnerOptions,
+} from './runners/podman-runner.js';
+export {
   BASE_ENV,
   abortable,
   childEnv,
