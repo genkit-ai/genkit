@@ -96,7 +96,10 @@ export function defineGenerateAction(registry: Registry): GenerateAction {
       outputSchema: GenerateResponseSchema,
       streamSchema: GenerateResponseChunkSchema,
     },
-    async (request, { streamingRequested, sendChunk, context }) => {
+    async (
+      request,
+      { streamingRequested, sendChunk, context, abortSignal }
+    ) => {
       let childRegistry = Registry.withParent(registry);
       const middlewareRefs = await normalizeMiddleware(
         childRegistry,
@@ -120,6 +123,7 @@ export function defineGenerateAction(registry: Registry): GenerateAction {
           messageIndex: 0,
           middleware: resolvedMiddleware,
           streamingCallback: sendChunk,
+          abortSignal,
           context,
           record,
         });

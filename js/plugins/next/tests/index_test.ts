@@ -490,4 +490,167 @@ describe('appRoute', () => {
       expect(response.status).toEqual(204);
     });
   });
+
+  describe('abort and client disconnect handling', () => {
+    it('propagates abortSignal and avoids unhandled rejections on streaming disconnect', async () => {
+      const unhandledRejections: unknown[] = [];
+      const onUnhandledRejection = (reason: unknown) => {
+        unhandledRejections.push(reason);
+      };
+      process.on('unhandledRejection', onUnhandledRejection);
+
+      let actionAborted = false;
+      let secondStepRan = false;
+      let finishAction!: () => void;
+      const actionDone = new Promise<void>((resolve) => {
+        finishAction = resolve;
+      });
+
+      const abortableStreamingFlow = ai.defineFlow(
+        {
+          name: 'abortableStreamingFlow',
+          inputSchema: z.string(),
+          outputSchema: z.string(),
+        },
+        async (input, { sendChunk, abortSignal }) => {
+          try {
+            sendChunk('first');
+            await new Promise<void>((resolve, reject) => {
+              if (abortSignal.aborted) {
+                actionAborted = true;
+                reject(new Error('aborted'));
+                return;
+              }
+              abortSignal.addEventListener(
+                'abort',
+                () => {
+                  actionAborted = true;
+                  reject(new Error('aborted'));
+                },
+                { once: true }
+              );
+            });
+            secondStepRan = true;
+            return input;
+          } finally {
+            finishAction();
+          }
+        }
+      );
+
+      try {
+        const controller = new AbortController();
+        const route = appRoute(abortableStreamingFlow);
+        const request = new NextRequest('http://localhost/api/data', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            accept: 'text/event-stream',
+          },
+          body: JSON.stringify({ data: 'hello' }),
+          signal: controller.signal,
+        });
+
+        const response = await route(request);
+        expect(response.status).toEqual(200);
+
+        const reader = response.body!.getReader();
+        const firstRead = await reader.read();
+        expect(firstRead.done).toEqual(false);
+
+        await reader.cancel('client disconnected');
+        controller.abort(new Error('client disconnected'));
+
+        await actionDone;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        expect(actionAborted).toEqual(true);
+        expect(secondStepRan).toEqual(false);
+        expect(unhandledRejections).toEqual([]);
+      } finally {
+        process.off('unhandledRejection', onUnhandledRejection);
+      }
+    });
+
+    it('keeps writing to durableStream without unhandled rejections when client disconnects', async () => {
+      const unhandledRejections: unknown[] = [];
+      const onUnhandledRejection = (reason: unknown) => {
+        unhandledRejections.push(reason);
+      };
+      process.on('unhandledRejection', onUnhandledRejection);
+
+      let releaseSecondChunk!: () => void;
+      const waitForDisconnect = new Promise<void>((resolve) => {
+        releaseSecondChunk = resolve;
+      });
+      let finishAction!: () => void;
+      const actionDone = new Promise<void>((resolve) => {
+        finishAction = resolve;
+      });
+
+      const durableDisconnectFlow = ai.defineFlow(
+        {
+          name: 'durableDisconnectFlow',
+          inputSchema: z.string(),
+          outputSchema: z.string(),
+        },
+        async (input, { sendChunk }) => {
+          try {
+            sendChunk('part-1');
+            await waitForDisconnect;
+            sendChunk('part-2');
+            return input;
+          } finally {
+            finishAction();
+          }
+        }
+      );
+
+      try {
+        const streamManager = new InMemoryStreamManager();
+        const route = appRoute(durableDisconnectFlow, { streamManager });
+        const request = new NextRequest('http://localhost/api/data', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            accept: 'text/event-stream',
+          },
+          body: JSON.stringify({ data: 'completed' }),
+        });
+
+        const response = await route(request);
+        const streamId = response.headers.get('x-genkit-stream-id');
+        expect(streamId).not.toBeNull();
+
+        const reader = response.body!.getReader();
+        await reader.read();
+        await reader.cancel('client closed tab');
+
+        releaseSecondChunk();
+        await actionDone;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        expect(unhandledRejections).toEqual([]);
+
+        const subRequest = new NextRequest('http://localhost/api/data', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            accept: 'text/event-stream',
+            'x-genkit-stream-id': streamId!,
+          },
+          body: JSON.stringify({ data: 'completed' }),
+        });
+        const subResponse = await route(subRequest);
+        expect(chunks(await subResponse.text())).toEqual([
+          { type: 'data', content: { message: 'part-1' } },
+          { type: 'data', content: { message: 'part-2' } },
+          { type: 'data', content: { result: 'completed' } },
+          { type: 'end' },
+        ]);
+      } finally {
+        process.off('unhandledRejection', onUnhandledRejection);
+      }
+    });
+  });
 });

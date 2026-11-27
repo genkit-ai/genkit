@@ -35,6 +35,38 @@ export { NextRequest, NextResponse, z, type Action, type ActionContext };
 
 const delimiter = '\n\n';
 
+function createSafeWriter(writable: WritableStream<Uint8Array>) {
+  const writer = writable.getWriter();
+  let closed = false;
+  const markClosed = () => {
+    closed = true;
+  };
+  writer.closed.then(markClosed, markClosed);
+  return {
+    write: async (chunk: Uint8Array): Promise<void> => {
+      if (closed) {
+        return;
+      }
+      try {
+        await writer.write(chunk);
+      } catch {
+        closed = true;
+      }
+    },
+    close: async (): Promise<void> => {
+      if (closed) {
+        return;
+      }
+      closed = true;
+      try {
+        await writer.close();
+      } catch {
+        // Stream already closed or aborted by client disconnect.
+      }
+    },
+  };
+}
+
 async function subscribeToStream<S, O>(
   streamManager: StreamManager,
   streamId: string
@@ -42,7 +74,7 @@ async function subscribeToStream<S, O>(
   try {
     const encoder = new TextEncoder();
     const { readable, writable } = new TransformStream();
-    const writer = writable.getWriter();
+    const writer = createSafeWriter(writable);
     await streamManager.subscribe(streamId, {
       onChunk: (chunk) => {
         writer.write(
@@ -94,7 +126,7 @@ async function subscribeToStream<S, O>(
     if (e.status === 'DEADLINE_EXCEEDED') {
       const encoder = new TextEncoder();
       const { readable, writable } = new TransformStream();
-      const writer = writable.getWriter();
+      const writer = createSafeWriter(writable);
       writer.write(
         encoder.encode(
           `error: ${JSON.stringify({
@@ -218,7 +250,7 @@ function appRoute<
     // TODO: Add ping comments at regular intervals between streaming responses to mitigate
     // timeouts.
     (async (): Promise<void> => {
-      const writer = writable.getWriter();
+      const writer = createSafeWriter(writable);
       const taskQueue = new AsyncTaskQueue();
       let durableStream: ActionStreamInput<S, O> | undefined = undefined;
       if (streamManager) {

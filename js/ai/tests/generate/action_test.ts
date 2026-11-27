@@ -172,4 +172,42 @@ describe('generateAction middleware injection', () => {
       'Tool was not successfully passed to the model from action generated route.'
     );
   });
+
+  it('forwards abortSignal to generateActionImpl and skips model calls when aborted', async () => {
+    let modelCalls = 0;
+    pm.handleResponse = async () => {
+      modelCalls++;
+      return {
+        message: { role: 'model', content: [{ text: 'unreachable' }] },
+        finishReason: 'stop',
+      } as any;
+    };
+
+    const action = (await registry.lookupAction(
+      '/util/generate'
+    )) as GenerateAction;
+    const controller = new AbortController();
+    controller.abort(new Error('cancelled'));
+
+    await assert.rejects(
+      action.run(
+        {
+          model: 'programmableModel',
+          messages: [{ role: 'user', content: [{ text: 'test' }] }],
+        },
+        { abortSignal: controller.signal }
+      )
+    );
+    assert.strictEqual(modelCalls, 0);
+
+    const { output } = action.stream(
+      {
+        model: 'programmableModel',
+        messages: [{ role: 'user', content: [{ text: 'test' }] }],
+      },
+      { abortSignal: controller.signal }
+    );
+    await assert.rejects(output);
+    assert.strictEqual(modelCalls, 0);
+  });
 });
