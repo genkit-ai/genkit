@@ -170,10 +170,10 @@ func TestSchemaAsMapRecursive(t *testing.T) {
 
 	schema := SchemaAsMap(InferJSONSchema(Node{}))
 
-	// With DoNotReference and recursion limiting, the schema should be flat
-	// and recursive references should become "any" schema.
-	if _, ok := schema["$defs"]; ok {
-		t.Error("expected no $defs with DoNotReference: true")
+	// Recursion is broken with a $ref to a top-level $defs entry for Node,
+	// keeping the schema closed (additionalProperties: false).
+	if _, ok := schema["$defs"]; !ok {
+		t.Error("expected $defs for the recursive Node type")
 	}
 
 	if _, ok := schema["$ref"]; ok {
@@ -199,7 +199,7 @@ func TestSchemaAsMapRecursive(t *testing.T) {
 		t.Errorf("expected value.type to be string, got %v", valueField["type"])
 	}
 
-	// Check children field - recursive reference should be "any" schema
+	// Check children field - recursive reference should be a $ref
 	childrenField, ok := props["children"].(map[string]any)
 	if !ok {
 		t.Fatal("expected children field in properties")
@@ -212,13 +212,13 @@ func TestSchemaAsMapRecursive(t *testing.T) {
 	if !ok {
 		t.Fatal("expected children to have items")
 	}
-	// The recursive Node reference should have become an "any" schema
-	// including "type" property to prevent recursion errors for schemas for the same type
-	if items["type"] != "object" {
-		t.Errorf("expected children.items.type to be 'object', got %v", items["type"])
+	// The recursive Node reference should be a $ref to the $defs entry
+	// for Node, not an open object.
+	if items["$ref"] != "#/$defs/Node" {
+		t.Errorf("expected children.items.$ref to be '#/$defs/Node', got %v", items)
 	}
-	if items["additionalProperties"] != true {
-		t.Errorf("expected children.items to be 'any' schema (additionalProperties: true), got %v", items)
+	if _, ok := items["additionalProperties"]; ok {
+		t.Errorf("expected children.items to be a $ref with no additionalProperties, got %v", items)
 	}
 }
 
@@ -360,5 +360,61 @@ func TestInferJSONSchema_RecursiveSharedType(t *testing.T) {
 	}
 	if _, ok := leftProps["value"]; !ok {
 		t.Errorf("expected 'left' schema to expose 'value' field, got %v", leftProps)
+	}
+}
+
+// TestInferJSONSchema_RecursiveStructIssue7337 is a regression test for
+// issue #7337: InferJSONSchema turned recursive structs into open objects
+// (additionalProperties: true), which OpenAI strict mode rejects. The
+// recursive type must instead be hoisted into $defs once and referenced
+// with $ref, keeping the schema closed.
+func TestInferJSONSchema_RecursiveStructIssue7337(t *testing.T) {
+	type Node struct {
+		Name     string  `json:"name"`
+		Children []*Node `json:"children"`
+	}
+	schema := SchemaAsMap(InferJSONSchema(Node{}))
+	assertNoOpenObject(t, schema)
+	defs, ok := schema["$defs"].(map[string]any)
+	if !ok {
+		t.Fatal("expected $defs in schema for recursive Node type")
+	}
+	if _, ok := defs["Node"]; !ok {
+		t.Fatalf("expected $defs to contain Node, got %v", defs)
+	}
+	properties, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("expected properties in schema")
+	}
+	children, ok := properties["children"].(map[string]any)
+	if !ok {
+		t.Fatal("expected children field in properties")
+	}
+	items, ok := children["items"].(map[string]any)
+	if !ok {
+		t.Fatal("expected children to have items")
+	}
+	if items["$ref"] != "#/$defs/Node" {
+		t.Errorf("expected children.items.$ref to be '#/$defs/Node', got %v", items)
+	}
+}
+
+// assertNoOpenObject fails the test if any schema in the tree (including
+// inside $defs) has additionalProperties set to true, i.e. is an open
+// object that strict-mode providers reject.
+func assertNoOpenObject(t *testing.T, v any) {
+	t.Helper()
+	switch x := v.(type) {
+	case map[string]any:
+		if x["additionalProperties"] == true {
+			t.Errorf("found open object (additionalProperties: true) in schema: %v", x)
+		}
+		for _, child := range x {
+			assertNoOpenObject(t, child)
+		}
+	case []any:
+		for _, child := range x {
+			assertNoOpenObject(t, child)
+		}
 	}
 }
