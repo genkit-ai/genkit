@@ -25,6 +25,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -1336,4 +1337,105 @@ func TestAPIKeyFromEnvironment(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGenerateErrors(t *testing.T) {
+	input := &ai.ModelRequest{Messages: []*ai.Message{ai.NewUserTextMessage("hi")}}
+
+	t.Run("stops and returns the callback's error", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			for _, text := range []string{"a", "b", "c"} {
+				fmt.Fprintf(w, `{"message":{"role":"assistant","content":%q},"done":false}`+"\n", text)
+			}
+		}))
+		defer server.Close()
+
+		g := &generator{model: ModelDefinition{Name: "test-model", Type: "chat"}, serverAddress: server.URL}
+		wantErr := errors.New("client went away")
+		calls := 0
+		_, err := g.generate(t.Context(), input, func(context.Context, *ai.ModelResponseChunk) error {
+			calls++
+			return wantErr
+		})
+		if !errors.Is(err, wantErr) {
+			t.Errorf("generate() error = %v, want %v", err, wantErr)
+		}
+		if calls != 1 {
+			t.Errorf("callback called %d times, want 1", calls)
+		}
+	})
+
+	// The status check runs before either read path, for both endpoints.
+	for _, modelType := range []string{"chat", "generate"} {
+		for _, stream := range []bool{false, true} {
+			t.Run(fmt.Sprintf("returns an error for a non-200 reply (%s, stream=%v)", modelType, stream), func(t *testing.T) {
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					http.Error(w, `{"error":"model \"llama9\" not found, try pulling it first"}`, http.StatusNotFound)
+				}))
+				defer server.Close()
+
+				g := &generator{model: ModelDefinition{Name: "llama9", Type: modelType}, serverAddress: server.URL}
+				calls := 0
+				var cb func(context.Context, *ai.ModelResponseChunk) error
+				if stream {
+					cb = func(context.Context, *ai.ModelResponseChunk) error {
+						calls++
+						return nil
+					}
+				}
+				_, err := g.generate(t.Context(), input, cb)
+				if err == nil || !strings.Contains(err.Error(), "non-200 status: 404") {
+					t.Errorf("generate() error = %v, want a non-200 status error", err)
+				}
+				if calls != 0 {
+					t.Errorf("callback called %d times, want 0", calls)
+				}
+			})
+		}
+	}
+
+	// Once a stream has started, Ollama reports a failure as an error line
+	// in the 200 reply.
+	for _, tc := range []struct{ modelType, first string }{
+		{"chat", `{"message":{"role":"assistant","content":"a"},"done":false}`},
+		{"generate", `{"response":"a","done":false}`},
+	} {
+		t.Run("returns an error line from the stream ("+tc.modelType+")", func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				fmt.Fprintln(w, tc.first)
+				fmt.Fprintln(w, `{"error":"llama runner process has terminated"}`)
+			}))
+			defer server.Close()
+
+			g := &generator{model: ModelDefinition{Name: "test-model", Type: tc.modelType}, serverAddress: server.URL}
+			calls := 0
+			_, err := g.generate(t.Context(), input, func(context.Context, *ai.ModelResponseChunk) error {
+				calls++
+				return nil
+			})
+			if err == nil || !strings.Contains(err.Error(), "llama runner process has terminated") {
+				t.Errorf("generate() error = %v, want the stream's error", err)
+			}
+			if calls != 1 {
+				t.Errorf("callback called %d times, want 1", calls)
+			}
+		})
+	}
+
+	t.Run("keeps a deadline that ends the stream matchable", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			fmt.Fprintln(w, `{"message":{"role":"assistant","content":"a"},"done":false}`)
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+		}))
+		defer server.Close()
+
+		ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+		defer cancel()
+		g := &generator{model: ModelDefinition{Name: "test-model", Type: "chat"}, serverAddress: server.URL}
+		_, err := g.generate(ctx, input, func(context.Context, *ai.ModelResponseChunk) error { return nil })
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("generate() error = %v, want %v", err, context.DeadlineExceeded)
+		}
+	})
 }

@@ -406,6 +406,9 @@ type ollamaChatResponse struct {
 		Thinking  string           `json:"thinking"`
 		ToolCalls []ollamaToolCall `json:"tool_calls,omitempty"`
 	} `json:"message"`
+	// Error is set on a stream line that reports a failure after the reply
+	// has started, which keeps its 200 status.
+	Error string `json:"error"`
 	ollamaUsage
 }
 
@@ -413,6 +416,8 @@ type ollamaModelResponse struct {
 	Model     string `json:"model"`
 	CreatedAt string `json:"created_at"`
 	Response  string `json:"response"`
+	// Error is as in [ollamaChatResponse].
+	Error string `json:"error"`
 	ollamaUsage
 }
 
@@ -754,15 +759,20 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 	}
 	defer resp.Body.Close()
 
+	// Check the status before reading the body in either mode: a streaming
+	// request would otherwise decode the error reply as a chunk. Ollama's
+	// error replies are short, so a longer body is cut off.
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+		return nil, fmt.Errorf("server returned non-200 status: %d, body: %s", resp.StatusCode, body)
+	}
+
 	if cb == nil {
 		// Existing behavior for non-streaming responses
 		var err error
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read response body: %v", err)
-		}
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("server returned non-200 status: %d, body: %s", resp.StatusCode, body)
+			return nil, fmt.Errorf("failed to read response body: %w", err)
 		}
 
 		var response *ai.ModelResponse
@@ -772,7 +782,7 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 			response, err = translateModelResponse(body)
 		}
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse response: %v", err)
+			return nil, fmt.Errorf("failed to parse response: %w", err)
 		}
 		response.Request = input
 		return response, nil
@@ -784,10 +794,10 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 
 		for {
 			var raw json.RawMessage
-			if err := decoder.Decode(&raw); err == io.EOF {
+			if err := decoder.Decode(&raw); errors.Is(err, io.EOF) {
 				break
 			} else if err != nil {
-				return nil, fmt.Errorf("reading response stream: %v", err)
+				return nil, fmt.Errorf("reading response stream: %w", err)
 			}
 			chunkCount++
 
@@ -799,13 +809,15 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 				chunk, u, err = translateGenerateChunk(string(raw))
 			}
 			if err != nil {
-				return nil, fmt.Errorf("failed to translate chunk: %v", err)
+				return nil, fmt.Errorf("failed to translate chunk: %w", err)
 			}
 			if u != (ollamaUsage{}) {
 				usage = u
 			}
 			chunks = append(chunks, chunk)
-			cb(ctx, chunk)
+			if err := cb(ctx, chunk); err != nil {
+				return nil, err
+			}
 		}
 
 		// Create a final response with the merged chunks
@@ -978,6 +990,9 @@ func translateChatChunk(input string) (*ai.ModelResponseChunk, ollamaUsage, erro
 	if err := json.Unmarshal([]byte(input), &response); err != nil {
 		return nil, ollamaUsage{}, fmt.Errorf("failed to parse response JSON: %v", err)
 	}
+	if response.Error != "" {
+		return nil, ollamaUsage{}, fmt.Errorf("server reported an error: %s", response.Error)
+	}
 	chunk := &ai.ModelResponseChunk{}
 
 	// Check for thinking/reasoning first
@@ -1012,6 +1027,9 @@ func translateGenerateChunk(input string) (*ai.ModelResponseChunk, ollamaUsage, 
 
 	if err := json.Unmarshal([]byte(input), &response); err != nil {
 		return nil, ollamaUsage{}, fmt.Errorf("failed to parse response JSON: %v", err)
+	}
+	if response.Error != "" {
+		return nil, ollamaUsage{}, fmt.Errorf("server reported an error: %s", response.Error)
 	}
 	chunk := &ai.ModelResponseChunk{}
 	aiPart := ai.NewTextPart(response.Response)
