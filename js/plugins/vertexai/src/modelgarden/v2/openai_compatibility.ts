@@ -356,7 +356,7 @@ export function toRequestBody(
   const bodyRecord = body as unknown as Record<string, unknown>;
   for (const key in bodyRecord) {
     if (
-      !bodyRecord[key] ||
+      bodyRecord[key] === undefined || bodyRecord[key] === null ||
       (Array.isArray(bodyRecord[key]) && !(bodyRecord[key] as unknown[]).length)
     )
       delete bodyRecord[key];
