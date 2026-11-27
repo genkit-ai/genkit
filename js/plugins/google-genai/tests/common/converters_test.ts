@@ -226,11 +226,9 @@ describe('toGeminiMessage', () => {
               name: 'screenshot',
               response: {
                 name: 'screenshot',
+                text: 'this is a test',
               },
               parts: [
-                {
-                  text: 'this is a test',
-                },
                 {
                   inlineData: {
                     mimeType: 'image/png',
@@ -269,10 +267,141 @@ describe('toGeminiMessage', () => {
               response: {
                 name: 'screenshot',
                 content: { status: 'ok' },
+                text: 'this is a test',
+              },
+            },
+          },
+        ],
+      },
+    },
+    {
+      should:
+        'should transform genkit message (tool response with only text content) correctly',
+      inputMessage: {
+        role: 'tool',
+        content: [
+          {
+            toolResponse: {
+              name: 'readFile',
+              ref: '3',
+              content: [{ text: 'line one\n' }, { text: 'line two' }],
+            },
+          },
+        ],
+      },
+      expectedOutput: {
+        role: 'user',
+        parts: [
+          {
+            functionResponse: {
+              id: '3',
+              name: 'readFile',
+              response: {
+                name: 'readFile',
+                text: 'line one\nline two',
+              },
+            },
+          },
+        ],
+      },
+    },
+    {
+      should:
+        'should transform genkit message (tool response with output and only media content) correctly',
+      inputMessage: {
+        role: 'tool',
+        content: [
+          {
+            toolResponse: {
+              name: 'screenshot',
+              ref: '4',
+              output: { status: 'ok' },
+              content: [
+                {
+                  media: {
+                    contentType: 'image/png',
+                    url: 'data:image/png;base64,SHORTENED_BASE64_DATA',
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+      expectedOutput: {
+        role: 'user',
+        parts: [
+          {
+            functionResponse: {
+              id: '4',
+              name: 'screenshot',
+              response: {
+                name: 'screenshot',
+                content: { status: 'ok' },
               },
               parts: [
                 {
-                  text: 'this is a test',
+                  inlineData: {
+                    mimeType: 'image/png',
+                    data: 'SHORTENED_BASE64_DATA',
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    },
+    {
+      should:
+        'should transform genkit message (tool response with resource and file media content) correctly',
+      inputMessage: {
+        role: 'tool',
+        content: [
+          {
+            toolResponse: {
+              name: 'fetchDoc',
+              ref: '5',
+              content: [
+                { text: 'attached' },
+                {
+                  resource: { uri: 'gs://bucket/doc.pdf' },
+                  metadata: { mimeType: 'application/pdf' },
+                },
+                {
+                  media: {
+                    contentType: 'image/jpeg',
+                    url: 'https://example.com/photo.jpg',
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+      expectedOutput: {
+        role: 'user',
+        parts: [
+          {
+            functionResponse: {
+              id: '5',
+              name: 'fetchDoc',
+              response: {
+                name: 'fetchDoc',
+                text: 'attached',
+              },
+              parts: [
+                {
+                  fileData: {
+                    mimeType: 'application/pdf',
+                    fileUri: 'gs://bucket/doc.pdf',
+                  },
+                },
+                {
+                  fileData: {
+                    mimeType: 'image/jpeg',
+                    fileUri: 'https://example.com/photo.jpg',
+                  },
                 },
               ],
             },
@@ -560,6 +689,106 @@ describe('toGeminiMessage', () => {
         ],
       },
     },
+    {
+      should: 'should strip media metadata from tool response parts',
+      inputMessage: {
+        role: 'tool',
+        content: [
+          {
+            toolResponse: {
+              name: 'clip',
+              ref: '6',
+              output: 'ok',
+              content: [
+                {
+                  media: {
+                    contentType: 'video/mp4',
+                    url: 'data:video/mp4;base64,VIDEO_DATA',
+                  },
+                  metadata: {
+                    thoughtSignature: 'sig',
+                    metadata: { foo: 'bar' },
+                    videoMetadata: { startOffset: '1s' },
+                    mediaResolution: { level: 'MEDIA_RESOLUTION_LOW' },
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+      expectedOutput: {
+        role: 'user',
+        parts: [
+          {
+            functionResponse: {
+              id: '6',
+              name: 'clip',
+              response: { name: 'clip', content: 'ok' },
+              parts: [
+                {
+                  inlineData: { mimeType: 'video/mp4', data: 'VIDEO_DATA' },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    },
+    {
+      should: 'should ignore empty text in tool response content',
+      inputMessage: {
+        role: 'tool',
+        content: [
+          {
+            toolResponse: {
+              name: 'echo',
+              ref: '7',
+              output: { status: 'ok' },
+              content: [{ text: '' }],
+            },
+          },
+        ],
+      },
+      expectedOutput: {
+        role: 'user',
+        parts: [
+          {
+            functionResponse: {
+              id: '7',
+              name: 'echo',
+              response: { name: 'echo', content: { status: 'ok' } },
+            },
+          },
+        ],
+      },
+    },
+    {
+      should: 'should omit parts for empty tool response content without a ref',
+      inputMessage: {
+        role: 'tool',
+        content: [
+          {
+            toolResponse: {
+              name: 'noop',
+              output: 'done',
+              content: [],
+            },
+          },
+        ],
+      },
+      expectedOutput: {
+        role: 'user',
+        parts: [
+          {
+            functionResponse: {
+              name: 'noop',
+              response: { name: 'noop', content: 'done' },
+            },
+          },
+        ],
+      },
+    },
   ];
   for (const test of testCases) {
     it(test.should, () => {
@@ -578,6 +807,24 @@ describe('toGeminiMessage', () => {
     assert.throws(
       () => toGeminiMessage(inputMessage as MessageData),
       /Unsupported Part type/
+    );
+  });
+
+  it('should throw on tool response content that is not text or media', () => {
+    const inputMessage: MessageData = {
+      role: 'tool',
+      content: [
+        {
+          toolResponse: {
+            name: 'think',
+            content: [{ reasoning: 'hmm' }],
+          },
+        },
+      ],
+    };
+    assert.throws(
+      () => toGeminiMessage(inputMessage),
+      /Tool response content for think may only contain text, media or resource parts/
     );
   });
 
@@ -1430,6 +1677,16 @@ describe('Part conversions back and forth', () => {
     }
   });
 
+  it('should keep a native function response with name and text keys as output', () => {
+    const response = { name: 'myTool', text: 'hi', other: 1 };
+    assert.deepStrictEqual(
+      TEST_ONLY.fromGeminiPart({
+        functionResponse: { name: 'myTool', response },
+      }),
+      { toolResponse: { name: 'myTool', output: response } }
+    );
+  });
+
   it('should be symmetric for Gemini Part -> Genkit Part -> Gemini Part', () => {
     const geminiParts: GeminiPart[] = [
       { text: 'hello' },
@@ -1441,6 +1698,20 @@ describe('Part conversions back and forth', () => {
           name: 'myTool',
           response: { name: 'myTool', content: { res: 2 } },
           id: 'ref1',
+        },
+      },
+      {
+        functionResponse: {
+          name: 'myTool',
+          response: { name: 'myTool', content: { res: 2 }, text: 'done' },
+          id: 'ref2',
+        },
+      },
+      {
+        functionResponse: {
+          name: 'myTool',
+          response: { name: 'myTool', text: 'only text' },
+          id: 'ref3',
         },
       },
       {

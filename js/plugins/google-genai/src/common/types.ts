@@ -372,6 +372,7 @@ export declare interface FunctionResponse {
 export class FunctionResponsePart {
   /** Optional. Inline media bytes. */
   inlineData?: FunctionResponseBlob;
+  fileData?: FileData;
 }
 
 /**
