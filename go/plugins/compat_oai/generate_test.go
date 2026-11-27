@@ -16,6 +16,7 @@ package compat_oai
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -79,6 +80,309 @@ func TestConvertChatCompletionToModelResponseReasoning(t *testing.T) {
 				t.Fatalf("content = %#v, want reasoning followed by text", resp.Message.Content)
 			}
 		})
+	}
+}
+
+// TestConvertChatCompletionToModelResponseContentChunks pins a content array,
+// the shape Mistral answers with when a response carries reasoning: its
+// thinking chunks become a reasoning part and its text chunks the text,
+// rather than the raw JSON the SDK reads into the content string. A string
+// that merely looks like an array is text and stays as it is.
+func TestConvertChatCompletionToModelResponseContentChunks(t *testing.T) {
+	for name, tc := range map[string]struct {
+		content       string
+		wantReasoning string
+		wantText      string
+		wantParts     int
+		wantSignature string
+	}{
+		"thinking and text": {
+			content:       `[{"type":"thinking","thinking":[{"type":"text","text":"Let me "},{"type":"text","text":"think..."}]},{"type":"text","text":"Final "},{"type":"text","text":"answer"}]`,
+			wantReasoning: "Let me think...",
+			wantText:      "Final answer",
+			wantParts:     2,
+		},
+		"text chunks only": {
+			content:   `[{"type":"text","text":"Final answer"},{"type":"reference","reference_ids":[1]}]`,
+			wantText:  "Final answer",
+			wantParts: 1,
+		},
+		"string that looks like an array": {
+			content:   `"[1, 2, 3]"`,
+			wantText:  "[1, 2, 3]",
+			wantParts: 1,
+		},
+		"thinking as a string": {
+			content:       `[{"type":"thinking","thinking":"Let me think..."},{"type":"text","text":"Final answer"}]`,
+			wantReasoning: "Let me think...",
+			wantText:      "Final answer",
+			wantParts:     2,
+		},
+		// One chunk of an unexpected shape is skipped, not allowed to fail
+		// the decode of the others.
+		"unexpected chunks beside good ones": {
+			content:       `[42,{"type":"text","text":7},{"type":"thinking","thinking":{"odd":true}},{"type":"thinking","thinking":[{"type":"text","text":"Let me think..."}]},{"type":"text","text":"Final answer"}]`,
+			wantReasoning: "Let me think...",
+			wantText:      "Final answer",
+			wantParts:     2,
+		},
+		// Nothing readable: the content is kept as the SDK read it rather
+		// than silently dropped.
+		"no text or thinking chunk": {
+			content:   `[{"type":"reference","reference_ids":[1]}]`,
+			wantText:  `[{"type":"reference","reference_ids":[1]}]`,
+			wantParts: 1,
+		},
+		// A chunk the plugin has no part for is not dropped: the content is
+		// kept as the SDK read it.
+		"chunk of another type": {
+			content:   `[{"type":"text","text":"Final answer"},{"type":"image_url","image_url":"https://example.com/a.png"}]`,
+			wantText:  `[{"type":"text","text":"Final answer"},{"type":"image_url","image_url":"https://example.com/a.png"}]`,
+			wantParts: 1,
+		},
+		// Each thinking chunk becomes a reasoning part of its own.
+		"two thinking chunks": {
+			content:       `[{"type":"thinking","thinking":"First.","signature":"sig-1"},{"type":"text","text":"Final answer"},{"type":"thinking","thinking":"Second.","signature":"sig-2"}]`,
+			wantReasoning: "First.Second.",
+			wantText:      "Final answer",
+			wantParts:     3,
+			wantSignature: "sig-1",
+		},
+		// The signature Mistral replays reasoning with rides on the
+		// reasoning part's metadata.
+		"thinking with a signature": {
+			content:       `[{"type":"thinking","thinking":[{"type":"text","text":"Let me think..."}],"signature":"sig-1"},{"type":"text","text":"Final answer"}]`,
+			wantReasoning: "Let me think...",
+			wantText:      "Final answer",
+			wantParts:     2,
+			wantSignature: "sig-1",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var completion openai.ChatCompletion
+			if err := json.Unmarshal([]byte(`{
+				"id": "chatcmpl-1", "object": "chat.completion", "created": 1, "model": "m",
+				"choices": [{"index": 0, "message": {"role": "assistant", "content": `+tc.content+`}, "finish_reason": "stop"}]
+			}`), &completion); err != nil {
+				t.Fatalf("json.Unmarshal() error = %v", err)
+			}
+			resp, err := convertChatCompletionToModelResponse(&completion, false)
+			if err != nil {
+				t.Fatalf("convertChatCompletionToModelResponse() error = %v", err)
+			}
+			if got := resp.Reasoning(); got != tc.wantReasoning {
+				t.Errorf("Reasoning() = %q, want %q", got, tc.wantReasoning)
+			}
+			if got := resp.Text(); got != tc.wantText {
+				t.Errorf("Text() = %q, want %q", got, tc.wantText)
+			}
+			if len(resp.Message.Content) != tc.wantParts {
+				t.Errorf("content = %#v, want %d parts", resp.Message.Content, tc.wantParts)
+			}
+			if got := string(metadataSignature(resp.Message.Content[0].Metadata)); got != tc.wantSignature {
+				t.Errorf("signature = %q, want %q", got, tc.wantSignature)
+			}
+			if name == "two thinking chunks" {
+				second := resp.Message.Content[1]
+				if !second.IsReasoning() || second.Text != "Second." || string(metadataSignature(second.Metadata)) != "sig-2" {
+					t.Errorf("second part = %#v, want reasoning %q signed %q", second, "Second.", "sig-2")
+				}
+			}
+		})
+	}
+}
+
+// TestWithMessagesSendsThinkingChunks pins the model turn a provider that
+// reads reasoning as thinking chunks is sent: the reasoning as a leading
+// thinking chunk of the content array, the text after it, and no
+// reasoning_content field. A turn whose reasoning is empty goes back as plain
+// text, since an empty thinking chunk says nothing. Only reasoning tagged as
+// the provider's own goes back; the cases tag every reasoning part as the
+// provider's unless they set untagged.
+func TestWithMessagesSendsThinkingChunks(t *testing.T) {
+	mine := func(p *ai.Part) *ai.Part {
+		if p.Metadata == nil {
+			p.Metadata = map[string]any{}
+		}
+		p.Metadata[reasoningSourceKey] = "mistral"
+		return p
+	}
+	for name, tc := range map[string]struct {
+		parts    []*ai.Part
+		untagged bool
+		want     any
+	}{
+		"reasoning and text": {
+			parts: []*ai.Part{ai.NewReasoningPart("Think carefully.", nil), ai.NewTextPart("Final answer")},
+			want: []any{
+				map[string]any{"type": "thinking", "thinking": []any{map[string]any{"type": "text", "text": "Think carefully."}}},
+				map[string]any{"type": "text", "text": "Final answer"},
+			},
+		},
+		"reasoning alone": {
+			parts: []*ai.Part{ai.NewReasoningPart("Think carefully.", nil)},
+			want: []any{
+				map[string]any{"type": "thinking", "thinking": []any{map[string]any{"type": "text", "text": "Think carefully."}}},
+			},
+		},
+		"reasoning with a signature": {
+			parts: []*ai.Part{ai.NewReasoningPart("Think carefully.", []byte("sig-1")), ai.NewTextPart("Final answer")},
+			want: []any{
+				map[string]any{"type": "thinking", "thinking": []any{map[string]any{"type": "text", "text": "Think carefully."}}, "signature": "sig-1"},
+				map[string]any{"type": "text", "text": "Final answer"},
+			},
+		},
+		// History persisted as JSON carries the signature as base64.
+		"signature after a JSON round trip": {
+			parts: []*ai.Part{{
+				Kind:     ai.PartReasoning,
+				Text:     "Think carefully.",
+				Metadata: map[string]any{"signature": base64.StdEncoding.EncodeToString([]byte("sig-1"))},
+			}},
+			want: []any{
+				map[string]any{"type": "thinking", "thinking": []any{map[string]any{"type": "text", "text": "Think carefully."}}, "signature": "sig-1"},
+			},
+		},
+		// Each reasoning part goes back as its own thinking chunk, so each
+		// signature stays with the reasoning it signs.
+		"two reasoning parts": {
+			parts: []*ai.Part{ai.NewReasoningPart("First.", []byte("sig-1")), ai.NewReasoningPart("Second.", []byte("sig-2")), ai.NewTextPart("Final answer")},
+			want: []any{
+				map[string]any{"type": "thinking", "thinking": []any{map[string]any{"type": "text", "text": "First."}}, "signature": "sig-1"},
+				map[string]any{"type": "thinking", "thinking": []any{map[string]any{"type": "text", "text": "Second."}}, "signature": "sig-2"},
+				map[string]any{"type": "text", "text": "Final answer"},
+			},
+		},
+		"empty reasoning": {
+			parts: []*ai.Part{ai.NewReasoningPart("", nil), ai.NewTextPart("Final answer")},
+			want:  "Final answer",
+		},
+		// Another model's reasoning in a mixed history, signed or not, stays
+		// out; the provider's own goes back.
+		"mixed history": {
+			parts: []*ai.Part{
+				{Kind: ai.PartReasoning, Text: "Gemini thought.", Metadata: map[string]any{"signature": []byte("gemini-sig"), reasoningSourceKey: "googleai"}},
+				ai.NewReasoningPart("Claude thought.", []byte("claude-sig")),
+				mine(ai.NewReasoningPart("Mistral thought.", []byte("sig-1"))),
+				ai.NewTextPart("Final answer"),
+			},
+			untagged: true,
+			want: []any{
+				map[string]any{"type": "thinking", "thinking": []any{map[string]any{"type": "text", "text": "Mistral thought."}}, "signature": "sig-1"},
+				map[string]any{"type": "text", "text": "Final answer"},
+			},
+		},
+		// Reasoning with no tag, such as history saved before parts were
+		// tagged, goes back as plain text.
+		"untagged reasoning": {
+			parts:    []*ai.Part{ai.NewReasoningPart("Think carefully.", []byte("sig-1")), ai.NewTextPart("Final answer")},
+			untagged: true,
+			want:     "Final answer",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if !tc.untagged {
+				for _, p := range tc.parts {
+					if p.IsReasoning() {
+						mine(p)
+					}
+				}
+			}
+			g := newGen().withReasoningAsThinkingChunks("mistral").WithMessages([]*ai.Message{{Role: ai.RoleModel, Content: tc.parts}})
+			if g.err != nil {
+				t.Fatalf("WithMessages() error = %v", g.err)
+			}
+			data, err := json.Marshal(g.messages[0])
+			if err != nil {
+				t.Fatalf("json.Marshal() error = %v", err)
+			}
+			var message map[string]any
+			if err := json.Unmarshal(data, &message); err != nil {
+				t.Fatalf("json.Unmarshal() error = %v", err)
+			}
+			if got, ok := message["reasoning_content"]; ok {
+				t.Errorf("reasoning_content = %v, want none", got)
+			}
+			if got := message["content"]; !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("content = %#v, want %#v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestGenerateStreamContentChunks pins the streamed side of content arrays:
+// each delta that arrives as an array is split into its reasoning and text
+// before the accumulator sees it, so the chunks handed to the callback and the
+// final message carry neither the raw JSON nor each other's content, and
+// string deltas interleave with array ones in order.
+func TestGenerateStreamContentChunks(t *testing.T) {
+	events := []string{
+		`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":[{"type":"thinking","thinking":[{"type":"text","text":"Think "}]}]},"finish_reason":null}]}`,
+		`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"content":[{"type":"thinking","thinking":"carefully.","signature":"sig-1"},{"type":"text","text":"Hello"}]},"finish_reason":null}]}`,
+		`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"content":" there"},"finish_reason":null}]}`,
+		`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"content":[{"type":"text","text":"!"}]},"finish_reason":"stop"}]}`,
+	}
+	var body strings.Builder
+	for _, e := range events {
+		body.WriteString("data: " + e + "\n\n")
+	}
+	body.WriteString("data: [DONE]\n\n")
+
+	var reasoning, text strings.Builder
+	resp, err := newStubGen(t, "text/event-stream", body.String()).
+		WithMessages([]*ai.Message{ai.NewUserTextMessage("hi")}).
+		Generate(context.Background(), &ai.ModelRequest{}, func(_ context.Context, chunk *ai.ModelResponseChunk) error {
+			reasoning.WriteString(chunk.Reasoning())
+			text.WriteString(chunk.Text())
+			return nil
+		})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if got := reasoning.String(); got != "Think carefully." {
+		t.Errorf("streamed reasoning = %q, want %q", got, "Think carefully.")
+	}
+	if got := text.String(); got != "Hello there!" {
+		t.Errorf("streamed text = %q, want %q", got, "Hello there!")
+	}
+	if got := resp.Reasoning(); got != "Think carefully." {
+		t.Errorf("Reasoning() = %q, want %q", got, "Think carefully.")
+	}
+	if got := string(metadataSignature(resp.Message.Content[0].Metadata)); got != "sig-1" {
+		t.Errorf("final signature = %q, want the streamed %q", got, "sig-1")
+	}
+	if got := resp.Text(); got != "Hello there!" {
+		t.Errorf("Text() = %q, want %q", got, "Hello there!")
+	}
+}
+
+// TestGenerateStreamOmitStreamOptions pins both sides of
+// [OpenAICompatible.OmitStreamOptions]: a stream asks for usage through
+// stream_options unless the provider rejects the field, in which case the
+// field is left out entirely.
+func TestGenerateStreamOmitStreamOptions(t *testing.T) {
+	for _, omit := range []bool{false, true} {
+		var body map[string]any
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode request: %v", err)
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			io.WriteString(w, "data: "+`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":"stop"}]}`+"\n\ndata: [DONE]\n\n")
+		}))
+		client := openai.NewClient(option.WithBaseURL(srv.URL), option.WithAPIKey("stub"))
+		_, err := NewModelGenerator(&client, "m").
+			withOmitStreamOptions(omit).
+			WithMessages([]*ai.Message{ai.NewUserTextMessage("hi")}).
+			Generate(context.Background(), &ai.ModelRequest{}, func(context.Context, *ai.ModelResponseChunk) error { return nil })
+		srv.Close()
+		if err != nil {
+			t.Fatalf("omit=%v: Generate() error = %v", omit, err)
+		}
+		_, sent := body["stream_options"]
+		if sent == omit {
+			t.Errorf("omit=%v: stream_options sent = %v, want %v", omit, sent, !omit)
+		}
 	}
 }
 
@@ -158,6 +462,8 @@ func TestConvertChatCompletionToModelResponseProviderFinishReasons(t *testing.T)
 		// xAI documents three finish reasons and this is one of them, so an
 		// unmapped end_turn would report ordinary answers as unknown.
 		"end_turn": ai.FinishReasonStop,
+		// Mistral's name for a generation cut off by the context length.
+		"model_length": ai.FinishReasonLength,
 	} {
 		t.Run(finishReason, func(t *testing.T) {
 			completion := &openai.ChatCompletion{

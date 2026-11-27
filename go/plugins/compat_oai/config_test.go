@@ -94,7 +94,7 @@ func TestEmbeddingConfigApply(t *testing.T) {
 		Model:          "text-embedding-3-small",
 		EncodingFormat: openai.EmbeddingNewParamsEncodingFormatFloat,
 	}
-	EmbeddingConfig{}.applyToEmbedding(&params)
+	EmbeddingConfig{}.ApplyToEmbedding(&params)
 	if params.EncodingFormat != openai.EmbeddingNewParamsEncodingFormatFloat {
 		t.Errorf("EncodingFormat = %q, want the float default preserved", params.EncodingFormat)
 	}
@@ -106,7 +106,7 @@ func TestEmbeddingConfigApply(t *testing.T) {
 		Dimensions:     256,
 		EncodingFormat: openai.EmbeddingNewParamsEncodingFormatBase64,
 		User:           "user-1",
-	}.applyToEmbedding(&params)
+	}.ApplyToEmbedding(&params)
 	if got := params.Dimensions.Or(0); got != 256 {
 		t.Errorf("Dimensions = %d, want 256", got)
 	}
@@ -576,6 +576,106 @@ func TestForwardEmbeddingExtra(t *testing.T) {
 	err = forwardEmbeddingExtra(&params, map[string]any{"input": "hijack"})
 	if err == nil || !strings.Contains(err.Error(), "input") {
 		t.Errorf("forwardEmbeddingExtra(input) error = %v, want the managed field named in a rejection", err)
+	}
+}
+
+// TestForwardEmbeddingExtraMergesWithConfig pins that the passthrough merges
+// with the extra fields a config's own merge set rather than replacing them,
+// and wins where the two collide, as the chat passthrough does.
+func TestForwardEmbeddingExtraMergesWithConfig(t *testing.T) {
+	params := openai.EmbeddingNewParams{Model: "codestral-embed"}
+	AddEmbeddingExtraFields(&params, map[string]any{"output_dimension": 256, "output_dtype": "float"})
+	if err := forwardEmbeddingExtra(&params, map[string]any{"output_dtype": "int8", "metadata": map[string]any{"k": "v"}}); err != nil {
+		t.Fatalf("forwardEmbeddingExtra() error = %v", err)
+	}
+	data, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	var request map[string]any
+	if err := json.Unmarshal(data, &request); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	for key, want := range map[string]any{
+		"output_dimension": 256.0,                    // set by the config, kept
+		"output_dtype":     "int8",                   // collision, the passthrough wins
+		"metadata":         map[string]any{"k": "v"}, // passthrough only
+	} {
+		if got := request[key]; !reflect.DeepEqual(got, want) {
+			t.Errorf("%s = %#v, want %#v", key, got, want)
+		}
+	}
+}
+
+// testEmbedConfig is an embedder config of the kind a provider whose
+// embeddings request differs from OpenAI's declares.
+type testEmbedConfig struct {
+	Size   int            `json:"size,omitempty" jsonschema_description:"Output size, sent as output_dimension."`
+	APIKey string         `json:"-"`
+	Extra  map[string]any `json:"extra,omitempty" jsonschema_description:"Passthrough."`
+}
+
+func (c testEmbedConfig) ApplyToEmbedding(params *openai.EmbeddingNewParams) {
+	if c.Size > 0 {
+		AddEmbeddingExtraFields(params, map[string]any{"output_dimension": c.Size})
+	}
+}
+func (c testEmbedConfig) RequestAPIKey() string        { return c.APIKey }
+func (c testEmbedConfig) RequestExtra() map[string]any { return c.Extra }
+
+// TestNewEmbedderWithConfig pins the typed embedder constructor: the label
+// defaults from the provider, the schema comes from the config type, the
+// config merges into the wire request beside its passthrough, and a request
+// API key is served by a request-scoped client.
+func TestNewEmbedderWithConfig(t *testing.T) {
+	var mu sync.Mutex
+	var body map[string]any
+	var auth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		auth = r.Header.Get("Authorization")
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"object":"list","model":"e","data":[{"object":"embedding","index":0,"embedding":[1,2]}],"usage":{"prompt_tokens":1,"total_tokens":1}}`)
+	}))
+	defer server.Close()
+
+	o := &OpenAICompatible{Provider: "acme", APIKey: "plugin-key", BaseURL: server.URL}
+	o.Init(context.Background())
+	embedder := NewEmbedderWithConfig[testEmbedConfig](o, "acme-embed", ai.EmbedderOptions{})
+
+	desc := embedder.Desc()
+	if desc.Name != "acme/acme-embed" {
+		t.Errorf("Name = %q, want %q", desc.Name, "acme/acme-embed")
+	}
+	meta, _ := desc.Metadata["embedder"].(map[string]any)
+	info, _ := desc.Metadata["info"].(map[string]any)
+	if label, _ := info["label"].(string); label == "" {
+		t.Error("label is empty, want one derived from the provider and the name")
+	}
+	schema, _ := meta["customOptions"].(map[string]any)
+	props, _ := schema["properties"].(map[string]any)
+	if props["size"] == nil || props["apiKey"] != nil {
+		t.Errorf("customOptions properties = %v, want the config type's schema without the key", props)
+	}
+
+	_, err := embedder.Embed(context.Background(), &ai.EmbedRequest{
+		Input:   []*ai.Document{ai.DocumentFromText("hi", nil)},
+		Options: testEmbedConfig{Size: 2, APIKey: "request-key", Extra: map[string]any{"output_dtype": "float"}},
+	})
+	if err != nil {
+		t.Fatalf("Embed() error = %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if body["output_dimension"] != 2.0 || body["output_dtype"] != "float" {
+		t.Errorf("request = %v, want output_dimension from the config beside output_dtype from extra", body)
+	}
+	if auth != "Bearer request-key" {
+		t.Errorf("Authorization = %q, want the request key", auth)
 	}
 }
 

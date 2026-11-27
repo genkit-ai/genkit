@@ -19,7 +19,6 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
-	"maps"
 	"math"
 	"slices"
 	"sync"
@@ -225,6 +224,28 @@ type OpenAICompatible struct {
 	// is sent as an image and is not checked.
 	MediaTypes []string
 
+	// OmitStreamOptions records that the provider rejects the stream_options
+	// request field, as Mistral does, whose request schema is closed to
+	// fields it does not declare. Left false, every streaming request asks
+	// for usage on its final chunk through stream_options.include_usage,
+	// since a provider that follows OpenAI reports none otherwise. A provider
+	// that sets this must report usage on its streams unasked, or streamed
+	// responses report zero tokens.
+	OmitStreamOptions bool
+
+	// SendReasoningAsThinkingChunks records that the provider reads a model
+	// turn's reasoning as a thinking chunk in the message's content array, as
+	// Mistral does, rather than from a reasoning_content field beside it. It
+	// governs the request only: the reasoning of a model turn in the history
+	// is sent back as a leading thinking chunk, rather than as a
+	// reasoning_content field a provider with a closed schema rejects.
+	// Responses are read either way, since a content array is always unpacked
+	// into its text and its reasoning. Reasoning parts in the provider's
+	// replies are tagged with metadata["reasoningSource"] set to Provider, and
+	// only reasoning so tagged is sent back, so another model's reasoning in a
+	// mixed history is left out.
+	SendReasoningAsThinkingChunks bool
+
 	// descs caches the action descriptors of listed models by name; they are
 	// deterministic per name, and rebuilding a full model action per listed
 	// model on every reflection poll is wasteful. A plugin instance lists
@@ -283,6 +304,27 @@ func clearInheritedOpenAIIdentity() []option.RequestOption {
 		option.WithOrganization(""), option.WithHeaderDel("OpenAI-Organization"),
 		option.WithProject(""), option.WithHeaderDel("OpenAI-Project"),
 	}
+}
+
+// reasoningSource is the provider's tag for its own reasoning when it reads
+// reasoning as thinking chunks, and empty otherwise.
+func (o *OpenAICompatible) reasoningSource() string {
+	if !o.SendReasoningAsThinkingChunks {
+		return ""
+	}
+	return o.Provider
+}
+
+// newGenerator returns a generator for model id served by client, carrying
+// every plugin-level setting that shapes the request or reads the response.
+// Each model constructor starts from it, so none can leave a setting out or
+// apply one after the messages are built.
+func (o *OpenAICompatible) newGenerator(client *openai.Client, id string) *ModelGenerator {
+	return NewModelGenerator(client, id).
+		withSeparateReasoning(o.SeparateReasoningTokens).
+		withMediaTypes(o.MediaTypes).
+		withOmitStreamOptions(o.OmitStreamOptions).
+		withReasoningAsThinkingChunks(o.reasoningSource())
 }
 
 // Name implements genkit.Plugin.
@@ -347,9 +389,7 @@ func (o *OpenAICompatible) DefineModel(provider, id string, opts ai.ModelOptions
 		input *ai.ModelRequest,
 		cb ai.ModelStreamCallback,
 	) (*ai.ModelResponse, error) {
-		return NewModelGenerator(o.client, id).
-			withSeparateReasoning(o.SeparateReasoningTokens).
-			withMediaTypes(o.MediaTypes).
+		return o.newGenerator(o.client, id).
 			WithMessages(input.Messages).
 			WithConfig(input.Config).
 			WithTools(input.Tools).
@@ -379,9 +419,7 @@ func newSDKModel(o *OpenAICompatible, id string, opts ai.ModelOptions) *ai.Model
 		if err := rejectManagedConfig(&config); err != nil {
 			return nil, err
 		}
-		return NewModelGenerator(o.client, id).
-			withSeparateReasoning(o.SeparateReasoningTokens).
-			withMediaTypes(o.MediaTypes).
+		return o.newGenerator(o.client, id).
 			WithParams(config).
 			WithMessages(input.Messages).
 			WithTools(input.Tools).
@@ -461,9 +499,7 @@ func NewChatModel[Config ChatConfig](o *OpenAICompatible, id string, opts ai.Mod
 		if opts.Supports != nil {
 			supports = *opts.Supports
 		}
-		g := NewModelGenerator(o.clientForKey(config.RequestAPIKey()), id).
-			withSeparateReasoning(o.SeparateReasoningTokens).
-			withMediaTypes(o.MediaTypes).
+		g := o.newGenerator(o.clientForKey(config.RequestAPIKey()), id).
 			WithParams(params).
 			WithMessages(input.Messages).
 			WithTools(input.Tools).
@@ -497,7 +533,9 @@ func forwardRequestExtra(params *openai.ChatCompletionNewParams, extra map[strin
 
 // forwardEmbeddingExtra is [forwardRequestExtra] for the embeddings request,
 // whose only Genkit-built field is the input. The model stays settable: it is
-// this request's version pin.
+// this request's version pin. The extra fields are merged over any the
+// config's own merge set (see [AddEmbeddingExtraFields]), so a declared
+// field a provider names differently survives the passthrough.
 func forwardEmbeddingExtra(params *openai.EmbeddingNewParams, extra map[string]any) error {
 	if len(extra) == 0 {
 		return nil
@@ -505,7 +543,7 @@ func forwardEmbeddingExtra(params *openai.EmbeddingNewParams, extra map[string]a
 	if _, ok := extra["input"]; ok {
 		return status.Errorf(status.ErrInvalidArgument, "compat_oai: extra field %q is built by Genkit from the request and cannot be set from config", "input")
 	}
-	params.SetExtraFields(maps.Clone(extra))
+	AddEmbeddingExtraFields(params, extra)
 	return nil
 }
 
@@ -529,9 +567,34 @@ func (o *OpenAICompatible) DefineEmbedder(provider, id string, embedOpts *ai.Emb
 
 // newEmbedder builds the embedder both entry points return.
 func (o *OpenAICompatible) newEmbedder(provider, id string, embedOpts *ai.EmbedderOptions) *ai.EmbedderAction {
+	return newConfigEmbedder[EmbeddingConfig](o, provider, id, embedOpts)
+}
+
+// NewEmbedderWithConfig is [NewChatModel] for embedders: it creates an
+// unregistered embedder whose config is the provider's own Config type, for
+// providers whose embeddings request differs from OpenAI's; providers that
+// take OpenAI's use [OpenAICompatible.NewEmbedder]. The framework validates
+// the request's config against the schema inferred from Config and
+// deserializes it before the embedder function runs, and the config merges
+// itself into the outgoing request through [EmbedderConfig], with its extra
+// fields forwarded after that merge so a collision resolves in their favor. A
+// config carrying a request API key is served by a request-scoped client. An
+// empty label is derived from the plugin's provider and the name.
+//
+// Return the embedder from the plugin's Init for the framework to register,
+// or register it with [genkit.RegisterAction].
+func NewEmbedderWithConfig[Config EmbedderConfig](o *OpenAICompatible, id string, opts ai.EmbedderOptions) *ai.EmbedderAction {
+	if opts.Label == "" {
+		opts.Label = internal.ProviderLabel(o.Provider, id)
+	}
+	return newConfigEmbedder[Config](o, o.Provider, id, &opts)
+}
+
+// newConfigEmbedder builds an embedder of provider whose config is Config.
+func newConfigEmbedder[Config EmbedderConfig](o *OpenAICompatible, provider, id string, embedOpts *ai.EmbedderOptions) *ai.EmbedderAction {
 	o.checkInitted()
 
-	return ai.NewEmbedderAction(api.NewName(provider, id), embedOpts, func(ctx context.Context, req *ai.EmbedRequest, config EmbeddingConfig) (*ai.EmbedResponse, error) {
+	return ai.NewEmbedderAction(api.NewName(provider, id), embedOpts, func(ctx context.Context, req *ai.EmbedRequest, config Config) (*ai.EmbedResponse, error) {
 		var data openai.EmbeddingNewParamsInputUnion
 		for _, doc := range req.Input {
 			for _, p := range doc.Content {
@@ -544,12 +607,12 @@ func (o *OpenAICompatible) newEmbedder(provider, id string, embedOpts *ai.Embedd
 			Model:          id,
 			EncodingFormat: openai.EmbeddingNewParamsEncodingFormatFloat,
 		}
-		config.applyToEmbedding(&params)
-		if err := forwardEmbeddingExtra(&params, config.Extra); err != nil {
+		config.ApplyToEmbedding(&params)
+		if err := forwardEmbeddingExtra(&params, config.RequestExtra()); err != nil {
 			return nil, err
 		}
 
-		embeddingResp, err := o.clientForKey(config.APIKey).Embeddings.New(ctx, params)
+		embeddingResp, err := o.clientForKey(config.RequestAPIKey()).Embeddings.New(ctx, params)
 		if err != nil {
 			return nil, classifyAPIError(err, o.ClassifyError)
 		}

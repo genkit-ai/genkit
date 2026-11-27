@@ -225,6 +225,24 @@ Anthropic's compatible endpoint does with files and audio:
 p.openAICompatible.MediaTypes = []string{"image/*", "application/pdf"}
 ```
 
+A provider whose request schema is closed to fields it does not declare, as
+Mistral's is, rejects two things the base plugin otherwise sends. Every
+streaming request asks for usage through `stream_options`; set
+`OpenAICompatible.OmitStreamOptions` to leave it out, which only works where
+the provider reports usage on its streams unasked. A model turn's reasoning
+goes back in a `reasoning_content` field; set
+`OpenAICompatible.SendReasoningAsThinkingChunks` to send it as a leading
+`thinking` chunk of the message content array instead. Responses whose
+content is such an array are unpacked into text and reasoning parts whatever
+the plugin sets.
+
+A provider whose embeddings request differs from OpenAI's declares an
+embedder config of its own, implementing `compat_oai.EmbedderConfig`, and
+builds its embedders with `compat_oai.NewEmbedderWithConfig`, the embedder
+counterpart of `NewChatModel`; fields the provider names differently go out
+through `compat_oai.AddEmbeddingExtraFields`. The `mistral` plugin does this
+to send the output size as `output_dimension`.
+
 Model IDs are string literals rather than exported constants. An exported
 `ModelMyModel` outlives the model it names: the ID churns every few months,
 but the constant cannot be removed without a breaking change. The map key is
@@ -249,8 +267,8 @@ describes every model it resolves with one permissive capability set. `Models`
 is how a caller narrows one. Follow that shape for a gateway, and the curated
 shape above for a vendor.
 
-See the `openai`, `anthropic`, `dashscope`, `deepseek`, `kimi`, `openrouter`,
-`xai`, and `zai` directories for complete implementations.
+See the `openai`, `anthropic`, `dashscope`, `deepseek`, `kimi`, `mistral`,
+`openrouter`, `xai`, and `zai` directories for complete implementations.
 
 ## Running Tests
 
@@ -263,6 +281,7 @@ export ZAI_API_KEY=<your-zai-key>
 export KIMI_API_KEY=<your-kimi-key>
 export XAI_API_KEY=<your-xai-key>
 export DEEPSEEK_API_KEY=<your-deepseek-key>
+export MISTRAL_API_KEY=<your-mistral-key>
 export OPENROUTER_API_KEY=<your-openrouter-key>
 ```
 
@@ -293,6 +312,9 @@ go test -v ./xai
 
 # DeepSeek tests
 go test -v ./deepseek
+
+# Mistral tests
+go test -v ./mistral
 
 # OpenRouter tests
 go test -v ./openrouter
