@@ -52,10 +52,258 @@ export function toGeminiTool(tool: ToolDefinition): FunctionDeclaration {
   return declaration;
 }
 
+const MAX_GEMINI_TOOL_SCHEMA_NODES = 4096;
+const MAX_GEMINI_TOOL_SCHEMA_DEPTH = 128;
+
+// A Gemini function declaration has no allOf equivalent. Do not silently
+// replace constraints on the referenced schema with sibling constraints.
+const REF_ANNOTATION_KEYS = new Set([
+  '$ref',
+  '$anchor',
+  '$dynamicAnchor',
+  '$recursiveAnchor',
+  '$comment',
+  '$defs',
+  '$id',
+  '$schema',
+  'id',
+  'description',
+  'definitions',
+  'title',
+  'default',
+  'examples',
+  'deprecated',
+  'readOnly',
+  'writeOnly',
+  'contentEncoding',
+  'contentMediaType',
+  'contentSchema',
+]);
+
+const SCHEMA_MAP_KEYWORDS = new Set([
+  '$defs',
+  'definitions',
+  'properties',
+  'patternProperties',
+  'dependentSchemas',
+  'dependencies',
+]);
+
+const DRAFT_4_SCHEMA_URI = /^https?:\/\/json-schema\.org\/draft-04\/schema#?$/;
+const DRAFT_4_TO_7_SCHEMA_URI =
+  /^https?:\/\/json-schema\.org\/draft-0[467]\/schema#?$/;
+
+function getSchemaDialect(schema: unknown): string | undefined {
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
+    return undefined;
+  }
+  const dialect = (schema as Record<string, unknown>).$schema;
+  return typeof dialect === 'string' ? dialect : undefined;
+}
+
+function isDraft4Schema(schema: unknown): boolean {
+  const dialect = getSchemaDialect(schema);
+  return dialect !== undefined && DRAFT_4_SCHEMA_URI.test(dialect);
+}
+
+function ignoresRefSiblings(schema: unknown): boolean {
+  const dialect = getSchemaDialect(schema);
+  return dialect !== undefined && DRAFT_4_TO_7_SCHEMA_URI.test(dialect);
+}
+
+function hasSchemaResourceMarker(
+  value: unknown,
+  isDraft4 = false,
+  refSiblingsIgnored = false
+): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  if (refSiblingsIgnored && typeof record.$ref === 'string') {
+    return false;
+  }
+  const idKey = isDraft4 ? 'id' : '$id';
+  const idValue = Object.prototype.hasOwnProperty.call(record, idKey)
+    ? record[idKey]
+    : undefined;
+  const schemaValue = Object.prototype.hasOwnProperty.call(record, '$schema')
+    ? record.$schema
+    : undefined;
+  return (
+    (typeof idValue === 'string' &&
+      idValue.length > 0 &&
+      !idValue.startsWith('#')) ||
+    (typeof schemaValue === 'string' && schemaValue.length > 0)
+  );
+}
+
+function consumeSchemaBudget(budget: { remaining: number }, amount = 1): void {
+  budget.remaining -= amount;
+  if (budget.remaining < 0) {
+    throw new GenkitError({
+      status: 'INVALID_ARGUMENT',
+      message:
+        'Tool schema is too large to convert to a Gemini function declaration',
+    });
+  }
+}
+
 function toGeminiSchemaProperty(
-  property?: ToolDefinition['inputSchema']
+  property?: ToolDefinition['inputSchema'],
+  root: ToolDefinition['inputSchema'] = property,
+  resolvingRefs = new Set<string>(),
+  budget = { remaining: MAX_GEMINI_TOOL_SCHEMA_NODES },
+  refDepth = 0,
+  isReferenceTarget = false,
+  nestedResourceReason?: 'nested' | 'crossed'
 ): Schema | undefined {
+  if (refDepth > MAX_GEMINI_TOOL_SCHEMA_DEPTH) {
+    throw new GenkitError({
+      status: 'INVALID_ARGUMENT',
+      message:
+        'Tool schema is too deep to convert to a Gemini function declaration',
+    });
+  }
+  if (resolvingRefs.size > 0) {
+    consumeSchemaBudget(budget);
+  }
+  const isDraft4 = isDraft4Schema(root);
+  const refSiblingsIgnored = ignoresRefSiblings(root);
+  const currentNestedResource =
+    nestedResourceReason ??
+    (property !== root &&
+    hasSchemaResourceMarker(property, isDraft4, refSiblingsIgnored)
+      ? 'nested'
+      : undefined);
+  if (property && typeof property === 'object' && '$ref' in property) {
+    if (currentNestedResource === 'crossed') {
+      throw new GenkitError({
+        status: 'INVALID_ARGUMENT',
+        message: 'Tool schema reference crosses a nested schema resource',
+      });
+    }
+    if (currentNestedResource === 'nested') {
+      throw new GenkitError({
+        status: 'INVALID_ARGUMENT',
+        message:
+          'Nested tool schema resources cannot be converted to a Gemini function declaration',
+      });
+    }
+    const ref = property.$ref;
+    if (typeof ref !== 'string' || !ref.startsWith('#')) {
+      throw new GenkitError({
+        status: 'INVALID_ARGUMENT',
+        message: `Unsupported tool schema reference ${String(ref)}`,
+      });
+    }
+    let decodedPointer: string;
+    try {
+      decodedPointer = decodeURIComponent(ref.slice(1));
+    } catch {
+      throw new GenkitError({
+        status: 'INVALID_ARGUMENT',
+        message: `Invalid tool schema reference ${ref}`,
+      });
+    }
+    if (!decodedPointer.startsWith('/')) {
+      throw new GenkitError({
+        status: 'INVALID_ARGUMENT',
+        message: `Unsupported tool schema reference ${ref}`,
+      });
+    }
+    const keys: string[] = [];
+    for (const segment of decodedPointer.slice(1).split('/')) {
+      if (/~(?![01])/.test(segment)) {
+        throw new GenkitError({
+          status: 'INVALID_ARGUMENT',
+          message: `Invalid tool schema reference ${ref}`,
+        });
+      }
+      keys.push(
+        segment.replace(/~([01])/g, (_, digit) => (digit === '1' ? '/' : '~'))
+      );
+    }
+    const canonicalRef = `#${decodedPointer}`;
+    if (resolvingRefs.has(canonicalRef)) {
+      throw new GenkitError({
+        status: 'INVALID_ARGUMENT',
+        message: `Recursive tool schema reference ${ref} cannot be converted to a Gemini function declaration`,
+      });
+    }
+    if (!refSiblingsIgnored) {
+      const unsupportedSibling = Object.keys(property).find(
+        (key) => !REF_ANNOTATION_KEYS.has(key) && !key.startsWith('x-')
+      );
+      if (unsupportedSibling !== undefined) {
+        throw new GenkitError({
+          status: 'INVALID_ARGUMENT',
+          message: `Unsupported sibling keyword ${unsupportedSibling || '""'} alongside tool schema reference ${ref}`,
+        });
+      }
+    }
+    let referenced: any = root;
+    let crossedNestedResource = false;
+    let inSchemaMap: boolean = false;
+    for (const key of keys) {
+      const nextIsSchemaMap: boolean =
+        !inSchemaMap && SCHEMA_MAP_KEYWORDS.has(key);
+      referenced =
+        referenced &&
+        typeof referenced === 'object' &&
+        Object.prototype.hasOwnProperty.call(referenced, key)
+          ? referenced[key]
+          : undefined;
+      inSchemaMap = nextIsSchemaMap;
+      if (
+        !inSchemaMap &&
+        referenced !== root &&
+        hasSchemaResourceMarker(referenced, isDraft4, refSiblingsIgnored)
+      ) {
+        crossedNestedResource = true;
+      }
+    }
+    if (typeof referenced === 'boolean') {
+      throw new GenkitError({
+        status: 'INVALID_ARGUMENT',
+        message: `Tool schema reference ${ref} resolves to an unsupported ${String(referenced)} schema`,
+      });
+    }
+    if (
+      !referenced ||
+      typeof referenced !== 'object' ||
+      Array.isArray(referenced)
+    ) {
+      throw new GenkitError({
+        status: 'INVALID_ARGUMENT',
+        message: `Unresolved tool schema reference ${ref}`,
+      });
+    }
+    let nextProperty = referenced;
+    if (
+      !refSiblingsIgnored &&
+      typeof property.description === 'string' &&
+      property.description.length > 0
+    ) {
+      nextProperty = { ...referenced, description: property.description };
+    }
+    return toGeminiSchemaProperty(
+      nextProperty,
+      root,
+      new Set([...resolvingRefs, canonicalRef]),
+      budget,
+      refDepth + 1,
+      true,
+      crossedNestedResource ? 'crossed' : currentNestedResource
+    );
+  }
   if (!property || !property.type) {
+    if (property && isReferenceTarget) {
+      throw new GenkitError({
+        status: 'INVALID_ARGUMENT',
+        message: 'Referenced tool schema has no type supported by Gemini',
+      });
+    }
     return undefined;
   }
   const baseSchema: Schema = {};
@@ -63,6 +311,9 @@ function toGeminiSchemaProperty(
     baseSchema.description = property.description;
   }
   if (property.enum) {
+    if (resolvingRefs.size > 0 && Array.isArray(property.enum)) {
+      consumeSchemaBudget(budget, property.enum.length);
+    }
     baseSchema.enum = property.enum;
   }
   if (property.nullable) {
@@ -80,15 +331,46 @@ function toGeminiSchemaProperty(
   } else {
     propertyType = property.type;
   }
+  if (typeof propertyType !== 'string') {
+    throw new GenkitError({
+      status: 'INVALID_ARGUMENT',
+      message: isReferenceTarget
+        ? 'Referenced tool schema has no type supported by Gemini'
+        : `Unsupported property type ${String(property.type).toUpperCase()}`,
+    });
+  }
   if (propertyType === 'object') {
+    if (resolvingRefs.size > 0 && Array.isArray(property.required)) {
+      consumeSchemaBudget(budget, property.required.length);
+    }
     const nestedProperties: Record<string, Schema> = {};
-    if (property.properties) {
-      Object.keys(property.properties).forEach((key) => {
-        const prop = toGeminiSchemaProperty(property.properties![key]);
-        if (prop) {
-          nestedProperties[key] = prop;
+    if (
+      property.properties &&
+      typeof property.properties === 'object' &&
+      !Array.isArray(property.properties)
+    ) {
+      for (const key in property.properties) {
+        if (!Object.prototype.hasOwnProperty.call(property.properties, key)) {
+          continue;
         }
-      });
+        const prop = toGeminiSchemaProperty(
+          property.properties[key],
+          root,
+          resolvingRefs,
+          budget,
+          resolvingRefs.size > 0 ? refDepth + 1 : 0,
+          false,
+          currentNestedResource
+        );
+        if (prop) {
+          Object.defineProperty(nestedProperties, key, {
+            value: prop,
+            enumerable: true,
+            writable: true,
+            configurable: true,
+          });
+        }
+      }
     }
     return {
       ...baseSchema,
@@ -100,7 +382,15 @@ function toGeminiSchemaProperty(
     return {
       ...baseSchema,
       type: SchemaType.ARRAY,
-      items: toGeminiSchemaProperty(property.items),
+      items: toGeminiSchemaProperty(
+        property.items,
+        root,
+        resolvingRefs,
+        budget,
+        resolvingRefs.size > 0 ? refDepth + 1 : 0,
+        false,
+        currentNestedResource
+      ),
     };
   } else {
     const schemaType = (SchemaType as unknown as Record<string, SchemaType>)[
