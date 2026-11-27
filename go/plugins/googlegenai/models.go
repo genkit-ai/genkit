@@ -130,6 +130,18 @@ const (
 	gemini31FlashImage     = "gemini-3.1-flash-image"
 	gemini31FlashLiteImage = "gemini-3.1-flash-lite-image"
 	gemini3ProImage        = "gemini-3-pro-image"
+	gemini38Flash          = "gemini-3.8-flash"
+	gemini4Argon           = "gemini-4-argon"
+	geminiNanoBanana21     = "gemini-nano-banana-2.1"
+
+	// Google AI serves the omni 1.1 pair without a "-preview" suffix; Vertex
+	// keeps the preview spelling, matching the gemini-omni-flash split.
+	geminiOmni11Flash        = "gemini-omni-1.1-flash"
+	geminiOmni11FlashPreview = "gemini-omni-1.1-flash-preview"
+
+	// Gemini Enterprise serves the 3.8 TTS pair without the 2.5-style infix.
+	gemini38FlashTTS     = "gemini-3.8-flash-tts"
+	gemini38FlashLiteTTS = "gemini-3.8-flash-lite-tts"
 
 	// Google AI TTS names. Vertex AI serves the 2.5 pair without the
 	// "-preview-" infix, so the two backends need separate IDs.
@@ -180,11 +192,17 @@ var (
 		gemini31FlashImage,
 		gemini31FlashLiteImage,
 		gemini3ProImage,
+		gemini38Flash,
+		gemini4Argon,
+		geminiNanoBanana21,
+		geminiOmni11FlashPreview,
 
 		gemini25FlashTTS,
 		gemini25ProTTS,
 		gemini25FlashLitePreviewTTS,
 		gemini31FlashTTSPreview,
+		gemini38FlashTTS,
+		gemini38FlashLiteTTS,
 
 		veo31Generate001,
 		veo31FastGenerate001,
@@ -207,10 +225,16 @@ var (
 		gemini31FlashImage,
 		gemini31FlashLiteImage,
 		gemini3ProImage,
+		gemini38Flash,
+		gemini4Argon,
+		geminiNanoBanana21,
+		geminiOmni11Flash,
 
 		gemini25FlashPreviewTTS,
 		gemini25ProPreviewTTS,
 		gemini31FlashTTSPreview,
+		gemini38FlashTTS,
+		gemini38FlashLiteTTS,
 
 		veo31GeneratePreview,
 		veo31FastGeneratePreview,
@@ -314,6 +338,36 @@ var (
 			Supports: &Multimodal,
 			Stage:    ai.ModelStageStable,
 		},
+		gemini38Flash: {
+			Label:    "Gemini 3.8 Flash",
+			Versions: []string{},
+			Supports: &Multimodal,
+			Stage:    ai.ModelStageStable,
+		},
+		gemini4Argon: {
+			Label:    "Gemini 4 Argon",
+			Versions: []string{},
+			Supports: &Multimodal,
+			Stage:    ai.ModelStageStable,
+		},
+		geminiNanoBanana21: {
+			Label:    "Gemini Nano Banana 2.1",
+			Versions: []string{},
+			Supports: &Multimodal,
+			Stage:    ai.ModelStageStable,
+		},
+		geminiOmni11Flash: {
+			Label:    "Gemini Omni 1.1 Flash",
+			Versions: []string{},
+			Supports: &Multimodal,
+			Stage:    ai.ModelStageStable,
+		},
+		geminiOmni11FlashPreview: {
+			Label:    "Gemini Omni 1.1 Flash",
+			Versions: []string{},
+			Supports: &Multimodal,
+			Stage:    ai.ModelStageStable,
+		},
 		gemini25FlashPreviewTTS: {
 			Label:    "Gemini 2.5 Flash Preview TTS",
 			Versions: []string{},
@@ -346,6 +400,18 @@ var (
 		},
 		gemini31FlashTTSPreview: {
 			Label:    "Gemini 3.1 Flash TTS Preview",
+			Versions: []string{},
+			Supports: &TTSSupports,
+			Stage:    ai.ModelStageStable,
+		},
+		gemini38FlashTTS: {
+			Label:    "Gemini 3.8 Flash TTS",
+			Versions: []string{},
+			Supports: &TTSSupports,
+			Stage:    ai.ModelStageStable,
+		},
+		gemini38FlashLiteTTS: {
+			Label:    "Gemini 3.8 Flash Lite TTS",
 			Versions: []string{},
 			Supports: &TTSSupports,
 			Stage:    ai.ModelStageStable,
