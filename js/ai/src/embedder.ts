@@ -199,15 +199,9 @@ export async function embed<CustomOptions extends z.ZodTypeAny = z.ZodTypeAny>(
 ): Promise<Embedding[]> {
   const embedder = await resolveEmbedder(registry, params);
   if (!embedder.embedderAction) {
-    let embedderId: string;
-    if (typeof params.embedder === 'string') {
-      embedderId = params.embedder;
-    } else if ((params.embedder as EmbedderAction)?.__action?.name) {
-      embedderId = (params.embedder as EmbedderAction).__action.name;
-    } else {
-      embedderId = (params.embedder as EmbedderReference<any>).name;
-    }
-    throw new Error(`Unable to resolve embedder ${embedderId}`);
+    throw new Error(
+      `Unable to resolve embedder ${embedderId(params.embedder)}`
+    );
   }
   const response = await embedder.embedderAction({
     input:
@@ -223,6 +217,16 @@ export async function embed<CustomOptions extends z.ZodTypeAny = z.ZodTypeAny>(
   return response.embeddings;
 }
 
+function embedderId(embedder: EmbedderArgument): string {
+  if (typeof embedder === 'string') {
+    return embedder;
+  }
+  if ((embedder as EmbedderAction)?.__action?.name) {
+    return (embedder as EmbedderAction).__action.name;
+  }
+  return (embedder as EmbedderReference<any>).name;
+}
+
 interface ResolvedEmbedder<CustomOptions extends z.ZodTypeAny = z.ZodTypeAny> {
   embedderAction: EmbedderAction<CustomOptions>;
   config?: z.infer<CustomOptions>;
@@ -233,7 +237,7 @@ async function resolveEmbedder<
   CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
 >(
   registry: Registry,
-  params: EmbedderParams<CustomOptions>
+  params: Pick<EmbedderParams<CustomOptions>, 'embedder'>
 ): Promise<ResolvedEmbedder<CustomOptions>> {
   if (typeof params.embedder === 'string') {
     return {
@@ -274,24 +278,21 @@ export async function embedMany<
     options?: z.infer<ConfigSchema>;
   }
 ): Promise<EmbeddingBatch> {
-  let embedder: EmbedderAction<ConfigSchema>;
-  if (typeof params.embedder === 'string') {
-    embedder = await registry.lookupAction(`/embedder/${params.embedder}`);
-  } else if (Object.hasOwnProperty.call(params.embedder, 'info')) {
-    embedder = await registry.lookupAction(
-      `/embedder/${(params.embedder as EmbedderReference).name}`
+  const embedder = await resolveEmbedder(registry, params);
+  if (!embedder.embedderAction) {
+    throw new Error(
+      `Unable to resolve embedder ${embedderId(params.embedder)}`
     );
-  } else {
-    embedder = params.embedder as EmbedderAction<ConfigSchema>;
   }
-  if (!embedder) {
-    throw new Error('Unable to utilize the provided embedder');
-  }
-  const response = await embedder({
+  const response = await embedder.embedderAction({
     input: params.content.map((i) =>
       typeof i === 'string' ? Document.fromText(i, params.metadata) : i
     ),
-    options: params.options,
+    options: {
+      version: embedder.version,
+      ...embedder.config,
+      ...params.options,
+    },
   });
   return response.embeddings;
 }
