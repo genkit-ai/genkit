@@ -987,6 +987,7 @@ function failurePartial(
       error,
       usage: opts.base?.usage,
       custom: opts.base?.custom,
+      raw: opts.base?.raw,
     },
     { request, parser: opts.parser }
   );

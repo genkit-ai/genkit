@@ -534,6 +534,21 @@ describe('generate', () => {
     );
   });
 
+  it('returns the raw data the model set', async () => {
+    defineModel(registry, { name: 'rawModel' }, async (input) => ({
+      message: input.messages[0],
+      finishReason: 'stop',
+      raw: { id: 'chatcmpl-1' },
+    }));
+
+    const response = await generate(registry, {
+      model: 'rawModel',
+      prompt: 'hi',
+    });
+    assert.deepStrictEqual(response.raw, { id: 'chatcmpl-1' });
+    assert.deepStrictEqual(response.custom, {});
+  });
+
   it('applies resources in the registry', async () => {
     defineResource(
       registry,
@@ -1073,6 +1088,7 @@ describe('generate failures', () => {
             },
             finishReason: 'stop',
             usage: { inputTokens: modelCalls },
+            raw: { call: modelCalls },
           };
         }
         return then(modelCalls);
@@ -1153,6 +1169,7 @@ describe('generate failures', () => {
       assert.deepStrictEqual(roles(res), ['user']);
       // The failing turn's accounting stays.
       assert.deepStrictEqual(res.usage, { inputTokens: 1 });
+      assert.deepStrictEqual(res.raw, { call: 1 });
       assert.strictEqual(modelCalls, 1);
     });
 
