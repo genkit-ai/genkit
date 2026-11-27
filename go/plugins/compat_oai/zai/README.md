@@ -49,9 +49,10 @@ available through `response.Reasoning()`.
 
 ## Models
 
-The registered catalog spans the GLM text line (`glm-5.1`, `glm-5-turbo`,
-`glm-5`, the `glm-4.7` and `glm-4.5` families) and the GLM vision line
-(`glm-5v-turbo`, `glm-4.6v`, `glm-4.5v` and variants). The catalog is not a
+The registered catalog spans the GLM text line (`glm-5.3`, `glm-5.2`,
+`glm-5.1`, `glm-5-turbo`, `glm-5`, the `glm-4.7` and `glm-4.5` families), the
+multimodal `glm-5.4`, and the GLM vision line (the `glm-5.3-flash` family,
+`glm-5v-turbo`, `glm-4.6v`, `glm-4.5v` and variants). The catalog is not a
 ceiling: any model ID Z.ai serves resolves on demand, and the `Models` field
 describes or corrects any model, curated or not:
 
@@ -67,8 +68,8 @@ is at https://docs.z.ai/guides/overview/pricing.
 ## Config
 
 Models take a typed `zai.ChatConfig`: the generation fields Z.ai accepts plus
-its own controls (`thinking`, `doSample`). `zai.ModelRef` carries the config
-with the model ID:
+its own controls (`thinking`, `reasoningEffort`, `doSample`). `zai.ModelRef`
+carries the config with the model ID:
 
 ```go
 response, err := genkit.Generate(ctx, g,

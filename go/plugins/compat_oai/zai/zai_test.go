@@ -589,7 +589,7 @@ func TestModelRefAndConfigSchema(t *testing.T) {
 	if !ok {
 		t.Fatalf("customOptions has no properties: %v", schema)
 	}
-	for _, key := range []string{"temperature", "maxOutputTokens", "stopSequences", "thinking", "doSample", "version", "extra"} {
+	for _, key := range []string{"temperature", "maxOutputTokens", "stopSequences", "thinking", "reasoningEffort", "doSample", "version", "extra"} {
 		if props[key] == nil {
 			t.Errorf("config schema is missing the %q property", key)
 		}
@@ -631,6 +631,7 @@ func TestModelRefConfigReachesTheWire(t *testing.T) {
 			Temperature float64        `json:"temperature"`
 			MaxTokens   int            `json:"max_tokens"`
 			Thinking    map[string]any `json:"thinking"`
+			Effort      string         `json:"reasoning_effort"`
 			DoSample    *bool          `json:"do_sample"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -648,6 +649,9 @@ func TestModelRefConfigReachesTheWire(t *testing.T) {
 		}
 		if got := body.Thinking["type"]; got != "enabled" {
 			t.Errorf("thinking.type = %v, want enabled", got)
+		}
+		if body.Effort != "low" {
+			t.Errorf("reasoning_effort = %q, want low", body.Effort)
 		}
 		if body.DoSample == nil || *body.DoSample != true {
 			t.Errorf("do_sample = %v, want true", body.DoSample)
@@ -672,6 +676,7 @@ func TestModelRefConfigReachesTheWire(t *testing.T) {
 			Temperature:     openai.Ptr(0.3),
 			MaxOutputTokens: 512,
 			Thinking:        &zai.ThinkingConfig{Type: "enabled"},
+			ReasoningEffort: zai.ReasoningEffortLow,
 			DoSample:        openai.Ptr(true),
 		})),
 		ai.WithPrompt("hi"),

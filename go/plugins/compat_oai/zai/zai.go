@@ -26,6 +26,7 @@ import (
 	"github.com/firebase/genkit/go/plugins/compat_oai"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
+	"github.com/openai/openai-go/shared"
 )
 
 const (
@@ -41,6 +42,29 @@ const (
 	ThinkingTypeEnabled ThinkingType = "enabled"
 	// ThinkingTypeDisabled turns thinking off.
 	ThinkingTypeDisabled ThinkingType = "disabled"
+)
+
+// ReasoningEffort is how hard a GLM 5.2 or later model thinks before it
+// answers. Not every model takes every level: GLM 5.3 and the GLM 5.3 Flash
+// line take only [ReasoningEffortLow], [ReasoningEffortHigh] and
+// [ReasoningEffortMax].
+type ReasoningEffort string
+
+const (
+	// ReasoningEffortNone skips thinking.
+	ReasoningEffortNone ReasoningEffort = "none"
+	// ReasoningEffortMinimal skips thinking on GLM 5.2.
+	ReasoningEffortMinimal ReasoningEffort = "minimal"
+	// ReasoningEffortLow is the fastest, shallowest reasoning.
+	ReasoningEffortLow ReasoningEffort = "low"
+	// ReasoningEffortMedium is moderate reasoning.
+	ReasoningEffortMedium ReasoningEffort = "medium"
+	// ReasoningEffortHigh is deeper reasoning.
+	ReasoningEffortHigh ReasoningEffort = "high"
+	// ReasoningEffortXHigh is deeper reasoning still.
+	ReasoningEffortXHigh ReasoningEffort = "xhigh"
+	// ReasoningEffortMax is the deepest reasoning, which is Z.ai's default.
+	ReasoningEffortMax ReasoningEffort = "max"
 )
 
 // ChatConfig is the per-request config for GLM models: the generation fields
@@ -66,6 +90,10 @@ type ChatConfig struct {
 	// Thinking controls the chain-of-thought mode of GLM 4.5 and later
 	// models, sent as the API's thinking field.
 	Thinking *ThinkingConfig `json:"thinking,omitempty" jsonschema_description:"Chain-of-thought controls for GLM 4.5 and later models, sent as the API's thinking field."`
+	// ReasoningEffort adjusts how hard a GLM 5.2 or later model thinks,
+	// [ReasoningEffortNone] to [ReasoningEffortMax]; Z.ai's default is max.
+	// Sent as the API's reasoning_effort.
+	ReasoningEffort ReasoningEffort `json:"reasoningEffort,omitempty" jsonschema:"enum=none,enum=minimal,enum=low,enum=medium,enum=high,enum=xhigh,enum=max" jsonschema_description:"How hard a GLM 5.2 or later model thinks, from none to max; Z.ai's default is max. GLM 5.3 and the GLM 5.3 Flash line take only low, high, and max. Sent as the API's reasoning_effort."`
 	// DoSample turns sampling off when set to false, making temperature and
 	// TopP inert; sent as the API's do_sample.
 	DoSample *bool `json:"doSample,omitempty" jsonschema_description:"Turns sampling off when false, making temperature and topP inert; sent as the API's do_sample."`
@@ -78,8 +106,8 @@ type ThinkingConfig struct {
 	Type ThinkingType `json:"type,omitempty" jsonschema:"enum=enabled,enum=disabled" jsonschema_description:"Turns thinking enabled (the default) or disabled."`
 	// ClearThinking controls whether the reasoning content is cleared from
 	// the response, sent as the API's clear_thinking; Z.ai defaults it to
-	// true.
-	ClearThinking *bool `json:"clearThinking,omitempty" jsonschema_description:"Whether the reasoning content is cleared from the response, sent as the API's clear_thinking; defaults to true."`
+	// false for GLM 5.4 and later and to true for earlier models.
+	ClearThinking *bool `json:"clearThinking,omitempty" jsonschema_description:"Whether the reasoning content is cleared from the response, sent as the API's clear_thinking; defaults to false for GLM 5.4 and later and to true for earlier models."`
 }
 
 // ApplyToChatCompletion implements [compat_oai.ChatConfig]: the generation
@@ -114,6 +142,9 @@ func (c ChatConfig) ApplyToChatCompletion(params *openai.ChatCompletionNewParams
 		if len(thinking) > 0 {
 			compat_oai.AddExtraFields(params, map[string]any{"thinking": thinking})
 		}
+	}
+	if c.ReasoningEffort != "" {
+		params.ReasoningEffort = shared.ReasoningEffort(c.ReasoningEffort)
 	}
 	if c.DoSample != nil {
 		compat_oai.AddExtraFields(params, map[string]any{"do_sample": *c.DoSample})
@@ -151,8 +182,13 @@ var (
 // declared, since Z.ai serves dated snapshots the plugin cannot enumerate,
 // and an undeclared list leaves config version pinning unconstrained.
 //
-// Catalog: https://docs.z.ai/guides/llm/overview
+// Catalog: https://docs.z.ai/guides/overview/pricing
 var supportedModels = map[string]ai.ModelOptions{
+	// GLM 5.4 takes text, image, video, and file input. See
+	// https://docs.z.ai/guides/llm/glm-5.4.
+	"glm-5.4":             {Label: "Z.ai GLM 5.4", Supports: &multimodal},
+	"glm-5.3":             {Label: "Z.ai GLM 5.3", Supports: &textOnly},
+	"glm-5.2":             {Label: "Z.ai GLM 5.2", Supports: &textOnly},
 	"glm-5.1":             {Label: "Z.ai GLM 5.1", Supports: &textOnly},
 	"glm-5-turbo":         {Label: "Z.ai GLM 5 Turbo", Supports: &textOnly},
 	"glm-5":               {Label: "Z.ai GLM 5", Supports: &textOnly},
@@ -168,11 +204,14 @@ var supportedModels = map[string]ai.ModelOptions{
 	"glm-4-32b-0414-128k": {Label: "Z.ai GLM 4 32B 128K", Supports: &textOnly},
 
 	// Vision models.
-	"glm-5v-turbo":    {Label: "Z.ai GLM 5V Turbo", Supports: &multimodal},
-	"glm-4.6v":        {Label: "Z.ai GLM 4.6V", Supports: &multimodal},
-	"glm-4.6v-flash":  {Label: "Z.ai GLM 4.6V Flash", Supports: &multimodal},
-	"glm-4.6v-flashx": {Label: "Z.ai GLM 4.6V FlashX", Supports: &multimodal},
-	"glm-4.5v":        {Label: "Z.ai GLM 4.5V", Supports: &multimodal},
+	"glm-5.3-flash":        {Label: "Z.ai GLM 5.3 Flash", Supports: &multimodal},
+	"glm-5.3-flashx":       {Label: "Z.ai GLM 5.3 FlashX", Supports: &multimodal},
+	"glm-5.3-flashx-legal": {Label: "Z.ai GLM 5.3 FlashX Legal", Supports: &multimodal},
+	"glm-5v-turbo":         {Label: "Z.ai GLM 5V Turbo", Supports: &multimodal},
+	"glm-4.6v":             {Label: "Z.ai GLM 4.6V", Supports: &multimodal},
+	"glm-4.6v-flash":       {Label: "Z.ai GLM 4.6V Flash", Supports: &multimodal},
+	"glm-4.6v-flashx":      {Label: "Z.ai GLM 4.6V FlashX", Supports: &multimodal},
+	"glm-4.5v":             {Label: "Z.ai GLM 4.5V", Supports: &multimodal},
 }
 
 // dynamicModelOptions is advertised for GLM models that resolve dynamically
