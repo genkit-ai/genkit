@@ -502,7 +502,25 @@ describe('edge cases', () => {
     assert.equal(result.topP, 0.9);
     assert.deepEqual(result.stop, ['END']);
   });
-});
+  it('should retain zero configuration values', () => {
+        const input = {
+                messages: [
+                  {
+                              role: 'user' as const,
+                              content: [{ text: 'test' }],
+                  },
+                        ],
+                config: {
+                          temperature: 0,
+                          topP: 0,
+                },
+        };
+
+        const result = toMistralRequest(MODEL_ID, input);
+        assert.equal(result.temperature, 0);
+        assert.equal(result.topP, 0);
+  });
+    });
 
 describe('fromMistralResponse error handling', () => {
   it('should handle response with no choices', () => {
