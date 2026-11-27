@@ -14,15 +14,27 @@
  * limitations under the License.
  */
 
+import { z } from '@genkit-ai/core';
+import { initNodeFeatures } from '@genkit-ai/core/node';
+import { Registry } from '@genkit-ai/core/registry';
 import * as assert from 'assert';
+import JSON5 from 'json5';
 import { describe, it } from 'node:test';
+import { defineFormat } from '../../src/formats/index.js';
 import { jsonlFormatter } from '../../src/formats/jsonl.js';
-import { GenerateResponseChunk } from '../../src/generate.js';
+import {
+  GenerateResponseChunk,
+  generate,
+  generateStream,
+} from '../../src/generate.js';
 import { Message } from '../../src/message.js';
 import type {
   GenerateResponseChunkData,
   MessageData,
 } from '../../src/model.js';
+import { defineProgrammableModel, runAsync } from '../helpers.js';
+
+initNodeFeatures();
 
 describe('jsonlFormat', () => {
   const streamingTests = [
@@ -53,6 +65,99 @@ describe('jsonlFormat', () => {
       ],
     },
     {
+      desc: 'emits a completed object only once when its newline arrives later',
+      chunks: [
+        {
+          text: '{"id": 1, "name": "single"',
+          want: [],
+        },
+        {
+          text: '}',
+          want: [{ id: 1, name: 'single' }],
+        },
+        {
+          text: '\n',
+          want: [],
+        },
+      ],
+    },
+    {
+      desc: 'does not re-emit an object when a block comment is split across chunks',
+      chunks: [
+        {
+          text: '{id: 1}',
+          want: [{ id: 1 }],
+        },
+        {
+          text: '/',
+          want: [],
+        },
+        {
+          text: '* trailing */',
+          want: [],
+        },
+        {
+          text: '\n',
+          want: [],
+        },
+      ],
+    },
+    {
+      desc: 'does not re-emit an object when a line comment is split across chunks',
+      chunks: [
+        {
+          text: '{id: 1}',
+          want: [{ id: 1 }],
+        },
+        {
+          text: '/',
+          want: [],
+        },
+        {
+          text: '/ trailing',
+          want: [],
+        },
+        {
+          text: '\n',
+          want: [],
+        },
+      ],
+    },
+    {
+      desc: 'resumes with the next object after a split trailing comment',
+      chunks: [
+        {
+          text: '{id: 1}',
+          want: [{ id: 1 }],
+        },
+        {
+          text: '/',
+          want: [],
+        },
+        {
+          text: '* trailing */',
+          want: [],
+        },
+        {
+          text: '\n{id: 2}\n',
+          want: [{ id: 2 }],
+        },
+      ],
+    },
+    {
+      desc: 'handles braces in JSON5 strings and comments',
+      chunks: [
+        {
+          text: "{value: '}', nested: [/* } */",
+          want: [],
+        },
+        {
+          text: '{id: 1}]}\n',
+          want: [{ value: '}', nested: [{ id: 1 }] }],
+        },
+      ],
+    },
+    {
       desc: 'handles preamble with code fence',
       chunks: [
         {
@@ -62,6 +167,24 @@ describe('jsonlFormat', () => {
         {
           text: '{"id": 1, "name": "item"}\n```',
           want: [{ id: 1, name: 'item' }],
+        },
+      ],
+    },
+    {
+      desc: 'emits a valid object after an invalid object line in the same chunk',
+      chunks: [
+        {
+          text: '{"id": }\n{"id": 1}\n',
+          want: [{ id: 1 }],
+        },
+      ],
+    },
+    {
+      desc: 'emits a valid object after an incomplete object line in the same chunk',
+      chunks: [
+        {
+          text: '{"id":\n{"id": 1}\n',
+          want: [{ id: 1 }],
         },
       ],
     },
@@ -78,7 +201,7 @@ describe('jsonlFormat', () => {
 
   for (const st of streamingTests) {
     it(st.desc, () => {
-      const parser = jsonlFormatter.handler();
+      const parser = jsonlFormatter.handler().parseChunk!;
       const chunks: GenerateResponseChunkData[] = [];
 
       for (const chunk of st.chunks) {
@@ -88,19 +211,110 @@ describe('jsonlFormat', () => {
           content: [{ text: chunk.text }],
         };
 
-        const result = parser.parseChunk!(
-          new GenerateResponseChunk(newChunk, {
-            index: 0,
-            role: 'model',
-            previousChunks: chunks,
-          })
-        );
+        const responseChunk = new GenerateResponseChunk<unknown>(newChunk, {
+          index: 0,
+          role: 'model',
+          previousChunks: chunks,
+          parser,
+        });
+
+        const result = responseChunk.output;
         chunks.push(newChunk);
 
         assert.deepStrictEqual(result, chunk.want);
       }
     });
   }
+
+  it('rebuilds state when an earlier previous chunk changes', () => {
+    const parser = jsonlFormatter.handler().parseChunk!;
+    const prefixA: GenerateResponseChunkData['content'] = [{ text: '{a:' }];
+    const prefixB: GenerateResponseChunkData['content'] = [{ text: '{b:' }];
+    const middle: GenerateResponseChunkData['content'] = [{ text: '1' }];
+    const close: GenerateResponseChunkData['content'] = [{ text: '}' }];
+
+    const responseChunk = (
+      content: GenerateResponseChunkData['content'],
+      previousContents: GenerateResponseChunkData['content'][]
+    ) =>
+      new GenerateResponseChunk<unknown>(
+        { index: 0, role: 'model', content },
+        {
+          index: 0,
+          role: 'model',
+          previousChunks: previousContents.map((previousContent) => ({
+            index: 0,
+            role: 'model',
+            content: previousContent,
+          })),
+          parser,
+        }
+      );
+
+    assert.deepStrictEqual(responseChunk(prefixA, []).output, []);
+    assert.deepStrictEqual(responseChunk(middle, [prefixA]).output, []);
+    assert.deepStrictEqual(responseChunk(close, [prefixB, middle]).output, [
+      { b: 1 },
+    ]);
+    assert.deepStrictEqual(responseChunk(close, [prefixA, middle]).output, [
+      { a: 1 },
+    ]);
+  });
+
+  it('does not reparse prior incomplete chunks', () => {
+    const originalParse = JSON5.parse;
+    let parseCalls = 0;
+    let textReads = 0;
+    JSON5.parse = ((...args: Parameters<typeof originalParse>) => {
+      parseCalls++;
+      return originalParse(...args);
+    }) as typeof JSON5.parse;
+
+    try {
+      const parser = jsonlFormatter.handler().parseChunk!;
+      const chunks: GenerateResponseChunkData[] = [];
+      const texts = ['{', ...Array(199).fill(' ')];
+
+      for (const text of texts) {
+        const newChunk: GenerateResponseChunkData = {
+          index: 0,
+          role: 'model',
+          content: [
+            {
+              get text() {
+                textReads++;
+                return text;
+              },
+            },
+          ],
+        };
+        const responseChunk = new GenerateResponseChunk<unknown>(newChunk, {
+          index: 0,
+          role: 'model',
+          previousChunks: chunks,
+          parser,
+        });
+
+        const output = responseChunk.output;
+        assert.deepStrictEqual(output, []);
+        assert.strictEqual(responseChunk.output, output);
+        chunks.push(newChunk);
+      }
+
+      assert.strictEqual(
+        parseCalls,
+        0,
+        `expected no incomplete-prefix parse calls, got ${parseCalls}`
+      );
+      assert.strictEqual(
+        textReads,
+        texts.length,
+        `expected one text read per chunk, got ${textReads}`
+      );
+    } finally {
+      JSON5.parse = originalParse;
+    }
+  });
 
   const messageTests = [
     {
@@ -163,4 +377,117 @@ describe('jsonlFormat', () => {
       }, et.wantError);
     });
   }
+});
+
+describe('jsonlFormat e2e', () => {
+  it('does not look up the direct chunk parser without a chunk', async () => {
+    const registry = new Registry();
+    let chunkParserReads = 0;
+    defineFormat(
+      registry,
+      { name: 'test-jsonl', ...jsonlFormatter.config },
+      (schema) => {
+        const handler = jsonlFormatter.handler(schema);
+        return {
+          ...handler,
+          get parseChunk() {
+            chunkParserReads++;
+            return handler.parseChunk;
+          },
+        };
+      }
+    );
+
+    const pm = defineProgrammableModel(registry);
+    pm.handleResponse = async () => ({
+      message: { role: 'model', content: [{ text: '{id: 1}\n' }] },
+    });
+
+    const response = await generate(registry, {
+      model: 'programmableModel',
+      prompt: 'Return one object',
+      output: {
+        format: 'test-jsonl',
+        schema: z.array(z.object({ id: z.number() })),
+      },
+    });
+
+    assert.deepStrictEqual(response.output, [{ id: 1 }]);
+    // The generate hook chain looks up its own parser. The direct model path
+    // should do no further lookups if it receives no chunks.
+    assert.strictEqual(chunkParserReads, 1);
+  });
+
+  it('keeps one parser per concurrent generation', async () => {
+    const registry = new Registry();
+    let nextParserId = 0;
+    const parserCalls = new Map<number, number>();
+
+    defineFormat(
+      registry,
+      { name: 'test-jsonl', ...jsonlFormatter.config },
+      (schema) => {
+        const parserId = nextParserId++;
+        const handler = jsonlFormatter.handler(schema);
+        return {
+          ...handler,
+          parseChunk: (chunk) => {
+            parserCalls.set(parserId, (parserCalls.get(parserId) ?? 0) + 1);
+            return handler.parseChunk!(chunk);
+          },
+        };
+      }
+    );
+
+    const pm = defineProgrammableModel(registry);
+    pm.handleResponse = async (request, streamingCallback) => {
+      const prompt = request.messages
+        .flatMap((message) => message.content)
+        .map((part) => part.text ?? '')
+        .join('');
+      const id = prompt.includes('first') ? 1 : 2;
+
+      await runAsync(() =>
+        streamingCallback?.({ content: [{ text: '{id: ' }] })
+      );
+      await runAsync(() =>
+        streamingCallback?.({ content: [{ text: `${id}}\n` }] })
+      );
+      return await runAsync(() => ({
+        message: {
+          role: 'model',
+          content: [{ text: `{id: ${id}}\n` }],
+        },
+      }));
+    };
+
+    const collect = async (prompt: string) => {
+      const { response, stream } = await generateStream(registry, {
+        model: 'programmableModel',
+        prompt,
+        output: {
+          format: 'test-jsonl',
+          schema: z.array(z.object({ id: z.number() })),
+        },
+      });
+      const outputs: unknown[] = [];
+      for await (const chunk of stream) outputs.push(chunk.output);
+      assert.deepStrictEqual((await response).output, [
+        { id: prompt === 'first' ? 1 : 2 },
+      ]);
+      return outputs;
+    };
+
+    const [first, second] = await Promise.all([
+      collect('first'),
+      collect('second'),
+    ]);
+
+    assert.deepStrictEqual(first, [[], [{ id: 1 }]]);
+    assert.deepStrictEqual(second, [[], [{ id: 2 }]]);
+    assert.deepStrictEqual(
+      [...parserCalls.values()].sort((a, b) => a - b),
+      [2, 2]
+    );
+  });
 });
