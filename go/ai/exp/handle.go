@@ -104,6 +104,15 @@ type AgentTransport interface {
 	Run(ctx context.Context, input *AgentInput, init *AgentInit[json.RawMessage], cb func(context.Context, json.RawMessage) error) (*AgentOutput[json.RawMessage], error)
 }
 
+// SessionDeleteTransport is the optional part of an [AgentTransport] that can
+// delete a session. Only an in-process transport offers it: deletion has no
+// companion action, so nothing serves it over the wire. A handle whose
+// transport lacks it refuses [AgentHandle.DeleteSession] with
+// FAILED_PRECONDITION.
+type SessionDeleteTransport interface {
+	DeleteSession(ctx context.Context, sessionID string) (bool, error)
+}
+
 // SnapshotTransport is the optional part of an [AgentTransport] that reaches
 // the agent's snapshot lifecycle. A handle whose transport lacks it refuses
 // snapshot operations with FAILED_PRECONDITION. A method may also refuse with
@@ -215,6 +224,8 @@ func (a *Agent[State]) Handle() *AgentHandle {
 			getSnapshot: a.getSnapshot,
 			wait:        a.wait,
 			abort:       a.abort,
+
+			deleteSession: a.DeleteSession,
 		},
 	}
 }
@@ -533,6 +544,29 @@ func (h *AgentHandle) Abort(ctx context.Context, snapshotID string) (SnapshotSta
 	return resp.Status, nil
 }
 
+// DeleteSession permanently removes every persisted snapshot of a session, as
+// [Agent.DeleteSession] does, and reports whether anything was removed. It
+// works only on a handle for an agent in this process ([Agent.Handle]): the
+// operation has no companion action on purpose, so a handle from [LookupAgent]
+// or a remote one returns FAILED_PRECONDITION.
+//
+// It also returns FAILED_PRECONDITION when the agent has no session store or
+// its store cannot delete, and INVALID_ARGUMENT when sessionID is empty.
+func (h *AgentHandle) DeleteSession(ctx context.Context, sessionID string) (bool, error) {
+	if h == nil {
+		return false, nilHandleError("DeleteSession")
+	}
+	if sessionID == "" {
+		return false, status.Errorf(status.ErrInvalidArgument, "agent %q: DeleteSession: sessionID is required", h.name)
+	}
+	dt, ok := h.transport.(SessionDeleteTransport)
+	if !ok {
+		return false, status.Errorf(status.ErrFailedPrecondition,
+			"agent %q: its transport cannot delete a session", h.name)
+	}
+	return dt.DeleteSession(ctx, sessionID)
+}
+
 // snapshotTransport returns the handle's transport as a [SnapshotTransport],
 // or the refusal for one that reaches no snapshot lifecycle. verb names what
 // the caller wanted to do with a snapshot.
@@ -566,6 +600,10 @@ type actionTransport struct {
 	getSnapshot api.Action
 	wait        api.Action
 	abort       api.Action
+	// deleteSession is set only for an in-process agent ([Agent.Handle]): no
+	// companion action exists for deletion on purpose, so a handle that
+	// reaches the agent through actions cannot delete a session.
+	deleteSession func(ctx context.Context, sessionID string) (bool, error)
 }
 
 func (t *actionTransport) Run(ctx context.Context, input *AgentInput, init *AgentInit[json.RawMessage], cb func(context.Context, json.RawMessage) error) (*AgentOutput[json.RawMessage], error) {
@@ -630,6 +668,15 @@ func (t *actionTransport) Abort(ctx context.Context, req *AgentAbortRequest) (*A
 			"agent %q: the session store does not support abort (it does not implement SnapshotSubscriber)", t.name)
 	}
 	return callJSON[AgentAbortResponse](ctx, t.name, t.abort, "abort", req)
+}
+
+// DeleteSession implements [SessionDeleteTransport].
+func (t *actionTransport) DeleteSession(ctx context.Context, sessionID string) (bool, error) {
+	if t.deleteSession == nil {
+		return false, status.Errorf(status.ErrFailedPrecondition,
+			"agent %q: deleting a session is not available through this handle: it is an in-process API with no companion action", t.name)
+	}
+	return t.deleteSession(ctx, sessionID)
 }
 
 // callJSON dispatches req to act, one of the agent's companion actions, and

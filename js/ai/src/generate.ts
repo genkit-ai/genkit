@@ -484,9 +484,7 @@ export class GenerationBlockedError extends GenerationResponseError {}
 export async function normalizeMiddleware(
   registry: Registry,
   middlewareList?: (
-    | ModelMiddlewareArgument
-    | GenerateMiddleware
-    | MiddlewareRef
+    ModelMiddlewareArgument | GenerateMiddleware | MiddlewareRef
   )[]
 ): Promise<MiddlewareRef[]> {
   if (!middlewareList || middlewareList.length === 0) {

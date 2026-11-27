@@ -27,8 +27,7 @@ import { getFirestore } from 'firebase-admin/firestore';
  * Extends the core {@link GcpFirestoreSessionStoreOptions} from
  * `@genkit-ai/google-cloud` with Firebase-specific app setup.
  */
-export interface FirestoreSessionStoreOptions
-  extends GcpFirestoreSessionStoreOptions {
+export interface FirestoreSessionStoreOptions extends GcpFirestoreSessionStoreOptions {
   /** A Firebase app to derive the Firestore instance from. */
   firebaseApp?: App;
 }

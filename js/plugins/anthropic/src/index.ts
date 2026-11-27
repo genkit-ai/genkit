@@ -104,7 +104,7 @@ function validateApiKey(options?: PluginOptions): void {
  * });
  *
  * // Access models via the plugin's model() method:
- * const model = anthropic.model('claude-sonnet-4');
+ * const model = anthropic.model('claude-sonnet-5-5');
  * ```
  */
 function anthropicPlugin(options?: PluginOptions): GenkitPluginV2 {
@@ -168,7 +168,7 @@ export type AnthropicPlugin = {
 
 /**
  * Anthropic AI plugin for Genkit.
- * Includes Claude models (3, 3.5, and 4 series).
+ * Includes the current Claude models.
  */
 export const anthropic = anthropicPlugin as AnthropicPlugin;
 (anthropic as any).model = (
@@ -189,7 +189,7 @@ export const anthropic = anthropicPlugin as AnthropicPlugin;
  * import { anthropic, anthropicDocument } from '@genkit-ai/anthropic';
  *
  * const { text } = await ai.generate({
- *   model: anthropic.model('claude-sonnet-4-5'),
+ *   model: anthropic.model('claude-sonnet-5-5'),
  *   messages: [{
  *     role: 'user',
  *     content: [

@@ -210,8 +210,7 @@ export default function CodingAgent() {
               const tr = p.toolRequest;
               if (tr.name === 'ask_user') {
                 const askInput = tr.input as
-                  | { question?: string; options?: string[] }
-                  | undefined;
+                  { question?: string; options?: string[] } | undefined;
                 setQuestion({
                   question: askInput?.question || 'What would you like to do?',
                   options: askInput?.options || [],

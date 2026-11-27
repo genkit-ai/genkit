@@ -42,20 +42,19 @@ carrying `gen_ai.*` attributes. Metrics (`gen_ai.client.token.usage`,
 
 ## Genkit Dev UI (`genkit start --experimental-use-otel`)
 
-`genkit start --experimental-use-otel` is meant to render the app's own OTel
-traces in the Dev UI: it points the app's OTel SDK at the dev telemetry server
-via `OTEL_EXPORTER_OTLP_*` env vars instead of enabling Genkit's native dev
-instrumentation.
+The Genkit Dev UI can render these OTel traces too, no Jaeger or collector
+needed. `genkit start --experimental-use-otel` points the app's own OTel SDK at
+the dev telemetry server's OTLP endpoints (via standard `OTEL_EXPORTER_OTLP_*`
+env vars) instead of enabling Genkit's native dev instrumentation:
 
-It does not work with this sample yet. The CLI sets
-`OTEL_EXPORTER_OTLP_*_PROTOCOL=http/json`, the only encoding the dev telemetry
-server ingests today. Go's OTLP trace exporter supports `http/json` (since
-v1.46.0), but `autoexport`, which `setupOTel` uses to read the env vars, only
-accepts `grpc` and `http/protobuf` and fails at startup. The Go OTLP log
-exporter has no JSON support at all. Protobuf ingest in the telemetry server is
-planned as a follow-up, which makes the default `http/protobuf` work. Until
-then, use a local collector (above), or plain `genkit start` for Genkit's native
-dev traces.
+```bash
+export GEMINI_API_KEY=...
+genkit start --experimental-use-otel -- go run .
+```
+
+Note: only traces and logs are pointed at the dev telemetry server. Metrics are
+left alone and go wherever the app's OTel config sends them (the default is
+`localhost:4318`), so the two GenAI client metrics won't appear in the Dev UI.
 
 ## What to expect
 

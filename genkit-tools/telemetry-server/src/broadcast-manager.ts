@@ -89,7 +89,7 @@ export class BroadcastManager {
       for (const connection of connections) {
         try {
           connection.end();
-        } catch (error) {
+        } catch {
           // Ignore errors when closing
         }
       }

@@ -229,7 +229,7 @@ function appRoute<
           context,
           abortSignal: req.signal,
           init,
-          onChunk: (chunk) => {
+          onChunk: (chunk: S) => {
             if (durableStream) {
               taskQueue.enqueue(() => durableStream!.write(chunk));
             }
@@ -273,7 +273,7 @@ function appRoute<
       }
     })();
 
-    const headers = {
+    const headers: Record<string, string> = {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
       Connection: 'keep-alive',

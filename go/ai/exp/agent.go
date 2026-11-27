@@ -707,9 +707,13 @@ func (s *SessionRunner[State]) snapshotTurnEnd(ctx context.Context, finishReason
 			}, nil
 		})
 	if err != nil {
-		logger.Error(ctx, "agent failed to save snapshot",
-			"parentId", parentID,
-			"error", err)
+		// A deleted session is not a failure: the work simply stops being
+		// persisted.
+		if !errors.Is(err, ErrSessionDeleted) {
+			logger.Error(ctx, "agent failed to save snapshot",
+				"parentId", parentID,
+				"error", err)
+		}
 		return ""
 	}
 
@@ -965,6 +969,51 @@ func (a *Agent[State]) Abort(ctx context.Context, snapshotID string) (SnapshotSt
 		return "", status.Errorf(status.ErrInvalidArgument, "agent %q: Abort: snapshotID is required", a.Name())
 	}
 	return abortPendingSnapshot(ctx, a.store, snapshotID)
+}
+
+// DeleteSession permanently removes every persisted snapshot of a session. A
+// detached run still in flight is aborted first, so the work stops rather than
+// continuing against data that is going away. It reports whether anything was
+// removed and is idempotent: a session with no persisted data is not an error.
+//
+// Resuming by session ID afterwards starts a fresh session, and resuming by
+// snapshot ID fails with [ErrSnapshotNotFound]. A run that is still going when
+// the session is deleted stops persisting instead of failing; it cannot bring
+// the session back. Traces, logs, and durable streams live outside the store
+// and are not touched.
+//
+// This is an in-process API only: no companion action or route is registered
+// for it, so put it behind your own authorization.
+//
+// It returns FAILED_PRECONDITION on a client-managed agent or when the store
+// does not implement [SessionDeleter], and INVALID_ARGUMENT when sessionID is
+// empty.
+func (a *Agent[State]) DeleteSession(ctx context.Context, sessionID string) (bool, error) {
+	if a.store == nil {
+		return false, status.Errorf(ErrSessionStoreNotConfigured, "agent %q: DeleteSession requires a session store", a.Name())
+	}
+	if sessionID == "" {
+		return false, status.Errorf(status.ErrInvalidArgument, "agent %q: DeleteSession: sessionID is required", a.Name())
+	}
+	deleter, ok := a.store.(SessionDeleter)
+	if !ok {
+		return false, status.Errorf(status.ErrFailedPrecondition, "agent %q: the session store does not support DeleteSession", a.Name())
+	}
+	// Stop an in-flight detached run first. Best effort: a failure here is
+	// logged and the delete goes on, because the store also tells the run's
+	// subscription its row is gone and rejects writers that continue the
+	// deleted chain.
+	latest, err := getLatestSnapshotMetadata(ctx, a.store, sessionID)
+	if err != nil {
+		logger.Warn(ctx, "agent: could not look up the session's latest snapshot before deleting it",
+			"sessionId", sessionID, "error", err)
+	} else if latest != nil && latest.Status == SnapshotStatusPending {
+		if _, err := abortPendingSnapshot(ctx, a.store, latest.SnapshotID); err != nil {
+			logger.Warn(ctx, "agent: could not abort the session's pending snapshot before deleting it",
+				"snapshotId", latest.SnapshotID, "error", err)
+		}
+	}
+	return deleter.DeleteSession(ctx, sessionID)
 }
 
 // --- api.BidiAction implementation ---
@@ -2214,7 +2263,12 @@ func (rt *agentRuntime[State]) finalizePendingSnapshot(
 
 	_, err := rt.cfg.store.SaveSnapshot(ctx, pending.SnapshotID,
 		func(existing *SessionSnapshot[State]) (*SessionSnapshot[State], error) {
-			if existing != nil && existing.Status.Terminal() {
+			if existing == nil {
+				// The pending row is gone: its session was deleted while the
+				// work ran. Writing would bring the session back.
+				return nil, nil
+			}
+			if existing.Status.Terminal() {
 				// Already settled (a retried finalize, or a writer that
 				// landed a terminal status directly): the row describes
 				// itself, so leave it.
@@ -2235,7 +2289,8 @@ func (rt *agentRuntime[State]) finalizePendingSnapshot(
 				UpdatedAt:    now,
 			}, nil
 		})
-	if err != nil {
+	// A deleted session is not a failure: the run simply stops persisting.
+	if err != nil && !errors.Is(err, ErrSessionDeleted) {
 		logger.Error(ctx, "agent: failed to finalize pending snapshot",
 			"snapshotId", pending.SnapshotID, "error", err)
 	}

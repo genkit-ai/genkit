@@ -23,7 +23,8 @@ import {
   notifyAnalyticsIfFirstRun,
   record,
 } from '@genkit-ai/tools-common/utils';
-import { Command, program } from 'commander';
+import type { Command } from 'commander';
+import { program } from 'commander';
 import { config } from './commands/config.js';
 import { devTestModel } from './commands/dev-test-model.js';
 import { docsList, docsRead, docsSearch } from './commands/docs.js';
@@ -32,7 +33,7 @@ import { evalFlow } from './commands/eval-flow.js';
 import { evalRun } from './commands/eval-run.js';
 import { flowBatchRun } from './commands/flow-batch-run.js';
 import { flowRun } from './commands/flow-run.js';
-import { initAiTools } from './commands/init-ai-tools/index.js';
+import { initAiTools } from './commands/init-ai-tools.js';
 import { logList } from './commands/log-list.js';
 import { mcp } from './commands/mcp.js';
 import { getPluginCommands, getPluginSubCommand } from './commands/plugins.js';
@@ -46,6 +47,7 @@ import { traceGet } from './commands/trace-get.js';
 import { traceList } from './commands/trace-list.js';
 import { uiStart } from './commands/ui-start.js';
 import { uiStop } from './commands/ui-stop.js';
+import { warnIfLegacyGenkitContext } from './utils/legacy-context-warning.js';
 import { detectCLIRuntime } from './utils/runtime-detector.js';
 import { showUpdateNotification } from './utils/updates.js';
 import { version } from './utils/version.js';
@@ -106,16 +108,33 @@ export async function startCLI(): Promise<void> {
         commandName = 'unknown';
       }
 
-      if (
-        !process.argv.includes('--non-interactive') &&
-        commandName !== 'config'
-      ) {
-        await notifyAnalyticsIfFirstRun();
-      }
-
       const { isCompiledBinary } = detectCLIRuntime();
       const projectRoot = await findProjectRoot();
       const projectRuntime = await detectRuntime(projectRoot);
+
+      if (
+        !process.argv.includes('--non-interactive') &&
+        commandName !== 'config' &&
+        commandName !== 'mcp' &&
+        actionCommand.name() !== SERVER_HARNESS_COMMAND
+      ) {
+        await notifyAnalyticsIfFirstRun(projectRuntime);
+      }
+
+      if (
+        process.stdout.isTTY &&
+        !process.argv.includes('--non-interactive') &&
+        process.argv[2] !== SERVER_HARNESS_COMMAND &&
+        commandName !== 'mcp' &&
+        commandName !== 'config' &&
+        commandName !== 'init:ai-tools'
+      ) {
+        try {
+          await warnIfLegacyGenkitContext(projectRoot);
+        } catch (e) {
+          logger.debug('Failed to check for legacy GENKIT.md context', e);
+        }
+      }
       await record(
         new RunCommandEvent(
           commandName,
@@ -126,12 +145,14 @@ export async function startCLI(): Promise<void> {
     });
 
   // Check for updates and show notification if available,
-  // unless --no-update-notification is set
+  // unless --no-update-notification is set or running the mcp stdio server
   // Run this synchronously to ensure it shows before command execution
   const hasNoUpdateNotification = process.argv.includes(
     '--no-update-notification'
   );
-  if (!hasNoUpdateNotification) {
+  const { operands } = program.parseOptions(process.argv.slice(2));
+  const isMcpCommand = operands[0] === 'mcp';
+  if (!hasNoUpdateNotification && !isMcpCommand) {
     try {
       await showUpdateNotification();
     } catch (e) {
@@ -146,7 +167,7 @@ export async function startCLI(): Promise<void> {
     program.addCommand(serverHarness);
   }
 
-  const deprecatedCommands = new Set([uiStart, uiStop]);
+  const deprecatedCommands = new Set([uiStart, uiStop, initAiTools]);
   for (const command of commands) {
     program.addCommand(command, {
       hidden: deprecatedCommands.has(command),

@@ -27,7 +27,7 @@ export async function waitForRuntimeShutdown(
   let stopPromise: Promise<void> | undefined;
   let exiting = false;
   const stop = () => (stopPromise ??= manager.stopOnce());
-  const onSignal = (signal: (typeof signals)[number]) => {
+  const onSignal = () => {
     if (exiting) return;
     exiting = true;
     void stop().then(
@@ -38,11 +38,9 @@ export async function waitForRuntimeShutdown(
       }
     );
   };
-  const handlers = signals.map((signal) => {
-    const handler = () => onSignal(signal);
-    process.on(signal, handler);
-    return { signal, handler };
-  });
+  for (const signal of signals) {
+    process.on(signal, onSignal);
+  }
   let processFailed = false;
   let processError: unknown;
   try {
@@ -57,8 +55,8 @@ export async function waitForRuntimeShutdown(
     if (!processFailed) throw error;
     logger.error(`Failed to stop runtime after process failure: ${error}`);
   } finally {
-    for (const { signal, handler } of handlers) {
-      process.off(signal, handler);
+    for (const signal of signals) {
+      process.off(signal, onSignal);
     }
   }
   if (processFailed) throw processError;

@@ -95,9 +95,9 @@ export const startFlutter = new Command('start:flutter')
     if (!options.noui) {
       const port =
         options.port ?? (await getPort({ port: portNumbers(4000, 4099) }));
-      startServer(manager, port);
+      void startServer(manager, port);
       if (options.open) {
-        open(`http://localhost:${port}`);
+        void Promise.resolve(open(`http://localhost:${port}`)).catch(() => {});
       }
     }
 

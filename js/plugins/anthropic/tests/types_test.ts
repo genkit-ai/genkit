@@ -87,3 +87,12 @@ describe('resolveBetaEnabled', () => {
     assert.strictEqual(resolveBetaEnabled(config, 'beta'), true);
   });
 });
+
+describe('AnthropicConfigSchema', () => {
+  it('should accept output_config.effort max', () => {
+    assert.ok(
+      AnthropicConfigSchema.safeParse({ output_config: { effort: 'max' } })
+        .success
+    );
+  });
+});

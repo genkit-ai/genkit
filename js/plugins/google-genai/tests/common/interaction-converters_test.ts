@@ -39,6 +39,7 @@ import {
   toInteractionSpeechConfig,
   toInteractionSteps,
   toInteractionTool,
+  toInteractionToolChoice,
   toInteractionVideoResponseFormat,
   withBasicUsageStats,
 } from '../../src/common/interaction-converters.js';
@@ -1305,6 +1306,71 @@ describe('Interaction Converters', () => {
         toInteractionContent({ text: 'Hi', metadata: { speechMetadata: {} } }),
         { type: 'text', text: 'Hi' }
       );
+    });
+  });
+
+  describe('toInteractionToolChoice', () => {
+    // The server only accepts allowed_tools with mode any or validated (400
+    // "allowed_tools mode must be either ANY or VALIDATED." otherwise).
+    it('sends a request toolChoice as a plain string', () => {
+      assert.strictEqual(toInteractionToolChoice(undefined, 'required'), 'any');
+      assert.strictEqual(toInteractionToolChoice(undefined, 'none'), 'none');
+      assert.strictEqual(toInteractionToolChoice(undefined, 'auto'), 'auto');
+      assert.strictEqual(toInteractionToolChoice(), undefined);
+    });
+
+    it('sends a functionCallingConfig mode without names as a plain string', () => {
+      for (const mode of ['AUTO', 'NONE', 'ANY', 'VALIDATED']) {
+        assert.strictEqual(
+          toInteractionToolChoice({ mode }),
+          mode.toLowerCase()
+        );
+      }
+      assert.strictEqual(
+        toInteractionToolChoice({ mode: 'MODE_UNSPECIFIED' }),
+        undefined
+      );
+    });
+
+    it('uses allowed_tools for names with ANY or VALIDATED', () => {
+      assert.deepStrictEqual(
+        toInteractionToolChoice({
+          mode: 'ANY',
+          allowedFunctionNames: ['getWeather'],
+        }),
+        { allowed_tools: { mode: 'any', tools: ['getWeather'] } }
+      );
+      assert.deepStrictEqual(
+        toInteractionToolChoice({
+          mode: 'VALIDATED',
+          allowedFunctionNames: ['getWeather'],
+        }),
+        { allowed_tools: { mode: 'validated', tools: ['getWeather'] } }
+      );
+    });
+
+    it('drops names without ANY or VALIDATED', () => {
+      const dropped: string[] = [];
+      assert.strictEqual(
+        toInteractionToolChoice(
+          { mode: 'AUTO', allowedFunctionNames: ['getWeather'] },
+          undefined,
+          (field) => dropped.push(field)
+        ),
+        'auto'
+      );
+      assert.strictEqual(
+        toInteractionToolChoice(
+          { allowedFunctionNames: ['getWeather'] },
+          undefined,
+          (field) => dropped.push(field)
+        ),
+        undefined
+      );
+      assert.deepStrictEqual(dropped, [
+        'functionCallingConfig.allowedFunctionNames',
+        'functionCallingConfig.allowedFunctionNames',
+      ]);
     });
   });
 

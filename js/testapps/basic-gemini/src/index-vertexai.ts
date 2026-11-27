@@ -754,6 +754,52 @@ ai.defineFlow(
   }
 );
 
+// Tool choice: `required` makes the model call a tool, `none` makes it
+// answer without one, `auto` (the default without toolChoice) lets it
+// decide. returnToolRequests returns the tool calls instead of running
+// them, so the output shows what the model asked for.
+ai.defineFlow(
+  {
+    name: 'tool-choice',
+    inputSchema: z.enum(['required', 'auto', 'none']).default('required'),
+  },
+  async (toolChoice) => {
+    const response = await ai.generate({
+      model: vertexAI.model('gemini-3.8-flash'),
+      prompt: "What's the weather in Paris, France?",
+      tools: [getWeather],
+      toolChoice,
+      returnToolRequests: true,
+    });
+    return {
+      toolRequests: response.toolRequests.map((p) => p.toolRequest),
+      text: response.text,
+    };
+  }
+);
+
+// Only some tools allowed: functionCallingConfig with mode ANY and
+// allowedFunctionNames. The model would start with getWeather; only
+// celsiusToFahrenheit is allowed, so it calls that one.
+// allowedFunctionNames only applies with mode ANY or VALIDATED: with
+// another mode it's ignored with a warning.
+ai.defineFlow('tool-choice-allowed-function-names', async () => {
+  const response = await ai.generate({
+    model: vertexAI.model('gemini-3.8-flash'),
+    prompt:
+      "What's the weather in Paris, France? Convert the temperature to Fahrenheit.",
+    tools: [getWeather, celsiusToFahrenheit],
+    config: {
+      functionCallingConfig: {
+        mode: 'ANY',
+        allowedFunctionNames: ['celsiusToFahrenheit'],
+      },
+    },
+    returnToolRequests: true,
+  });
+  return response.toolRequests.map((p) => p.toolRequest);
+});
+
 // Tool calling with structured output
 ai.defineFlow(
   {

@@ -99,7 +99,7 @@ export async function genkitStart(
   });
   const distDir = path.resolve(process.cwd(), '../dist');
   execSync(
-    `npm i --save ${distDir}/genkit-cli-?.?*.?*.tgz ${distDir}/genkit-ai-tools-common-*.tgz`,
+    `npm i --save ${distDir}/genkit-cli-?.?*.?*.tgz ${distDir}/genkit-ai-tools-common-*.tgz ${distDir}/genkit-ai-telemetry-server-*.tgz`,
     {
       stdio: 'inherit',
       cwd: cliInstallRoot,
@@ -113,18 +113,22 @@ export async function genkitStart(
         'exec',
         '--prefix',
         cliInstallRoot,
+        '--',
         'genkit',
+        '--non-interactive',
+        '--no-update-notification',
         'start',
         '--',
         ...appCmd.split(' '),
       ],
       {
         cwd: testRoot,
+        env: {
+          ...process.env,
+          XDG_CONFIG_HOME: path.join(cliInstallRoot, '.config'),
+        },
       }
     );
-
-    // Press enter in case of cookie ack prompt.
-    appProcess.stdin.write('\n');
 
     var done = false;
     setTimeout(() => {

@@ -333,7 +333,7 @@ export class ReflectionServer {
       logger.debug('Fetching actions.');
       try {
         const actions = await this.registry.listResolvableActions();
-        const convertedActions = {};
+        const convertedActions: Record<string, any> = {};
         Object.keys(actions).forEach((key) => {
           const action = actions[key];
           convertedActions[key] = {
@@ -405,7 +405,7 @@ export class ReflectionServer {
         };
         if (stream === 'true') {
           try {
-            const callback = (chunk) => {
+            const callback = (chunk: unknown) => {
               response.write(JSON.stringify(chunk) + '\n');
             };
             const result = await action.run(input, {
@@ -551,21 +551,28 @@ export class ReflectionServer {
       response.status(200).send('OK');
     });
 
-    server.use((err, req, res, next) => {
-      logger.error(err.stack);
-      const error = err as Error;
-      const { message, stack } = error;
-      const errorResponse: Status = {
-        code: StatusCodes.INTERNAL,
-        message,
-        details: {
-          stack,
-        },
-      };
+    server.use(
+      (
+        err: any,
+        req: express.Request,
+        res: express.Response,
+        next: express.NextFunction
+      ) => {
+        logger.error(err.stack);
+        const error = err as Error;
+        const { message, stack } = error;
+        const errorResponse: Status = {
+          code: StatusCodes.INTERNAL,
+          message,
+          details: {
+            stack,
+          },
+        };
 
-      // Headers may have been sent already (via onTraceStart), so check before setting status
-      res.status(200).end(JSON.stringify({ error: errorResponse }));
-    });
+        // Headers may have been sent already (via onTraceStart), so check before setting status
+        res.status(200).end(JSON.stringify({ error: errorResponse }));
+      }
+    );
 
     const listening = await this.listen(server, config.host, config.port);
     // Assigned only once listening, so stop() after a failed bind is a no-op

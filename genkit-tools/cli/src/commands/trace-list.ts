@@ -24,6 +24,7 @@ import {
 import { Command } from 'commander';
 import { runWithManager } from '../utils/manager-utils.js';
 import { parsePositiveInt, parseTraceStatus } from '../utils/option-parsers.js';
+import { writeStdout } from '../utils/output.js';
 
 function formatTruncated(val: any, maxLen = 100): string {
   if (val === undefined) return '';
@@ -96,7 +97,7 @@ export const traceList = new Command('trace:list')
           return;
         }
 
-        console.log(
+        writeStdout(
           `Found ${response.traces.length} trace${response.traces.length === 1 ? '' : 's'}:\n`
         );
 
@@ -132,25 +133,25 @@ export const traceList = new Command('trace:list')
             outputStr = formatTruncated(attrs['genkit:output']);
           }
 
-          console.log(`ID:       ${trace.traceId}`);
-          console.log(`Type:     ${type}`);
-          console.log(`Name:     ${trace.displayName || 'unknown'}`);
-          console.log(`Status:   ${status}`);
-          console.log(`Time:     ${time}`);
-          console.log(`Duration: ${duration}`);
-          if (inputStr) console.log(`Input:    ${inputStr}`);
-          if (outputStr) console.log(`Output:   ${outputStr}`);
+          writeStdout(`ID:       ${trace.traceId}`);
+          writeStdout(`Type:     ${type}`);
+          writeStdout(`Name:     ${trace.displayName || 'unknown'}`);
+          writeStdout(`Status:   ${status}`);
+          writeStdout(`Time:     ${time}`);
+          writeStdout(`Duration: ${duration}`);
+          if (inputStr) writeStdout(`Input:    ${inputStr}`);
+          if (outputStr) writeStdout(`Output:   ${outputStr}`);
 
-          console.log('---');
+          writeStdout('---');
         });
 
         if (response.continuationToken) {
-          console.log(
+          writeStdout(
             `\nTo get the next page, use: --continuation-token ${response.continuationToken}`
           );
         }
 
-        console.log(
+        writeStdout(
           `\nTip: Use "genkit trace:get <traceId>" to view full trace details.`
         );
       } catch (e) {

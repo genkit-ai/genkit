@@ -1009,3 +1009,46 @@ func TestAgentHandle_MetadataOnlyPrefersTheStoreCapability(t *testing.T) {
 			store.metadataReads, store.latestMetadataReads, store.fullReads, store.latestFullReads)
 	}
 }
+
+func TestAgentHandle_DeleteSession(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("local handle deletes through the agent", func(t *testing.T) {
+		store := newTestInMemStore[testState]()
+		agent := defineQuickDeleteAgent(t, "handleDelete", store)
+		out, err := agent.Run(ctx, &AgentInput{Message: ai.NewUserTextMessage("hi")})
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		removed, err := agent.Handle().DeleteSession(ctx, out.SessionID)
+		if err != nil || !removed {
+			t.Fatalf("DeleteSession = %v, %v; want true, nil", removed, err)
+		}
+		if n := store.snapshotCount(); n != 0 {
+			t.Errorf("store holds %d rows, want 0", n)
+		}
+	})
+
+	t.Run("registry handle has no route", func(t *testing.T) {
+		reg := newTestRegistry(t)
+		defineGatedAgent(t, reg, "handleDeleteRemote", newTestInMemStore[testState]())
+		_, err := LookupAgent(reg, "handleDeleteRemote").DeleteSession(ctx, "s")
+		if !errors.Is(err, status.ErrFailedPrecondition) {
+			t.Errorf("error = %v, want FAILED_PRECONDITION", err)
+		}
+	})
+
+	t.Run("empty session ID", func(t *testing.T) {
+		agent := defineQuickDeleteAgent(t, "handleDeleteEmpty", newTestInMemStore[testState]())
+		if _, err := agent.Handle().DeleteSession(ctx, ""); !errors.Is(err, status.ErrInvalidArgument) {
+			t.Errorf("error = %v, want INVALID_ARGUMENT", err)
+		}
+	})
+
+	t.Run("nil handle", func(t *testing.T) {
+		var h *AgentHandle
+		if _, err := h.DeleteSession(ctx, "s"); err == nil {
+			t.Error("nil handle returned no error")
+		}
+	})
+}

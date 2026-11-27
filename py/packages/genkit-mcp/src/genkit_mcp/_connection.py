@@ -75,7 +75,7 @@ _OUTPUT_SCHEMA_VIOLATIONS = (
 
 _PACKAGE = 'genkit-mcp'
 
-MAX_TOOL_PAGES = 1000
+_MAX_TOOL_PAGES = 1000
 """Ceiling on ``tools/list`` pages followed before a server is called broken."""
 
 DEFAULT_REQUEST_TIMEOUT_MILLIS = 60_000
@@ -93,7 +93,7 @@ _SERVER_ERROR_STATUS: dict[int, StatusName] = {
 }
 """Status for each JSON-RPC error code a server may answer with. Any other code is ``UNKNOWN``."""
 
-LIVENESS_PROBE_SECONDS = 5.0
+_LIVENESS_PROBE_SECONDS = 5.0
 """Bound on the ping that tells a dead transport from a server error reply.
 
 A ping which does not return inside this window is read as a slow server, not a
@@ -101,7 +101,7 @@ dead one: the opposite reading tears down a healthy connection over one slow
 reply.
 """
 
-CLOSE_GRACE_SECONDS = 6.0
+_CLOSE_GRACE_SECONDS = 6.0
 """How long ``close`` lets the SDK's stdio shutdown run before it kills the server outright.
 
 The SDK waits two seconds for the server to exit on stdin EOF, then two more
@@ -117,7 +117,7 @@ def _client_info() -> Implementation:
         return Implementation(name=_PACKAGE, version='0.0.0')
 
 
-CLIENT_INFO = _client_info()
+_CLIENT_INFO = _client_info()
 """What servers see in the ``clientInfo`` of every initialize request."""
 
 _serving: contextvars.ContextVar['McpConnection | None'] = contextvars.ContextVar('genkit_mcp_serving', default=None)
@@ -160,7 +160,7 @@ async def _transport_is_dead(session: ClientSession, error: Exception) -> bool:
     if not isinstance(error, McpError) or error.error.code != CONNECTION_CLOSED:
         return False
     try:
-        await asyncio.wait_for(session.send_ping(), timeout=LIVENESS_PROBE_SECONDS)
+        await asyncio.wait_for(session.send_ping(), timeout=_LIVENESS_PROBE_SECONDS)
     except McpError as probe:
         return probe.error.code == CONNECTION_CLOSED
     except asyncio.TimeoutError:
@@ -271,21 +271,30 @@ class McpConnection:
 
     def __init__(
         self,
+        name: str,
         config: McpStdioServerConfig,
         request_timeout_millis: int | None = DEFAULT_REQUEST_TIMEOUT_MILLIS,
+        *,
+        host: str | None = None,
     ) -> None:
         """Prepare a connection. No process starts until the first call.
 
         Args:
+            name: Name of the client, or of the server within a host, that
+                errors and logs report this connection by.
             config: How to launch the server.
             request_timeout_millis: How long one request may take before it
                 fails. Must be positive. ``None`` is the only way to disable
                 the timeout.
+            host: Name of the host serving this server, if any, which errors
+                and logs report alongside ``name``.
 
         Raises:
             ValueError: If ``request_timeout_millis`` is zero or negative.
         """
         validate_request_timeout(request_timeout_millis)
+        self._name = name
+        self._host = host
         self._config = config
         self._request_timeout = (
             timedelta(milliseconds=request_timeout_millis) if request_timeout_millis is not None else None
@@ -317,7 +326,9 @@ class McpConnection:
             capability.
 
         Raises:
-            _ProtocolError: If the server's cursors never terminate.
+            _ProtocolError: If the server's cursors never terminate, or a page
+                request fails without a JSON-RPC error, such as on a malformed
+                reply.
             _RequestTimeoutError: If the server does not answer a page in time.
             _ServerError: If the server answers a page with a JSON-RPC error.
         """
@@ -329,7 +340,7 @@ class McpConnection:
             tools: list[McpTool] = []
             cursor: str | None = None
             seen: set[str] = set()
-            for _ in range(MAX_TOOL_PAGES):
+            for _ in range(_MAX_TOOL_PAGES):
                 result = await session.list_tools(
                     params=PaginatedRequestParams(cursor=cursor) if cursor is not None else None
                 )
@@ -338,9 +349,9 @@ class McpConnection:
                 if not cursor:
                     return tools
                 if cursor in seen:
-                    raise _ProtocolError(f'{self._config.command!r} repeated the tools/list cursor {cursor!r}')
+                    raise _ProtocolError(f'MCP server {self._target} repeated the tools/list cursor {cursor!r}')
                 seen.add(cursor)
-            raise _ProtocolError(f'{self._config.command!r} served over {MAX_TOOL_PAGES} tools/list pages')
+            raise _ProtocolError(f'MCP server {self._target} served over {_MAX_TOOL_PAGES} tools/list pages')
 
         return await self._request(list_all)
 
@@ -362,6 +373,8 @@ class McpConnection:
 
         Raises:
             _ToolResultError: If the result violates the tool's declared output schema.
+            _ProtocolError: If the request fails without a JSON-RPC error, such
+                as on a malformed reply.
             _RequestTimeoutError: If the server does not answer in time.
             _ServerError: If the server answers with a JSON-RPC error.
         """
@@ -377,7 +390,7 @@ class McpConnection:
         Safe to call when never connected, and safe to call twice. A closed
         connection serves nothing more. In-flight and queued callers are
         released at once; the return waits until the server has exited, which
-        takes up to ``CLOSE_GRACE_SECONDS`` for a server that ignores stdin EOF.
+        takes up to ``_CLOSE_GRACE_SECONDS`` for a server that ignores stdin EOF.
 
         Raises:
             GenkitError: ``FAILED_PRECONDITION`` if called from inside one of
@@ -411,7 +424,7 @@ class McpConnection:
             self._stop.cancel()
         if self._shutdown is not None:
             # Not ``task.cancel()``: that ignores anyio shields, so it can abort the SDK reaping the child.
-            self._deadline = asyncio.get_running_loop().call_later(CLOSE_GRACE_SECONDS, self._shutdown.cancel)
+            self._deadline = asyncio.get_running_loop().call_later(_CLOSE_GRACE_SECONDS, self._shutdown.cancel)
         task.add_done_callback(self._owner_done)
 
     def _owner_done(self, _task: asyncio.Task[None]) -> None:
@@ -454,7 +467,7 @@ class McpConnection:
 
         Args:
             shutdown: Cancelled only when the SDK's stdio shutdown overruns
-                ``CLOSE_GRACE_SECONDS``.
+                ``_CLOSE_GRACE_SECONDS``.
             stop: Cancelled by ``close`` to end the session's work.
         """
         try:
@@ -473,7 +486,7 @@ class McpConnection:
                         read_stream,
                         write_stream,
                         read_timeout_seconds=self._request_timeout,
-                        client_info=CLIENT_INFO,
+                        client_info=_CLIENT_INFO,
                     ) as session:
                         # The SDK's stdio shutdown is not shielded, so no scope around it may be cancelled.
                         with stop:
@@ -489,8 +502,13 @@ class McpConnection:
                 raise
             cause = _transport_cause(error)
             # A rendered traceback would print frame locals, and those hold the server's env.
+            named = {'client': self._name} if self._host is None else {'server': self._name, 'host': self._host}
             logger.warning(
-                'MCP connection ended', command=self._config.command, error=type(error).__name__, cause=repr(cause)
+                'MCP connection ended',
+                **named,
+                command=self._config.command,
+                error=type(error).__name__,
+                cause=repr(cause),
             )
             self._settle(cause)
         finally:
@@ -587,23 +605,38 @@ class McpConnection:
             if not request.result.done():
                 request.result.set_exception(build_error())
 
+    @property
+    def _target(self) -> str:
+        """Name the server in a message by its name, its host if any, and the command that runs it."""
+        if self._host is None:
+            return f'{self._name!r} ({self._config.command!r})'
+        return f'{self._name!r} on host {self._host!r} ({self._config.command!r})'
+
     def _closed_error(self) -> _ConnectionClosedError:
         """Build the error reported once this connection is shut down."""
-        return _ConnectionClosedError(f'MCP connection to {self._config.command!r} is closed')
+        return _ConnectionClosedError(f'MCP connection to {self._target} is closed')
 
-    def _answered_error(self, error: Exception) -> Exception:
+    def _answered_error(self, error: Exception) -> _ClientError:
         """Build the error reported for one operation that failed while the server stayed reachable."""
         if _timed_out(error):
             return self._timed_out_error(error)
         if isinstance(error, McpError):
             return self._server_error(error)
+        if isinstance(error, _ClientError):
+            return error
+        return self._protocol_error(error)
+
+    def _protocol_error(self, failure: Exception) -> _ProtocolError:
+        """Build the error reported when one request failed without a JSON-RPC error, such as on a malformed reply."""
+        error = _ProtocolError(f'MCP request to {self._target} failed with {type(failure).__name__}', cause=failure)
+        error.__cause__ = failure
         return error
 
     def _server_error(self, reply: McpError) -> _ServerError:
         """Build the error reported when the server answered one request with a JSON-RPC error."""
         code = reply.error.code
         error = _ServerError(
-            f'MCP request to {self._config.command!r} failed with error {code}: {reply.error.message}',
+            f'MCP request to {self._target} failed with error {code}: {reply.error.message}',
             status=_SERVER_ERROR_STATUS.get(code, 'UNKNOWN'),
             cause=reply,
         )
@@ -612,12 +645,12 @@ class McpConnection:
 
     def _timed_out_error(self, timeout: Exception) -> _RequestTimeoutError:
         """Build the error reported when the server did not answer one request in time."""
-        error = _RequestTimeoutError(f'MCP request to {self._config.command!r} timed out')
+        error = _RequestTimeoutError(f'MCP request to {self._target} timed out', cause=timeout)
         error.__cause__ = timeout
         return error
 
     def _failed_error(self) -> _ConnectionFailedError:
         """Build the error reported when startup or the session died."""
-        error = _ConnectionFailedError(f'MCP connection to {self._config.command!r} failed')
+        error = _ConnectionFailedError(f'MCP connection to {self._target} failed', cause=self._failure)
         error.__cause__ = self._failure
         return error

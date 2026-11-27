@@ -33,7 +33,7 @@ ai.defineFlow('stable-vision-url', async () => {
     'https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/Cat03.jpg/1200px-Cat03.jpg';
 
   const { text } = await ai.generate({
-    model: anthropic.model('claude-sonnet-4-5'),
+    model: anthropic.model('claude-sonnet-5-5'),
     messages: [
       {
         role: 'user',
@@ -63,7 +63,7 @@ ai.defineFlow('stable-vision-base64', async () => {
   const imageBase64 = imageBuffer.toString('base64');
 
   const { text } = await ai.generate({
-    model: anthropic.model('claude-sonnet-4-5'),
+    model: anthropic.model('claude-sonnet-5-5'),
     messages: [
       {
         role: 'user',
@@ -95,7 +95,7 @@ ai.defineFlow('stable-vision-conversation', async () => {
   const imageBase64 = imageBuffer.toString('base64');
 
   const { text } = await ai.generate({
-    model: anthropic.model('claude-sonnet-4-5'),
+    model: anthropic.model('claude-sonnet-5-5'),
     messages: [
       {
         role: 'user',

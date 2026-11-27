@@ -28,28 +28,23 @@ import { Command } from 'commander';
 export const UPDATE_NOTIFICATIONS_OPT_OUT_CONFIG_TAG =
   'updateNotificationsOptOut';
 
+const parseBooleanConfig = (value: string): boolean => {
+  let o: unknown;
+  try {
+    o = JSON.parse(value);
+  } catch {
+    // Fall through to validation error below.
+  }
+  if (typeof o !== 'boolean') throw new Error('Expected boolean');
+  return o;
+};
+
 const CONFIG_TAGS: Record<
   string,
   (value: string) => string | boolean | number
 > = {
-  [ANALYTICS_OPT_OUT_CONFIG_TAG]: (value) => {
-    let o: boolean | undefined;
-    try {
-      o = JSON.parse(value);
-    } finally {
-      if (typeof o !== 'boolean') throw new Error('Expected boolean');
-      return o;
-    }
-  },
-  [UPDATE_NOTIFICATIONS_OPT_OUT_CONFIG_TAG]: (value) => {
-    let o: boolean | undefined;
-    try {
-      o = JSON.parse(value);
-    } finally {
-      if (typeof o !== 'boolean') throw new Error('Expected boolean');
-      return o;
-    }
-  },
+  [ANALYTICS_OPT_OUT_CONFIG_TAG]: parseBooleanConfig,
+  [UPDATE_NOTIFICATIONS_OPT_OUT_CONFIG_TAG]: parseBooleanConfig,
 };
 
 export const config = new Command('config');

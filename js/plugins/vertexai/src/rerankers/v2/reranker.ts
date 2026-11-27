@@ -15,6 +15,7 @@
  */
 
 import {
+  Document,
   RerankerInfo,
   RerankerReference,
   z,
@@ -27,6 +28,7 @@ import { rerankerRank } from './client.js';
 import {
   RerankRequest,
   RerankRequestRecord,
+  RerankResponse,
   VertexRerankerClientOptions,
 } from './types.js';
 
@@ -137,16 +139,19 @@ export function defineReranker(
   );
 }
 
-function toRerankerDoc(doc, idx): RerankRequestRecord {
+function toRerankerDoc(doc: Document, idx: number): RerankRequestRecord {
   return {
     id: `${idx}`,
     content: doc.text,
   };
 }
 
-function fromRerankResponse(response, documents): RankedDocument[] {
+function fromRerankResponse(
+  response: RerankResponse,
+  documents: Document[]
+): RankedDocument[] {
   return response.records.map((record) => {
-    const doc = documents[record.id];
+    const doc = documents[Number(record.id)];
     return new RankedDocument({
       content: doc.content,
       metadata: {

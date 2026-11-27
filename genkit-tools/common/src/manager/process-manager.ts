@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 
-import { ChildProcess, execFile, spawn } from 'child_process';
+import type { ChildProcess } from 'child_process';
+import { execFile, spawn } from 'child_process';
 import terminate from 'terminate';
 import { logger } from '../utils/index.js';
 
