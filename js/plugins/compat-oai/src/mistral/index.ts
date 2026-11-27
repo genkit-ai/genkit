@@ -228,8 +228,10 @@ function createModelCatalog(canList: boolean) {
     client: OpenAI,
     name: string
   ): Promise<ModelInfo | undefined> => {
+    // When capabilities are unknown (no key to list with, or the listing
+    // fails), leave `supports` unset, since the registry keeps this action
+    // until restart.
     if (listedModelInfo.has(name)) return listedModelInfo.get(name);
-    // Capabilities are unknown: leave `supports` unset, since the registry keeps this action until restart.
     if (!canList) return {};
     try {
       await list(client);
