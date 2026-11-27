@@ -2607,11 +2607,29 @@ describe('Google AI Gemini', () => {
       }
     });
 
+    it('marks gemini-2.5-pro and gemini-2.5-flash deprecated', () => {
+      // Google's deprecation page (aistudio.google.com/docs/deprecations)
+      // lists both ids as deprecated: requests to them are rerouted to
+      // newer models and billed at the target model's rates. The Lite
+      // variant is not deprecated and stays 'legacy'.
+      assert.strictEqual(
+        model('gemini-2.5-pro').name,
+        'googleai/gemini-2.5-pro'
+      );
+      assert.strictEqual(model('gemini-2.5-pro').info?.stage, 'deprecated');
+      assert.strictEqual(
+        model('gemini-2.5-flash').name,
+        'googleai/gemini-2.5-flash'
+      );
+      assert.strictEqual(model('gemini-2.5-flash').info?.stage, 'deprecated');
+      assert.strictEqual(model('gemini-2.5-flash-lite').info?.stage, 'legacy');
+    });
+
     it('keeps the default capabilities on hidden models', () => {
       // Passing `info` replaces the defaults, so a hidden model must copy them.
-      assert.strictEqual(model('gemini-2.5-flash').info?.stage, 'legacy');
+      assert.strictEqual(model('gemini-2.5-flash-lite').info?.stage, 'legacy');
       assert.deepStrictEqual(
-        model('gemini-2.5-flash').info?.supports,
+        model('gemini-2.5-flash-lite').info?.supports,
         model('gemini-42.0-flash').info?.supports
       );
 

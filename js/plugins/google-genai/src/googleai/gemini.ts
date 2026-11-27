@@ -801,17 +801,20 @@ export function isGemmaModelName(value: string): value is GemmaModelName {
 // - 'deprecated': deprecated by Google, or < 1 month from shutdown.
 // - 'legacy': not deprecated, but no longer offered to new projects.
 const HIDDEN_MODELS = {
-  // Gemini 2.5: Google limits access to accounts that used it before; new
+  // Gemini 2.5: pro and flash are deprecated - Google reroutes requests
+  // for them to newer models and bills at the routed model's rates (see
+  // aistudio.google.com/docs/deprecations). flash-lite is not deprecated,
+  // but Google limits access to accounts that used it before; new
   // projects should use newer models.
   'gemini-2.5-pro': commonRef(
     'gemini-2.5-pro',
-    { ...GENERIC_MODEL.info, stage: 'legacy' },
+    { ...GENERIC_MODEL.info, stage: 'deprecated' },
     GeminiConfigSchema,
     false
   ),
   'gemini-2.5-flash': commonRef(
     'gemini-2.5-flash',
-    { ...GENERIC_MODEL.info, stage: 'legacy' },
+    { ...GENERIC_MODEL.info, stage: 'deprecated' },
     GeminiConfigSchema,
     false
   ),
