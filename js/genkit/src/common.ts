@@ -23,6 +23,7 @@ export {
   GENKIT_UI_WIDGETS,
   GenerateResponse,
   GenerateResponseChunk,
+  GenerationAbortedError,
   GenerationBlockedError,
   GenerationCommonConfigSchema,
   GenerationResponseError,

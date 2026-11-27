@@ -524,20 +524,31 @@ func TestFilesystemEditFileNotFound(t *testing.T) {
 	if len(*seen) < 3 {
 		t.Fatalf("expected 3 model calls, got %d", len(*seen))
 	}
-	found := false
-	for _, msg := range (*seen)[2].Messages {
-		if msg.Role != ai.RoleUser {
-			continue
-		}
+	msg, ok := toolErrorIn(t, (*seen)[2].Messages, "edit_file")
+	if !ok {
+		t.Fatal("expected the edit_file call to be answered with its error")
+	}
+	if !strings.HasPrefix(msg, "edit 0: oldString not found") || strings.Contains(msg, "error calling tool") {
+		t.Errorf("error = %q, want the tool's own message about the missing oldString", msg)
+	}
+}
+
+// toolErrorIn returns the error that answers the named tool's call in msgs,
+// and fails the lookup when a user message repeats a tool failure: the error
+// belongs on the call, not in speech the user never wrote.
+func toolErrorIn(t *testing.T, msgs []*ai.Message, tool string) (string, bool) {
+	t.Helper()
+	for _, msg := range msgs {
 		for _, p := range msg.Content {
-			if p.IsText() && strings.Contains(p.Text, `Tool "edit_file" failed`) {
-				found = true
+			if msg.Role == ai.RoleUser && p.IsText() && strings.Contains(p.Text, "failed") {
+				return "", false
+			}
+			if p.IsToolError() && p.ToolResponse.Name == tool {
+				return errorMessage(t, p), true
 			}
 		}
 	}
-	if !found {
-		t.Errorf("expected a user message describing the tool failure")
-	}
+	return "", false
 }
 
 func TestFilesystemRejectsTraversal(t *testing.T) {
@@ -575,22 +586,15 @@ func TestFilesystemRejectsTraversal(t *testing.T) {
 	if len(*seen) < 2 {
 		t.Fatalf("expected 2 model calls, got %d", len(*seen))
 	}
-	found := false
 	for _, msg := range (*seen)[1].Messages {
-		if msg.Role != ai.RoleUser {
-			continue
-		}
 		for _, p := range msg.Content {
-			if p.IsText() && strings.Contains(p.Text, `"read_file" failed`) {
-				found = true
-			}
 			if p.IsText() && strings.Contains(p.Text, "nope") {
 				t.Errorf("sibling file contents leaked to the model")
 			}
 		}
 	}
-	if !found {
-		t.Errorf("expected traversal attempt to surface as a failure message")
+	if _, ok := toolErrorIn(t, (*seen)[1].Messages, "read_file"); !ok {
+		t.Errorf("expected the traversal attempt to be answered with its error")
 	}
 }
 

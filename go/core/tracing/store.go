@@ -97,9 +97,12 @@ type InstrumentationScope struct {
 	SchemaURL string `json:"schemaUrl,omitempty"`
 }
 
-// Status is a copy of [go.opentelemetry.io/otel/sdk/trace.Status],
-// with added struct tags to match the javascript JSON field names.
+// Status is the JSON form of [go.opentelemetry.io/otel/sdk/trace.Status],
+// with struct tags that match the javascript JSON field names.
 type Status struct {
-	Code        uint32 `json:"code"` // avoid the MarshalJSON method on codes.Code
+	// Code is the OTLP status code: 0 = Unset, 1 = Ok, 2 = Error.
+	// It is not a [go.opentelemetry.io/otel/codes.Code], whose Ok and Error
+	// values are reversed.
+	Code        uint32 `json:"code"`
 	Description string `json:"message,omitempty"`
 }

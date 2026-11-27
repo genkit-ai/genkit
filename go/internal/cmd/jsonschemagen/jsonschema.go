@@ -65,8 +65,8 @@ func (s *Schema) UnmarshalJSON(data []byte) error {
 		s.Not = &Schema{}
 		return nil
 	}
-	type nomethod *Schema
-	return json.Unmarshal(data, nomethod(s))
+	type nomethod Schema
+	return json.Unmarshal(data, (*nomethod)(s))
 }
 
 var fields = reflect.VisibleFields(reflect.TypeOf(Schema{}))

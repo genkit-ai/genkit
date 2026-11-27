@@ -107,12 +107,22 @@ func TestWithCauseRecordsWithoutChangingMessage(t *testing.T) {
 	}
 }
 
-// A literal-constructed Error (no sentinel) must not panic in Is, and still
-// reports its status.
+// A literal-constructed Error (no sentinel) must not panic in Is, matches the
+// base sentinel of its status and nothing more specific, and still reports
+// its status.
 func TestZeroSentinelIsSafe(t *testing.T) {
 	err := &Error{Status: NotFound, Message: "decoded from the wire"}
-	if errors.Is(err, ErrNotFound) {
-		t.Error("errors.Is = true for an Error with no sentinel")
+	if !errors.Is(err, ErrNotFound) {
+		t.Error("errors.Is(err, ErrNotFound) = false, want the base sentinel of its status")
+	}
+	if errors.Is(err, ErrActionNotFound) {
+		t.Error("errors.Is(err, ErrActionNotFound) = true, want no match for a subtype the wire does not carry")
+	}
+	if errors.Is(err, ErrInternal) {
+		t.Error("errors.Is(err, ErrInternal) = true, want no match for another status")
+	}
+	if errors.Is(&Error{Status: "BOGUS"}, ErrUnknown) {
+		t.Error("errors.Is = true for a status that is not canonical")
 	}
 	if got := Of(err); got != NotFound {
 		t.Errorf("Of = %q, want %q", got, NotFound)

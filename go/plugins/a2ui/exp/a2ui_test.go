@@ -136,12 +136,12 @@ func TestMiddlewareRewritesFinalMessage(t *testing.T) {
 	}
 }
 
-// The aggregated final message is not guaranteed to coalesce adjacent text: the
-// Gemini plugin splits a turn into many text parts (fence, JSON body split many
-// ways, close fence, then a trailing empty-text part carrying the thought
-// signature). transformResponse must stitch a block spanning several parts into
-// a single a2ui data part rather than flushing per part and leaking the whole
-// surface back out as raw prose.
+// The aggregated final message is not guaranteed to coalesce adjacent text: a
+// plugin can store a streamed turn as many text parts (fence, JSON body split
+// many ways, close fence), and Gemini ends it with an empty-text part carrying
+// the thought signature. transformResponse must stitch a block spanning
+// several parts into a single a2ui data part rather than flushing per part and
+// leaking the whole surface back out as raw prose.
 func TestMiddlewareRewritesFinalMessageSplitAcrossParts(t *testing.T) {
 	r := newTestRegistry(t)
 	catalog := BasicCatalog()
@@ -363,6 +363,45 @@ func TestMiddlewarePreservesTextPartMetadata(t *testing.T) {
 	}
 	if p.ContentType != "application/json" {
 		t.Errorf("content type = %q, want application/json (not re-typed)", p.ContentType)
+	}
+}
+
+// A unary Gemini reply is one text part with the thought signature in its
+// Metadata. When that part holds an a2ui block it is rebuilt into segments, and
+// the signature must survive on a trailing empty text part placed after all of
+// the part's text, including a tail the parser held back (here the closing
+// backtick, which could open a fence).
+func TestTransformResponseKeepsRebuiltPartMetadata(t *testing.T) {
+	catalog := BasicCatalog()
+	sig := "thought-sig-unary"
+	part := ai.NewTextPart("Here you go:\n```a2ui\n" +
+		`[{"createSurface":{"surfaceId":"SURFACE_ID","catalogId":"` + catalog.ID + `"}},` +
+		`{"updateComponents":{"surfaceId":"SURFACE_ID","components":[{"id":"root","component":"Text","text":"hi"}]}}]` +
+		"\n```\nRun `ls`")
+	part.Metadata = map[string]any{"signature": sig}
+	resp := &ai.ModelResponse{Message: ai.NewMessage(ai.RoleModel, nil, part)}
+
+	out, err := transformResponse(resp, catalog, ValidateStrict, DefaultVersion, func() string { return "s1" })
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	content := out.Message.Content
+	if n := len(EnvelopesFromParts(content)); n != 2 {
+		t.Fatalf("got %d envelopes, want 2; content=%v", n, content)
+	}
+	last := content[len(content)-1]
+	if !last.IsText() || last.Text != "" || last.Metadata["signature"] != sig {
+		t.Errorf("last part = %+v, want an empty text part with signature %q; content=%v", last, sig, content)
+	}
+	var text strings.Builder
+	for _, p := range content {
+		if p.IsText() {
+			text.WriteString(p.Text)
+		}
+	}
+	if got := text.String(); got != "Here you go:\nRun `ls`" {
+		t.Errorf("prose = %q, want %q", got, "Here you go:\nRun `ls`")
 	}
 }
 

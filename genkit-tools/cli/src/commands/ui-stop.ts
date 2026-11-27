@@ -30,8 +30,11 @@ import path from 'path';
 
 /** Command to stop the Genkit Developer UI. */
 export const uiStop = new Command('ui:stop')
-  .description('stops any running Genkit Developer UI in this directory')
+  .description(
+    'stops any running Genkit Developer UI in this directory (deprecated: use `genkit start` instead)'
+  )
   .action(async () => {
+    logger.warn('`genkit ui:stop` is deprecated. Use `genkit start` instead.');
     const serversDir = await findServersDir(await findProjectRoot());
     const toolsJsonPath = path.join(serversDir, 'tools.json');
     try {
@@ -53,7 +56,7 @@ export const uiStop = new Command('ui:stop')
           if (await waitUntilUnresponsive(serverInfo.url)) {
             await fs.unlink(toolsJsonPath);
             logger.info(clc.green('\n  Genkit Developer UI is stopped.'));
-            logger.info('  To start the UI, run `genkit ui:start`.\n');
+            logger.info('  To start the UI, run `genkit start`.\n');
           } else {
             logger.info('Failed to stop running UI before timing out.');
           }

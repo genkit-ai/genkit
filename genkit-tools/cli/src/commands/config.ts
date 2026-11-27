@@ -28,28 +28,23 @@ import { Command } from 'commander';
 export const UPDATE_NOTIFICATIONS_OPT_OUT_CONFIG_TAG =
   'updateNotificationsOptOut';
 
+const parseBooleanConfig = (value: string): boolean => {
+  let o: unknown;
+  try {
+    o = JSON.parse(value);
+  } catch {
+    // Fall through to validation error below.
+  }
+  if (typeof o !== 'boolean') throw new Error('Expected boolean');
+  return o;
+};
+
 const CONFIG_TAGS: Record<
   string,
   (value: string) => string | boolean | number
 > = {
-  [ANALYTICS_OPT_OUT_CONFIG_TAG]: (value) => {
-    let o: boolean | undefined;
-    try {
-      o = JSON.parse(value);
-    } finally {
-      if (typeof o !== 'boolean') throw new Error('Expected boolean');
-      return o;
-    }
-  },
-  [UPDATE_NOTIFICATIONS_OPT_OUT_CONFIG_TAG]: (value) => {
-    let o: boolean | undefined;
-    try {
-      o = JSON.parse(value);
-    } finally {
-      if (typeof o !== 'boolean') throw new Error('Expected boolean');
-      return o;
-    }
-  },
+  [ANALYTICS_OPT_OUT_CONFIG_TAG]: parseBooleanConfig,
+  [UPDATE_NOTIFICATIONS_OPT_OUT_CONFIG_TAG]: parseBooleanConfig,
 };
 
 export const config = new Command('config');
@@ -57,12 +52,14 @@ export const config = new Command('config');
 config
   .description('set development environment configuration')
   .command('get')
+  .description('get a development environment configuration value')
   .argument('<tag>', `The config tag to get. One of [${readableTagsHint()}]`)
   .action((tag) => {
-    if (!CONFIG_TAGS[tag]) {
+    if (!Object.prototype.hasOwnProperty.call(CONFIG_TAGS, tag)) {
       logger.error(
-        `Unknown config tag "${clc.bold(tag)}.\nValid options: ${readableTagsHint()}`
+        `Unknown config tag "${clc.bold(tag)}".\nValid options: ${readableTagsHint()}`
       );
+      process.exitCode = 1;
       return;
     }
 
@@ -76,13 +73,15 @@ config
 
 config
   .command('set')
-  .argument('<tag>', `The config tag to get. One of [${readableTagsHint()}]`)
+  .description('set a development environment configuration value')
+  .argument('<tag>', `The config tag to set. One of [${readableTagsHint()}]`)
   .argument('<value>', 'The value to set tag to')
   .action(async (tag, value) => {
-    if (!CONFIG_TAGS[tag]) {
+    if (!Object.prototype.hasOwnProperty.call(CONFIG_TAGS, tag)) {
       logger.error(
-        `Unknown config tag "${clc.bold(tag)}.\nValid options: ${readableTagsHint()}`
+        `Unknown config tag "${clc.bold(tag)}".\nValid options: ${readableTagsHint()}`
       );
+      process.exitCode = 1;
       return;
     }
 
@@ -90,7 +89,8 @@ config
     try {
       parsedValue = CONFIG_TAGS[tag](value);
     } catch (e: any) {
-      logger.error(`Invalid type for "${clc.bold(tag)}.\n${e.message}`);
+      logger.error(`Invalid type for "${clc.bold(tag)}".\n${e.message}`);
+      process.exitCode = 1;
       return;
     }
 

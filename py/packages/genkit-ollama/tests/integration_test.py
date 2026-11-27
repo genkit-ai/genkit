@@ -21,7 +21,7 @@ from unittest.mock import Mock
 import ollama as ollama_api
 import pytest
 
-from genkit import ActionKind, Genkit, Message, ModelResponse, Part, Role
+from genkit import Genkit, Message, ModelResponse, Part, Role
 
 
 @pytest.mark.asyncio
@@ -30,17 +30,7 @@ async def test_adding_ollama_chat_model_to_genkit_veneer(
     genkit_veneer_chat_model: Genkit,
 ) -> None:
     """Test adding ollama chat model to genkit veneer."""
-    action = await genkit_veneer_chat_model.registry.resolve_action(ActionKind.MODEL, ollama_model)
-    assert action is not None
-
-
-@pytest.mark.asyncio
-async def test_adding_ollama_generation_model_to_genkit_veneer(
-    ollama_model: str,
-    genkit_veneer_generate_model: Genkit,
-) -> None:
-    """Test adding ollama generation model to genkit veneer."""
-    action = await genkit_veneer_generate_model.registry.resolve_action(ActionKind.MODEL, ollama_model)
+    action = await genkit_veneer_chat_model.lookup_model(ollama_model)
     assert action is not None
 
 
@@ -75,38 +65,6 @@ async def test_async_get_chat_model_response_from_llama_api_flow(
         )
 
     response = await genkit_veneer_chat_model.flow()(_test_fun)()
-
-    assert isinstance(response, ModelResponse)
-    assert response.message is not None
-    assert response.message.content[0].text == mock_response_message
-
-
-@pytest.mark.asyncio
-async def test_async_get_generate_model_response_from_llama_api_flow(
-    mock_ollama_api_async_client: Mock,
-    genkit_veneer_generate_model: Genkit,
-) -> None:
-    """Test async get generate model response from llama api flow."""
-    mock_response_message = 'Mocked response message'
-
-    # Set up the mock to return proper response
-    mock_ollama_api_async_client.return_value.generate.return_value = ollama_api.GenerateResponse(
-        response=mock_response_message,
-    )
-
-    async def _test_fun() -> ModelResponse:
-        return await genkit_veneer_generate_model.generate(
-            messages=[
-                Message(
-                    role=Role.USER,
-                    content=[
-                        Part.from_text('Test message'),
-                    ],
-                )
-            ]
-        )
-
-    response = await genkit_veneer_generate_model.flow()(_test_fun)()
 
     assert isinstance(response, ModelResponse)
     assert response.message is not None

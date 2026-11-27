@@ -23,7 +23,7 @@
  * harness requirements.
  */
 
-import { stripUndefinedProps, z } from '@genkit-ai/core';
+import { GenkitError, stripUndefinedProps, z } from '@genkit-ai/core';
 import { initNodeFeatures } from '@genkit-ai/core/node';
 import { Registry } from '@genkit-ai/core/registry';
 import * as assert from 'assert';
@@ -67,6 +67,7 @@ const SnapshotAssertionsSchema = z.object({
   finishReason: z.string().optional(),
   hasSessionId: z.boolean().optional(),
   stateContains: z.any().optional(),
+  messageCount: z.number().optional(),
   errorContains: z.any().optional(),
 });
 
@@ -344,6 +345,24 @@ function setupHarness(
     }
   );
 
+  // flakyTool fails its first call and succeeds after, so a spec case can
+  // fail a turn mid tool round and re-attempt it. The counter is per harness,
+  // and setupHarness runs per test, so each test's first call fails.
+  let flakyCalls = 0;
+  defineTool(
+    registry,
+    { name: 'flakyTool', description: 'A tool that fails its first call' },
+    async () => {
+      if (++flakyCalls === 1) {
+        throw new GenkitError({
+          status: 'UNAVAILABLE',
+          message: 'flaky tool failed',
+        });
+      }
+      return 'tool recovered';
+    }
+  );
+
   // --- Agents ---
 
   // promptAgent: client-managed, no tools
@@ -388,6 +407,16 @@ function setupHarness(
     store: new InMemorySessionStore(),
   });
 
+  // promptAgentWithToolsAndStore: server-managed, with testTool and flakyTool.
+  // Used for the resumable-failures tests.
+  const promptAgentWithToolsAndStore = defineAgent(registry, {
+    name: 'promptAgentWithToolsAndStore',
+    model: 'programmableModel',
+    config: { temperature: 1 },
+    tools: ['testTool', 'flakyTool'],
+    store: new InMemorySessionStore(),
+  });
+
   // --- Phase 2: Custom agents for detach, abort, artifacts, state ---
 
   // customAgentBlocking: server-managed, blocks until abort signal fires.
@@ -412,6 +441,41 @@ function setupHarness(
       });
       return {
         message: { role: 'model', content: [{ text: 'unblocked' }] },
+      };
+    }
+  );
+
+  // customAgentAbortable: server-managed, records the turn and blocks until
+  // the run is stopped on the turn whose message is "block". Used for the
+  // resumable-abort cases, where the abort has to land with a committed turn
+  // behind it and an unfinished one in front of it.
+  const customAgentAbortable = defineCustomAgent(
+    registry,
+    {
+      name: 'customAgentAbortable',
+      store: new InMemorySessionStore(),
+    },
+    async (sess, { abortSignal }) => {
+      await sess.run(async (input) => {
+        if (input.message?.content[0]?.text === 'block') {
+          await new Promise<never>((_, reject) => {
+            const stop = () =>
+              reject(
+                new GenkitError({ status: 'CANCELLED', message: 'stopped' })
+              );
+            if (abortSignal?.aborted) {
+              stop();
+              return;
+            }
+            abortSignal?.addEventListener('abort', stop, { once: true });
+          });
+          // Not reached: the turn commits nothing, so the message the runner
+          // added for it rolls back with it.
+        }
+        sess.addMessages([{ role: 'model', content: [{ text: 'ack' }] }]);
+      });
+      return {
+        message: { role: 'model', content: [{ text: 'done' }] },
       };
     }
   );
@@ -551,7 +615,9 @@ function setupHarness(
     promptAgentWithTools,
     promptAgentWithInterrupt,
     promptAgentWithRestartTool,
+    promptAgentWithToolsAndStore,
     customAgentBlocking,
+    customAgentAbortable,
     customAgentFailing,
     customAgentWithArtifacts,
     customAgentWithCustomState,
@@ -573,7 +639,9 @@ async function executeSendInvocation(
 ): Promise<void> {
   const resolvedInvocation = resolveTemplates(invocation, captures);
 
-  // Program the model
+  // Program the model. An entry may be a response, or `error: {status,
+  // message}` to fail that call with a classified error (how a spec case
+  // makes a turn fail mid loop).
   if (resolvedInvocation.modelResponses || resolvedInvocation.streamChunks) {
     let reqCounter = 0;
     pm.handleResponse = async (req, sc) => {
@@ -582,7 +650,14 @@ async function executeSendInvocation(
           sc(chunk);
         }
       }
-      return resolvedInvocation.modelResponses?.[reqCounter++]!;
+      const entry = resolvedInvocation.modelResponses?.[reqCounter++];
+      if (entry?.error) {
+        const { status, message } = entry.error;
+        throw status
+          ? new GenkitError({ status, message })
+          : new Error(message);
+      }
+      return entry!;
     };
   }
 
@@ -888,6 +963,15 @@ async function executeGetSnapshotDataInvocation(
       assertContains(snapshot.state, expect.stateContains, 'snapshot.state');
     }
 
+    if (expect.messageCount !== undefined) {
+      const messages = snapshot.state?.messages ?? [];
+      assert.strictEqual(
+        messages.length,
+        expect.messageCount,
+        `Expected ${expect.messageCount} messages in snapshot.state, got ${messages.length}: ${JSON.stringify(messages)}`
+      );
+    }
+
     if (expect.errorContains) {
       assert.ok(snapshot.error, 'Expected snapshot to have error');
       assertContains(snapshot.error, expect.errorContains, 'snapshot.error');
@@ -937,7 +1021,15 @@ async function executeWaitUntilCompletedInvocation(
   let snapshot: any;
   while (Date.now() - startTime < timeoutMs) {
     snapshot = await agent.getSnapshotData({ snapshotId: snapshotId });
-    if (snapshot && terminalStatuses.has(snapshot.status)) {
+    // An aborted row reaches its status in two writes: the abort flips it,
+    // and the finalize that follows stamps the reason and the state. The
+    // reason is the marker that the second write landed, so a wait that
+    // stopped at the status alone would read a row still being written.
+    if (
+      snapshot &&
+      terminalStatuses.has(snapshot.status) &&
+      (snapshot.status !== 'aborted' || snapshot.finishReason)
+    ) {
       break;
     }
     await new Promise((r) => setTimeout(r, 100));
@@ -966,6 +1058,15 @@ async function executeWaitUntilCompletedInvocation(
 
     if (expect.stateContains) {
       assertContains(snapshot.state, expect.stateContains, 'snapshot.state');
+    }
+
+    if (expect.messageCount !== undefined) {
+      const messages = snapshot.state?.messages ?? [];
+      assert.strictEqual(
+        messages.length,
+        expect.messageCount,
+        `Expected ${expect.messageCount} messages in snapshot.state, got ${messages.length}: ${JSON.stringify(messages)}`
+      );
     }
 
     if (expect.errorContains) {
@@ -997,7 +1098,10 @@ describe('Agent conformance spec', () => {
   // Gated spec capabilities this runtime implements; a test whose `requires`
   // names anything absent here is skipped, so the shared spec can carry
   // cases for features this SDK has not adopted yet.
-  const SUPPORTED_REQUIRES = new Set<string>();
+  const SUPPORTED_REQUIRES = new Set<string>([
+    'resumable-failures',
+    'resumable-aborts',
+  ]);
   const KNOWN_REQUIRES = new Set(spec.capabilities);
 
   for (const test of spec.tests) {

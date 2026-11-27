@@ -151,7 +151,9 @@ condition, humidity). Feel free to add a Button (e.g. "Refresh") when useful.`),
 	handle("/api/uiAgent/abort", uiAgent.AbortAction())
 
 	log.Print("A2UI agent server listening on http://localhost:8080 (POST /api/uiAgent)")
-	log.Fatal(server.Start(ctx, "127.0.0.1:8080", mux))
+	if err := server.Start(ctx, "127.0.0.1:8080", mux); err != nil {
+		log.Fatal(err)
+	}
 }
 
 // withCORS wraps h with permissive CORS headers so a browser served from a

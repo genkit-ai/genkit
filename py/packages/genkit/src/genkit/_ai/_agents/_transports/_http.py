@@ -24,7 +24,8 @@ import json
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
 from typing import Any
 
-from pydantic import BaseModel
+import httpx
+from pydantic import BaseModel, ValidationError
 from typing_extensions import TypeVar as TypeVarExt
 
 from genkit._ai._agents._client import (
@@ -38,7 +39,7 @@ from genkit._ai._agents._snapshot import parse_snapshot_lookup_kw
 from genkit._ai._agents._types import StateManagement
 from genkit._core._channel import CloseableQueue
 from genkit._core._error import GenkitError
-from genkit._core._http_client import get_cached_client
+from genkit._core._loop_cache import loop_local_client
 from genkit._core._model import AgentInit, AgentInput, AgentOutput, AgentStreamChunk, SessionSnapshot
 from genkit._core._typing import (
     AgentAbortResponse,
@@ -50,6 +51,16 @@ StateT = TypeVarExt('StateT', bound=BaseModel, default=Any)
 # Auth usually rides on HTTP headers, not the agent envelope. Static dict for a
 # fixed key; callable when a token needs refreshing between requests.
 HeadersProvider = dict[str, str] | Callable[[], dict[str, str] | Awaitable[dict[str, str]]]
+
+
+DEFAULT_AGENT_TIMEOUT_SECONDS = 60.0
+_CONNECT_TIMEOUT_SECONDS = 10.0
+
+
+@loop_local_client
+def _agent_client() -> httpx.AsyncClient:
+    # A plain transport; each request carries its transport's timeout.
+    return httpx.AsyncClient()
 
 
 def parse_stream_line(line: str) -> dict[str, Any] | None:
@@ -87,6 +98,22 @@ def stream_error_from_payload(data: dict[str, Any]) -> GenkitError:
     return error_from_wire(error)
 
 
+def transport_error(e: Exception) -> GenkitError:
+    """Classify a failure talking to the agent server as GenkitError.
+
+    A timeout is ``DEADLINE_EXCEEDED`` and a refused or dropped connection
+    is ``UNAVAILABLE``: the server never reported a failure. A drop after
+    the request was sent may still have run the turn server-side, so these
+    are not safe to blindly resend. Anything else goes through
+    ``error_from_exception``.
+    """
+    if isinstance(e, httpx.TimeoutException):
+        return GenkitError(status='DEADLINE_EXCEEDED', message='Timed out talking to the agent server', cause=e)
+    if isinstance(e, httpx.TransportError):
+        return GenkitError(status='UNAVAILABLE', message='Lost connection to the agent server', cause=e)
+    return error_from_exception(e)
+
+
 class HttpAgentTransport(AgentTransport[StateT]):
     """Client-side agent transport that talks to a remote agent over HTTP."""
 
@@ -98,6 +125,7 @@ class HttpAgentTransport(AgentTransport[StateT]):
         abort_url: str | None = None,
         headers: HeadersProvider | None = None,
         state_management: StateManagement,
+        timeout: float | None = DEFAULT_AGENT_TIMEOUT_SECONDS,
     ) -> None:
         """Initializes the HTTP transport.
 
@@ -107,12 +135,17 @@ class HttpAgentTransport(AgentTransport[StateT]):
             abort_url: ``abort`` route. Defaults to ``{url}/abort``.
             headers: Static headers, or a function called per request (sync or async).
             state_management: Declares server- vs client-managed state.
+            timeout: Seconds to wait for the next bytes from the server. On a
+                streamed turn this is the longest allowed gap between chunks,
+                not a cap on the whole turn. ``None`` waits indefinitely.
+                Connecting always gets 10 seconds.
         """
         self.url = url
         self.get_snapshot_url = get_snapshot_url or f'{url}/getSnapshot'
         self.abort_url = abort_url or f'{url}/abort'
         self.headers = headers
         self.state_management: StateManagement = state_management
+        self._timeout = httpx.Timeout(timeout, connect=_CONNECT_TIMEOUT_SECONDS)
         self._background_tasks: set[asyncio.Task[Any]] = set()
 
     async def _resolve_headers(self) -> dict[str, str]:
@@ -128,12 +161,21 @@ class HttpAgentTransport(AgentTransport[StateT]):
 
     async def _post_json(self, *, url: str, input_val: dict[str, Any]) -> Any:  # noqa: ANN401
         """POST JSON to a one-shot action endpoint and return the parsed body."""
-        client = get_cached_client('agent_transport')
+        try:
+            return await self._post_json_raw(url=url, input_val=input_val)
+        except GenkitError:
+            raise
+        except Exception as e:
+            raise transport_error(e) from e
+
+    async def _post_json_raw(self, *, url: str, input_val: dict[str, Any]) -> Any:  # noqa: ANN401
+        client = _agent_client()
         # Same callable/flow envelope as run_turn: handlers expect {"data": ...}.
         response = await client.post(
             url,
             json={'data': input_val},
             headers=await self._resolve_headers(),
+            timeout=self._timeout,
         )
         if response.status_code == 404:
             return None
@@ -168,7 +210,7 @@ class HttpAgentTransport(AgentTransport[StateT]):
         init: AgentInit,
     ) -> tuple[AsyncIterable[AgentStreamChunk], Awaitable[AgentOutput]]:
         """Runs a single turn over HTTP using a streaming POST request."""
-        client = get_cached_client('agent_transport')
+        client = _agent_client()
 
         # Callable/flow envelope used by expressHandler and FastAPI/Flask/Django
         # handlers: {"data": <AgentInput>, "init": <AgentInit>}. Streaming is
@@ -194,6 +236,7 @@ class HttpAgentTransport(AgentTransport[StateT]):
                     self.url,
                     json=payload,
                     headers=headers,
+                    timeout=self._timeout,
                 ) as response:
                     if response.status_code != 200:
                         body = (await response.aread()).decode(errors='ignore')
@@ -217,14 +260,14 @@ class HttpAgentTransport(AgentTransport[StateT]):
                         stream_queue.put_nowait(chunk)
                     else:
                         err = GenkitError(
-                            status='INTERNAL',
+                            status='UNAVAILABLE',
                             message='HTTP stream ended prematurely before agent turn completed',
                         )
                         if not output_future.done():
                             output_future.set_exception(err)
                         stream_queue.put_nowait(err)
             except Exception as e:
-                err = e if isinstance(e, GenkitError) else error_from_exception(e)
+                err = transport_error(e)
                 if not output_future.done():
                     output_future.set_exception(err)
                 stream_queue.put_nowait(err)
@@ -262,14 +305,27 @@ class HttpAgentTransport(AgentTransport[StateT]):
         )
         if result is None:
             return None
-        return SessionSnapshot.model_validate(result)
+        return _parse_response(SessionSnapshot, result, endpoint='getSnapshot')
 
     async def abort_snapshot(self, snapshot_id: str) -> SnapshotStatus | None:
         """Aborts the specified snapshot on the server."""
         result = await self._post_json(url=self.abort_url, input_val={'snapshotId': snapshot_id})
         if result is None:
             return None
-        return AgentAbortResponse.model_validate(result).status
+        return _parse_response(AgentAbortResponse, result, endpoint='abort').status
+
+
+_ModelT = TypeVarExt('_ModelT', bound=BaseModel)
+
+
+def _parse_response(model: type[_ModelT], result: Any, *, endpoint: str) -> _ModelT:  # noqa: ANN401
+    """Validate a one-shot response body, raising GenkitError on a shape mismatch."""
+    try:
+        return model.model_validate(result)
+    except ValidationError as e:
+        raise GenkitError(
+            status='INTERNAL', message=f'Unexpected {endpoint} response from the agent server', cause=e
+        ) from e
 
 
 def remote_agent(
@@ -280,13 +336,15 @@ def remote_agent(
     headers: HeadersProvider | None = None,
     state_management: StateManagement,
     state_schema: type[StateT] | None = None,
+    timeout: float | None = DEFAULT_AGENT_TIMEOUT_SECONDS,
 ) -> AgentClient[StateT]:
-    """Create a remote agent client over HTTP."""
+    """Create a remote agent client over HTTP. ``timeout`` is as on :class:`HttpAgentTransport`."""
     transport: HttpAgentTransport[StateT] = HttpAgentTransport(
         url=url,
         get_snapshot_url=get_snapshot_url,
         abort_url=abort_url,
         headers=headers,
         state_management=state_management,
+        timeout=timeout,
     )
     return AgentClient(transport, state_schema=state_schema)

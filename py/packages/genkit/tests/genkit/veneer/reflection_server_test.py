@@ -12,22 +12,36 @@ Covers the key invariants of the background-thread approach:
 - No server starts in production mode
 """
 
+import asyncio
+import json
+import logging
 import os
 import socket
 import threading
+import time
+from collections.abc import Iterator
+from typing import Any
 from unittest import mock
 
 import httpx
+import pytest
+from websockets.asyncio.server import serve
 
 from genkit import Genkit
 from genkit._core._environment import GENKIT_ENV, GenkitEnvironment
-from genkit._core._reflection import ServerSpec
 
 
 def _find_free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(('127.0.0.1', 0))
         return s.getsockname()[1]
+
+
+def _genkit_on_port(port: int) -> Genkit:
+    """Genkit() with reflection pinned to 127.0.0.1:port through the environment, as apps do."""
+    env = {'GENKIT_REFLECTION_HOST': '127.0.0.1', 'GENKIT_REFLECTION_PORT': str(port)}
+    with mock.patch.dict(os.environ, env):
+        return Genkit()
 
 
 def _wait_and_get(ai: Genkit, path: str) -> httpx.Response:
@@ -44,7 +58,7 @@ def test_server_starts_on_construction() -> None:
     """
     port = _find_free_port()
     with mock.patch.dict(os.environ, {GENKIT_ENV: GenkitEnvironment.DEV}):
-        ai = Genkit(reflection_server_spec=ServerSpec(scheme='http', host='127.0.0.1', port=port))
+        ai = _genkit_on_port(port)
         resp = _wait_and_get(ai, '/api/__health')
     assert resp.status_code == 200
 
@@ -58,7 +72,7 @@ def test_flow_registered_after_construction_is_visible() -> None:
     """
     port = _find_free_port()
     with mock.patch.dict(os.environ, {GENKIT_ENV: GenkitEnvironment.DEV}):
-        ai = Genkit(reflection_server_spec=ServerSpec(scheme='http', host='127.0.0.1', port=port))
+        ai = _genkit_on_port(port)
 
         @ai.flow()
         async def greet(name: str) -> str:
@@ -82,7 +96,7 @@ def test_registry_reads_concurrent_with_writes() -> None:
     errors: list[Exception] = []
 
     with mock.patch.dict(os.environ, {GENKIT_ENV: GenkitEnvironment.DEV}):
-        ai = Genkit(reflection_server_spec=ServerSpec(scheme='http', host='127.0.0.1', port=port))
+        ai = _genkit_on_port(port)
         assert ai._reflection_ready.wait(timeout=5)  # pyright: ignore[reportPrivateUsage]
 
         stop = threading.Event()
@@ -119,8 +133,8 @@ def test_two_instances_serve_concurrently() -> None:
     """Two Genkit() instances in the same process don't interfere with each other."""
     port1, port2 = _find_free_port(), _find_free_port()
     with mock.patch.dict(os.environ, {GENKIT_ENV: GenkitEnvironment.DEV}):
-        ai1 = Genkit(reflection_server_spec=ServerSpec(scheme='http', host='127.0.0.1', port=port1))
-        ai2 = Genkit(reflection_server_spec=ServerSpec(scheme='http', host='127.0.0.1', port=port2))
+        ai1 = _genkit_on_port(port1)
+        ai2 = _genkit_on_port(port2)
 
         assert ai1._reflection_ready.wait(timeout=5)  # pyright: ignore[reportPrivateUsage]
         assert ai2._reflection_ready.wait(timeout=5)  # pyright: ignore[reportPrivateUsage]
@@ -129,9 +143,256 @@ def test_two_instances_serve_concurrently() -> None:
     assert httpx.get(f'http://127.0.0.1:{port2}/api/__health', timeout=1.0).status_code == 200
 
 
+def test_busy_pinned_port_fails_the_constructor() -> None:
+    """A pinned port that is taken raises from Genkit(), not from the background thread."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as taken:
+        taken.bind(('127.0.0.1', 0))
+        taken.listen()
+        port = taken.getsockname()[1]
+        env = {'GENKIT_REFLECTION_ENABLED': 'true', 'GENKIT_REFLECTION_PORT': str(port)}
+        with mock.patch.dict(os.environ, env, clear=True):
+            with pytest.raises(OSError):
+                Genkit()
+
+
+def test_serves_on_ipv6_loopback() -> None:
+    """GENKIT_REFLECTION_HOST=::1 binds an IPv6 socket instead of failing to resolve."""
+    if not socket.has_ipv6:
+        pytest.skip('IPv6 not available')
+    env = {'GENKIT_REFLECTION_ENABLED': 'true', 'GENKIT_REFLECTION_HOST': '::1'}
+    with mock.patch.dict(os.environ, env, clear=True):
+        ai = Genkit()
+        resp = _wait_and_get(ai, '/api/__health')
+    assert resp.status_code == 200
+    spec = ai._reflection_server_spec  # pyright: ignore[reportPrivateUsage]
+    assert spec is not None
+    assert spec.host == '[::1]'
+
+
+def test_pinned_port_is_bound_exactly() -> None:
+    """GENKIT_REFLECTION_PORT=N binds N, and a taken N fails instead of shifting."""
+    port = _find_free_port()
+    with mock.patch.dict(os.environ, {GENKIT_ENV: GenkitEnvironment.DEV}, clear=True):
+        ai = _genkit_on_port(port)
+        assert _wait_and_get(ai, '/api/__health').status_code == 200
+        spec = ai._reflection_server_spec  # pyright: ignore[reportPrivateUsage]
+        assert spec is not None
+        assert spec.port == port
+        with pytest.raises(OSError):
+            _genkit_on_port(port)
+
+
+def test_port_zero_lets_the_os_pick() -> None:
+    """GENKIT_REFLECTION_PORT=0 binds an OS-assigned port, like socket.bind."""
+    with mock.patch.dict(os.environ, {GENKIT_ENV: GenkitEnvironment.DEV}, clear=True):
+        ai = _genkit_on_port(0)
+        assert _wait_and_get(ai, '/api/__health').status_code == 200
+        spec = ai._reflection_server_spec  # pyright: ignore[reportPrivateUsage]
+        assert spec is not None
+        assert spec.port != 0
+
+
+@pytest.mark.parametrize('manager_closes', [True, False], ids=['manager-closes', 'manager-keeps-open'])
+def test_run_main_returns_when_the_cli_rejects_the_runtime(manager_closes: bool) -> None:
+    """A -32001 register rejection stops reflection, and run_main returns instead of hanging.
+
+    The real CLI closes the socket after rejecting, but the runtime must not
+    rely on that: with the socket left open, it has to hang up itself.
+    """
+    loop = asyncio.new_event_loop()
+    started = threading.Event()
+    stop = asyncio.Event()
+    port_box: list[int] = []
+
+    async def _reject(ws: Any) -> None:  # noqa: ANN401 - websockets connection
+        async for raw in ws:
+            msg = json.loads(raw)
+            if msg.get('method') == 'register':
+                await ws.send(
+                    json.dumps({
+                        'jsonrpc': '2.0',
+                        'id': msg['id'],
+                        'error': {'code': -32001, 'message': 'Invalid reflection secret.'},
+                    })
+                )
+                if manager_closes:
+                    await ws.close(1008, 'unauthorized')
+                    return
+
+    async def _serve() -> None:
+        async with serve(_reject, '127.0.0.1', 0) as server:
+            port_box.append(next(iter(server.sockets)).getsockname()[1])
+            started.set()
+            await stop.wait()
+
+    manager = threading.Thread(target=lambda: loop.run_until_complete(_serve()), daemon=True)
+    manager.start()
+    try:
+        assert started.wait(timeout=5)
+        env = {
+            'GENKIT_REFLECTION_ENABLED': 'true',
+            'GENKIT_REFLECTION_V2_SERVER': f'ws://127.0.0.1:{port_box[0]}',
+            'GENKIT_REFLECTION_SECRET_TOKEN': 'wrong',
+        }
+        with mock.patch.dict(os.environ, env, clear=True):
+            ai = Genkit()
+
+            async def _main() -> str:
+                return 'done'
+
+            # run_main installs a SIGTERM receiver, so it must run on the main
+            # thread. A watchdog turns a hang into a failure instead of a stuck
+            # test run: it stops reflection itself, which would also unblock
+            # run_main, so the elapsed time is what the assertion checks.
+            watchdog = threading.Timer(10, ai._reflection_stopped.set)  # pyright: ignore[reportPrivateUsage]
+            watchdog.start()
+            started_at = time.monotonic()
+            try:
+                result = ai.run_main(_main())
+            finally:
+                watchdog.cancel()
+        assert time.monotonic() - started_at < 10, 'run_main kept blocking after the CLI rejected the runtime'
+        assert result == 'done'
+    finally:
+        loop.call_soon_threadsafe(stop.set)
+        manager.join(timeout=5)
+
+
+def test_ready_message_outside_dev_names_the_bound_address() -> None:
+    """Outside dev there is no runtime file, so run_main must not claim the Dev UI is ready."""
+    port = _find_free_port()
+    env = {'GENKIT_REFLECTION_ENABLED': 'true', 'GENKIT_REFLECTION_PORT': str(port)}
+    with mock.patch.dict(os.environ, env, clear=True):
+        ai = Genkit()
+        message = ai._reflection_ready_message()  # pyright: ignore[reportPrivateUsage]
+    assert message.startswith(f'Reflection API listening on 127.0.0.1:{port}.')
+    assert 'Dev UI' not in message
+
+
+def test_ready_message_in_dev_mentions_the_dev_ui() -> None:
+    """Under dev the runtime file is written, so the Dev UI can find the runtime."""
+    port = _find_free_port()
+    with mock.patch.dict(os.environ, {GENKIT_ENV: GenkitEnvironment.DEV}):
+        ai = _genkit_on_port(port)
+        message = ai._reflection_ready_message()  # pyright: ignore[reportPrivateUsage]
+    assert message.startswith('Dev UI ready.')
+
+
+class _Records(logging.Handler):
+    """Collects records in memory."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+
+@pytest.fixture
+def app_uvicorn_logging() -> Iterator[_Records]:
+    """Configure uvicorn.error / uvicorn.access the way an app server does, then restore them."""
+    loggers = [logging.getLogger('uvicorn.error'), logging.getLogger('uvicorn.access')]
+    saved = [(lg, lg.level, list(lg.handlers), list(lg.filters), lg.propagate) for lg in loggers]
+    handler = _Records()
+    for lg in loggers:
+        lg.setLevel(logging.INFO)
+        lg.handlers = [handler]
+        lg.propagate = False
+    yield handler
+    for lg, level, handlers, filters, propagate in saved:
+        lg.setLevel(level)
+        lg.handlers = handlers
+        lg.filters = filters
+        lg.propagate = propagate
+
+
+def test_reflection_server_leaves_app_uvicorn_logging_alone(app_uvicorn_logging: _Records) -> None:
+    """Starting the reflection server must not reset the app's uvicorn levels or handlers."""
+    port = _find_free_port()
+    with mock.patch.dict(os.environ, {GENKIT_ENV: GenkitEnvironment.DEV, 'GENKIT_LOG': 'info'}):
+        ai = _genkit_on_port(port)
+        resp = _wait_and_get(ai, '/api/__health')
+    assert resp.status_code == 200
+
+    for name in ('uvicorn.error', 'uvicorn.access'):
+        lg = logging.getLogger(name)
+        assert lg.level == logging.INFO, name
+        assert app_uvicorn_logging in lg.handlers, name
+        assert lg.propagate is False, name
+
+
+def test_reflection_server_records_are_dropped_but_app_records_pass(app_uvicorn_logging: _Records) -> None:
+    """Health polls on the reflection thread stay quiet; the app's own access lines still print."""
+    port = _find_free_port()
+    with mock.patch.dict(os.environ, {GENKIT_ENV: GenkitEnvironment.DEV, 'GENKIT_LOG': 'info'}):
+        ai = _genkit_on_port(port)
+        resp = _wait_and_get(ai, '/api/__health')
+        assert resp.status_code == 200
+        logging.getLogger('uvicorn.access').info('127.0.0.1 - "POST /order HTTP/1.1" 200')
+
+    messages = [r.getMessage() for r in app_uvicorn_logging.records]
+    assert '127.0.0.1 - "POST /order HTTP/1.1" 200' in messages
+    assert not [m for m in messages if '/api/__health' in m]
+
+
+def test_reflection_server_records_are_dropped_when_log_threads_disabled(
+    app_uvicorn_logging: _Records,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Health polls stay quiet even when the app disables logging.logThreads."""
+    monkeypatch.setattr(logging, 'logThreads', False)
+    port = _find_free_port()
+    with mock.patch.dict(os.environ, {GENKIT_ENV: GenkitEnvironment.DEV, 'GENKIT_LOG': 'info'}):
+        ai = _genkit_on_port(port)
+        resp = _wait_and_get(ai, '/api/__health')
+        assert resp.status_code == 200
+        logging.getLogger('uvicorn.access').info('127.0.0.1 - "POST /order HTTP/1.1" 200')
+
+    messages = [r.getMessage() for r in app_uvicorn_logging.records]
+    assert '127.0.0.1 - "POST /order HTTP/1.1" 200' in messages
+    assert not [m for m in messages if '/api/__health' in m]
+
+
 def test_no_server_in_prod_mode() -> None:
     """Genkit() with no GENKIT_ENV must NOT start a background server."""
     with mock.patch.dict(os.environ, {}, clear=True):
         ai = Genkit()
 
     assert not ai._reflection_ready.is_set()  # pyright: ignore[reportPrivateUsage]
+
+
+def test_no_server_from_host_or_port_alone() -> None:
+    """Outside dev, host/port are settings, not on-switches (same as before this change)."""
+    port = _find_free_port()
+    env = {'GENKIT_REFLECTION_HOST': '127.0.0.1', 'GENKIT_REFLECTION_PORT': str(port)}
+    with mock.patch.dict(os.environ, env, clear=True):
+        ai = Genkit()
+
+    assert not ai._reflection_config.enabled  # pyright: ignore[reportPrivateUsage]
+    assert not ai._reflection_ready.is_set()  # pyright: ignore[reportPrivateUsage]
+
+
+def test_reflection_server_configures_logging_when_app_has_none() -> None:
+    """When the app has no uvicorn logging, reflection server sets up default uvicorn formatters."""
+    port = _find_free_port()
+    loggers = [logging.getLogger(n) for n in ('uvicorn', 'uvicorn.error', 'uvicorn.access')]
+    saved = [(lg, lg.level, list(lg.handlers), list(lg.filters), lg.propagate) for lg in loggers]
+    for lg in loggers:
+        lg.handlers = []
+        lg.level = logging.NOTSET
+    try:
+        with mock.patch.dict(os.environ, {GENKIT_ENV: GenkitEnvironment.DEV, 'GENKIT_LOG': 'debug'}):
+            ai = _genkit_on_port(port)
+            resp = _wait_and_get(ai, '/api/__health')
+            assert resp.status_code == 200
+        handlers = logging.getLogger('uvicorn.error').handlers or logging.getLogger('uvicorn').handlers
+        assert handlers
+        err_record = logging.LogRecord('uvicorn.error', logging.ERROR, __file__, 1, 'Exception in ASGI app', None, None)
+        assert 'ERROR' in handlers[0].format(err_record)
+    finally:
+        for lg, level, handlers, filters, propagate in saved:
+            lg.setLevel(level)
+            lg.handlers = handlers
+            lg.filters = filters
+            lg.propagate = propagate

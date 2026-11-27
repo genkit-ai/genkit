@@ -27,6 +27,7 @@ import (
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
@@ -163,6 +164,31 @@ func TestThinkingBudgetFloorRejected(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "budgetTokens") {
 		t.Errorf("error = %v, want it to name budgetTokens", err)
+	}
+}
+
+// TestDocumentRejected pins that a PDF fails before the wire: the compat
+// endpoint strips file parts without an error, so Claude would answer as if
+// the document was never sent.
+func TestDocumentRejected(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("request reached the server, want the PDF rejected before it")
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	plugin := &Anthropic{APIKey: "test-key", Opts: []option.RequestOption{option.WithBaseURL(server.URL)}}
+	g := genkit.Init(ctx, genkit.WithPlugins(plugin))
+
+	_, err := genkit.Generate(ctx, g,
+		ai.WithModel(ModelRef("claude-sonnet-4-6", nil)),
+		ai.WithMessages(ai.NewUserMessage(
+			ai.NewTextPart("Summarize this."),
+			ai.NewMediaPart("application/pdf", "data:application/pdf;base64,JVBERi0xLjQ="),
+		)),
+	)
+	if got := status.Of(err); got != status.InvalidArgument {
+		t.Errorf("Generate() error = %v, want INVALID_ARGUMENT", err)
 	}
 }
 

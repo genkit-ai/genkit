@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
+import { randomUUID } from 'crypto';
 import { createInterface } from 'readline/promises';
-import { v4 as uuidV4 } from 'uuid';
-import type { AnalyticsInfo } from '../types/analytics';
-import { configstore, getUserSettings } from './configstore';
-import { logger } from './logger';
-import { toolsPackage } from './package';
+import type { AnalyticsInfo } from '../types/analytics.js';
+import { configstore, getUserSettings } from './configstore.js';
+import { logger } from './logger.js';
+import { toolsPackage } from './package.js';
 
 // This code is largely adapted from
 // https://github.com/firebase/firebase-tools/blob/master/src/track.ts
@@ -76,8 +76,11 @@ export class FirstUsageEvent extends GAEvent {
   name = 'first_visit';
   duration = 1;
 
-  constructor() {
+  constructor(project_runtime?: string) {
     super();
+    this.parameters = {
+      project_runtime: project_runtime || 'unknown',
+    };
   }
 }
 
@@ -180,14 +183,16 @@ export function extractActionType(key?: unknown): string {
 }
 
 /** Displays a notification that analytics are in use. */
-export async function notifyAnalyticsIfFirstRun(): Promise<void> {
+export async function notifyAnalyticsIfFirstRun(
+  projectRuntime?: string
+): Promise<void> {
   if (isAnalyticsOptedOut()) return;
 
   if (configstore.get(NOTIFICATION_ACKED)) {
     return;
   }
 
-  console.log(ANALYTICS_NOTIFICATION);
+  logger.info(ANALYTICS_NOTIFICATION);
 
   const readline = createInterface({
     input: process.stdin,
@@ -198,7 +203,7 @@ export async function notifyAnalyticsIfFirstRun(): Promise<void> {
 
   configstore.set(NOTIFICATION_ACKED, true);
 
-  await record(new FirstUsageEvent());
+  await record(new FirstUsageEvent(projectRuntime));
 }
 
 /** Gets session information for the UI. */
@@ -361,7 +366,7 @@ async function recordInternal(
       if (!response.ok) {
         logger.warn(`Analytics validation HTTP error: ${response.status}`);
       }
-      const respBody = await response.text;
+      const respBody = await response.text();
       logger.debug(`Analytics validation result: ${respBody}`);
     }
     // response.ok / response.status intentionally ignored, see comment below.
@@ -387,7 +392,7 @@ function getSession(): AnalyticsSession {
   // ClientID is sticky
   let clientId: string | undefined = configstore.get(CONFIGSTORE_CLIENT_KEY);
   if (!clientId) {
-    clientId = uuidV4();
+    clientId = randomUUID();
     configstore.set(CONFIGSTORE_CLIENT_KEY, clientId);
   }
 

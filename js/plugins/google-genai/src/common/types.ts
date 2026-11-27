@@ -39,8 +39,12 @@ export enum FunctionCallingMode {
   NONE = 'NONE',
 }
 
+/**
+ * Reports whether a value is a non-null object that isn't an array, so its
+ * keys can be read as a record.
+ */
 export function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /**
@@ -483,6 +487,8 @@ export declare interface UsageMetadata {
   cachedContentTokenCount?: number;
   /** Optional. Number of tokens present in thoughts output. */
   thoughtsTokenCount?: number;
+  /** Optional. Number of tokens present in tool-use prompt(s). */
+  toolUsePromptTokenCount?: number;
   /** Optional. The traffic type for the request (e.g. ON_DEMAND_FLEX or ON_DEMAND_PRIORITY). */
   trafficType?: string;
 }
@@ -805,6 +811,17 @@ export declare interface Part {
   videoMetadata?: VideoMetadata;
   mediaResolution?: MediaResolution;
   partMetadata?: Record<string, unknown>;
+  /**
+   * TTS models: the speaker of this turn (must match a configured speaker
+   * for multi-speaker speech) and its delivery style.
+   */
+  speechMetadata?: SpeechMetadata;
+}
+
+/** Turn-level speech settings for a text part (TTS models). */
+export declare interface SpeechMetadata {
+  speaker?: string;
+  style?: string;
 }
 
 // A utility type that ensures an array contains all keys of T
@@ -828,6 +845,7 @@ export const PART_KEYS: KeysOf<Required<Part>> = [
   'videoMetadata',
   'mediaResolution',
   'partMetadata',
+  'speechMetadata',
 ] as const;
 /**
  * The base structured datatype containing multi-part content of a message.
@@ -1105,6 +1123,11 @@ export declare interface GenerationConfig {
   seed?: number;
   /** Optional. Speech generation config. */
   speechConfig?: Record<string, unknown>;
+  /**
+   * Optional. Output formats, e.g. `[{ audio: { mimeType: 'AUDIO_MULAW' } }]`
+   * for TTS models (vertexAI).
+   */
+  responseFormat?: Record<string, unknown>[];
   /** Optional. Thinking config. */
   thinkingConfig?: Record<string, unknown>;
   /** Optional. Image generation config. */
@@ -1246,6 +1269,12 @@ export declare interface GenerateContentRequest {
   toolConfig?: ToolConfig;
   /** Optional. Service tier (e.g. 'standard', 'flex', or 'priority'). */
   serviceTier?: string;
+  /**
+   * Optional. googleAI only. Whether the server logs this request for the
+   * API key's project (viewable in AI Studio); overrides the project's
+   * logging setting.
+   */
+  store?: boolean;
 }
 
 /**

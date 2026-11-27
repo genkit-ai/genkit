@@ -40,6 +40,13 @@ var (
 	// [ModelResponse] rides alongside this error (see [Generate]).
 	ErrMaxTurnsExceeded = status.ErrAborted.Subtype("max turns exceeded")
 
+	// ErrBudgetExceeded means a limit on what the run may consume, such as a
+	// token budget that middleware enforces, stopped the run. Like
+	// [ErrMaxTurnsExceeded], it is a limit the caller set, so the loop's
+	// partial [ModelResponse] reports [FinishReasonAborted], not
+	// [FinishReasonFailed].
+	ErrBudgetExceeded = status.ErrAborted.Subtype("budget exceeded")
+
 	// ErrToolFailed means a tool returned an error or produced output that does
 	// not match its declared schema. The tool's own error is wrapped, so
 	// errors.Is and errors.As still reach it; the status is INTERNAL because a

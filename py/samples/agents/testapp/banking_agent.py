@@ -29,10 +29,10 @@ from __future__ import annotations
 from typing import Any
 from uuid import uuid4
 
-from _ai import ai
+from _ai import ai, reply_text
 from pydantic import BaseModel, Field
 
-from genkit import ActionRunContext
+from genkit import FlowContext
 from genkit.exp.agent import InMemorySessionStore
 
 
@@ -80,7 +80,7 @@ banking_agent = ai.define_agent(
 
 
 @ai.flow()
-async def test_banking_agent(text: str, ctx: ActionRunContext) -> dict[str, Any]:
+async def test_banking_agent(text: str, ctx: FlowContext) -> dict[str, Any]:
     """Run a turn that pauses for approval, approve it, then let the transfer land."""
     chat = banking_agent.chat()
     turn = chat.send_stream(text or 'Transfer $500 to my savings account.')
@@ -100,7 +100,7 @@ async def test_banking_agent(text: str, ctx: ActionRunContext) -> dict[str, Any]
                     ctx.send_chunk(chunk.text)
             res = await resume_turn
 
-    return {'text': res.text, 'paused_for_approval': paused_for_approval}
+    return {'text': reply_text(res), 'paused_for_approval': paused_for_approval}
 
 
 if __name__ == '__main__':

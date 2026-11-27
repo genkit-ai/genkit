@@ -1,0 +1,256 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Shared helpers for Google AI Interactions-backed models."""
+
+from __future__ import annotations
+
+import os
+from collections.abc import Mapping
+from typing import Any, cast
+
+from genkit_google_genai._interactions._converters import (
+    ensure_tool_ids,
+    split_system_instruction,
+    to_interaction_steps,
+)
+from genkit_google_genai._interactions._options import ClientOptions
+from genkit_google_genai._models._routing import strip_ref_prefixes
+from genkit_google_genai._models._sdk_config import check_timeout_seconds, timeout_seconds_to_ms
+from genkit_google_genai._models._secrets import context_api_key
+
+from genkit import GenkitError, Message
+from genkit.model import ModelRequest
+
+# Snake_case: callers dump config with by_alias=False before we strip these.
+CLIENT_OPTION_KEYS = frozenset({
+    'base_url',
+    'api_version',
+    'custom_headers',
+    'timeout',
+    'experimental_debug_traces',
+})
+
+EXTRA_DESCRIPTION = (
+    "Interactions API fields this class doesn't declare, in the API's snake_case wire names. Merged into "
+    'the top level of the create body after everything else, and nested objects merge key by key, so a key '
+    'named here wins. Keys match ignoring case and underscores. Fields Genkit builds from the request '
+    "(the model id, `input`, `tools`, and Lyria's `system_instruction`) raise. A `None` "
+    'value means unset and is skipped, so it never sends null over a block Genkit built. '
+    'Not validated, except that a top-level API key raises; do not put API keys here.'
+)
+
+TIMEOUT_DESCRIPTION = (
+    'HTTP timeout for this request, in seconds (positive, finite). Applies to the HTTP call, not the create body.'
+)
+
+
+def get_api_key_from_env() -> str | None:
+    """Read a Gemini API key from common environment variables."""
+    return os.getenv('GEMINI_API_KEY') or os.getenv('GOOGLE_API_KEY') or os.getenv('GOOGLE_GENAI_API_KEY')
+
+
+def api_key_for_context(context: dict[str, Any], plugin_api_key: str | None) -> str:
+    """Tenant key from context.secrets, else the plugin or env key."""
+    api_key = context_api_key(context) or plugin_api_key or get_api_key_from_env()
+    if not api_key:
+        raise GenkitError(
+            status='FAILED_PRECONDITION',
+            message=(
+                'Please pass in the API key or set the GEMINI_API_KEY or GOOGLE_API_KEY environment variable.\n'
+                'For more details see https://genkit.dev/docs/plugins/google-genai/'
+            ),
+        )
+    return api_key
+
+
+def extract_version(model_name: str) -> str:
+    """Bare model id for the wire. Pasted action keys still have models/googleai/ on them."""
+    return strip_ref_prefixes(model_name)
+
+
+def remove_client_option_overrides(config: dict[str, Any]) -> dict[str, Any]:
+    """Drop client-only config keys before passthrough to the wire payload."""
+    return {key: value for key, value in config.items() if key not in CLIENT_OPTION_KEYS}
+
+
+def timeout_ms(seconds: object) -> float | None:
+    """Config seconds to ``ClientOptions.timeout`` milliseconds, rounding up so 0.0001 sends 1 ms.
+
+    ``ClientOptions`` stays in milliseconds alongside ``HttpOptions.timeout``;
+    ``GoogleAI(timeout=...)`` converts at construction and per-request configs
+    convert here. A numeric string such as ``'5'`` is read as a number, as
+    ``ClientOptions`` did before; anything else raises ``INVALID_ARGUMENT``.
+    """
+    if isinstance(seconds, str):
+        try:
+            seconds = float(seconds)
+        except ValueError:
+            pass
+    try:
+        checked = check_timeout_seconds(seconds)
+    except ValueError as err:
+        raise GenkitError(status='INVALID_ARGUMENT', message=str(err)) from err
+    return float(timeout_seconds_to_ms(checked)) if checked is not None else None
+
+
+def client_overrides_from_config(
+    config: object = None,
+    *,
+    base_url: str | None = None,
+    api_version: str | None = None,
+    timeout: float | None = None,
+    custom_headers: dict[str, str] | None = None,
+) -> ClientOptions:
+    """Lift per-request transport knobs out of a model config into ClientOptions.
+
+    ``timeout`` (on ``config`` or as the keyword) is seconds; ClientOptions
+    gets milliseconds.
+    """
+    return ClientOptions(
+        base_url=getattr(config, 'base_url', base_url),
+        api_version=getattr(config, 'api_version', api_version),
+        timeout=timeout_ms(getattr(config, 'timeout', timeout)),
+        custom_headers=getattr(config, 'custom_headers', custom_headers),
+    )
+
+
+def client_overrides_from_call_config(call_config: object) -> ClientOptions | None:
+    """ClientOptions from ``check_operation``/``cancel_operation`` ``config``, with ``timeout`` in seconds.
+
+    Same keys and units as the model config's transport fields, so a timeout
+    that works on ``generate_operation`` means the same thing on check and
+    cancel. Other keys are ignored, as before.
+    """
+    if not isinstance(call_config, Mapping):
+        return None
+    values = {str(key): value for key, value in cast(Mapping[object, Any], call_config).items()}
+    seconds = values.pop('timeout', None)
+    overrides = ClientOptions.model_validate(values)
+    if seconds is None:
+        return overrides
+    return overrides.model_copy(update={'timeout': timeout_ms(seconds)})
+
+
+def _without_none(value: dict[str, Any]) -> dict[str, Any]:
+    cleaned: dict[str, Any] = {}
+    for key, item in value.items():
+        if isinstance(item, dict) and item:
+            item = _without_none(cast(dict[str, Any], item))
+            if not item:
+                # Every key in it was None: unset, not an empty object.
+                continue
+        if item is not None:
+            cleaned[key] = item
+    return cleaned
+
+
+MODEL_ID_HINT = 'Pick the model with generate(model=...).'
+INPUT_HINT = 'Pass the prompt and messages to generate().'
+SYSTEM_INSTRUCTION_HINT = 'Pass a system message to generate().'
+
+
+def reject_managed_extra(action_name: str, extra: Mapping[str, Any], managed: Mapping[str, str]) -> None:
+    """Raise when ``extra`` sets a field Genkit builds from the request.
+
+    ``managed`` maps a folded key (lowercase, no underscores) to the hint that
+    names where the setting goes instead. Keys fold the same way as the merge,
+    so ``Input`` and ``in_put`` are caught along with ``input``.
+    """
+    for key in extra:
+        hint = managed.get(key.replace('_', '').lower())
+        if hint is not None:
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f"{action_name}: extra[{key!r}] can't be set in extra. {hint}",
+            )
+
+
+def reject_function_tools(action_name: str, request: ModelRequest[Any], *, message: str | None = None) -> None:
+    """Raise when ``generate(tools=...)`` targets an action without function tool support, instead of dropping them."""
+    if request.tools:
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=message or f'{action_name} does not support function tools.',
+        )
+
+
+def pop_extra(dumped: dict[str, Any]) -> dict[str, Any]:
+    """Pop ``extra`` off a dumped config, dropping ``None`` values at every dict level.
+
+    ``None`` means unset, the same as for declared fields (``exclude_none``),
+    so ``extra={'agent_config': None}`` leaves the built ``agent_config``
+    alone instead of sending ``null`` over it. A dict left empty that way is
+    dropped too; an explicit ``{}`` and list items are kept as written.
+    """
+    raw = dumped.pop('extra', None)
+    return _without_none(cast(dict[str, Any], raw)) if isinstance(raw, dict) else {}
+
+
+def partition_keys(
+    payload: dict[str, Any],
+    *groups: tuple[str, ...],
+) -> tuple[dict[str, Any], ...]:
+    """Split payload into one dict per key group, then a remainder of leftovers.
+
+    Does not mutate payload. Keys listed in any group are claimed for that group
+    (or dropped from the remainder even when absent), so callers can peel a
+    dumped model config into agent_config / create options / tool fields /
+    passthrough extras without colliding.
+    """
+    claimed: set[str] = set()
+    for keys in groups:
+        claimed.update(keys)
+    parts = tuple({key: payload[key] for key in keys if key in payload} for keys in groups)
+    remainder = {key: value for key, value in payload.items() if key not in claimed}
+    return (*parts, remainder)
+
+
+def require_interaction_steps(steps: list[Any]) -> list[Any]:
+    """Reject an empty Interactions input before we pay for a round trip."""
+    if not steps:
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message='Missing input.',
+        )
+    return steps
+
+
+def steps_with_folded_system_instruction(messages: list[Message] | None) -> list[dict[str, Any]]:
+    """Convert messages to interaction steps, folding system prompt into a leading user turn."""
+    system_instruction, turns = split_system_instruction(messages or [])
+    steps = to_interaction_steps(ensure_tool_ids(turns))
+    if system_instruction:
+        steps.insert(
+            0,
+            {
+                'type': 'user_input',
+                'content': [{'type': 'text', 'text': system_instruction}],
+            },
+        )
+    return require_interaction_steps(steps)
+
+
+def lowercase_choice(value: object) -> object:
+    """Accept AUTO/NONE-style labels the same as auto/none."""
+    return value.lower() if isinstance(value, str) else value
+
+
+def lowercase_choice_list(value: object) -> object:
+    """Lowercase each string in a response_modalities list."""
+    if not isinstance(value, list):
+        return value
+    return [item.lower() if isinstance(item, str) else item for item in value]

@@ -17,15 +17,11 @@
 """Unit tests for status_types module."""
 
 import pytest
-from pydantic import ValidationError
 
 from genkit._core._error import (
-    Status,
     StatusCodes,
     from_http_code,
     http_status_code,
-    parse_retry_after_ms,
-    wrap_http_error,
 )
 
 
@@ -48,38 +44,6 @@ def test_status_codes_values() -> None:
     assert StatusCodes.INTERNAL == 13
     assert StatusCodes.UNAVAILABLE == 14
     assert StatusCodes.DATA_LOSS == 15
-
-
-def test_status_immutability() -> None:
-    """Tests that Status objects are immutable."""
-    status = Status(name='OK')
-
-    with pytest.raises(ValidationError):
-        # pyrefly: ignore[read-only] - Intentionally testing immutability
-        status.name = 'NOT_FOUND'
-
-    with pytest.raises(ValidationError):
-        # pyrefly: ignore[read-only] - Intentionally testing immutability
-        status.message = 'New message'
-
-
-def test_status_validation() -> None:
-    """Tests that Status validates inputs correctly."""
-    # Test invalid status name
-    with pytest.raises(ValidationError):
-        Status(name='INVALID_STATUS')  # type: ignore[arg-type]
-
-    # Test with invalid type for name
-    with pytest.raises(ValidationError):
-        Status(name=123)  # type: ignore[arg-type]
-
-    # Test with invalid type for message
-    with pytest.raises(ValidationError):
-        Status(name='OK', message=123)  # type: ignore[arg-type]
-
-    # Test with extra fields
-    with pytest.raises(ValidationError):
-        Status(name='OK', extra_field='value')  # type: ignore[call-arg]
 
 
 def test_http_status_code_mapping() -> None:
@@ -124,46 +88,7 @@ def test_from_http_code() -> None:
     assert from_http_code(529) == 'INTERNAL'
 
 
-def test_from_http_code_is_on_plugin_api() -> None:
-    """Plugin authors classify provider HTTP errors from the public surface."""
-    from genkit.plugin_api import (
-        from_http_code as exported,
-        parse_retry_after_ms as exported_parse,
-        wrap_http_error as exported_wrap,
-    )
-
-    assert exported is from_http_code
-    assert exported_wrap is wrap_http_error
-    assert exported_parse is parse_retry_after_ms
-
-
 def test_http_status_code_invalid_input() -> None:
     """Tests http_status_code function with invalid input."""
     with pytest.raises(KeyError):
         http_status_code('INVALID_STATUS')  # type: ignore[arg-type]
-
-
-def test_status_json_serialization() -> None:
-    """Tests that Status objects can be serialized to JSON."""
-    status = Status(name='NOT_FOUND', message='Resource not found')
-    json_data = status.model_dump_json()
-    assert '"name":"NOT_FOUND"' in json_data
-    assert '"message":"Resource not found"' in json_data
-
-
-def test_status_json_deserialization() -> None:
-    """Tests that Status objects can be deserialized from JSON."""
-    json_data = '{"name": "NOT_FOUND", "message": "Resource not found"}'
-    status = Status.model_validate_json(json_data)
-    assert status.name == 'NOT_FOUND'
-    assert status.message == 'Resource not found'
-
-
-def test_status_equality() -> None:
-    """Tests Status equality comparison."""
-    status1 = Status(name='OK')
-    status2 = Status(name='OK')
-    status3 = Status(name='NOT_FOUND')
-
-    assert status1 == status2
-    assert status1 != status3

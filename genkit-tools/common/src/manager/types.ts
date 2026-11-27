@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import type { GenkitError } from '../types/error';
+import type { GenkitError } from '../types/error.js';
 
 export type Runtime = 'nodejs' | 'go' | 'python' | 'dart' | 'java' | undefined;
 
@@ -29,7 +29,7 @@ export class GenkitToolsError extends Error {
     let msg = this.message;
     if (this.data) {
       if (this.data?.message) {
-        msg += `\Genkit Error: ${this.data?.message}`;
+        msg += `Genkit Error: ${this.data?.message}`;
       }
       if (this.data?.stack) {
         msg += `\nStack Trace:\n${this.data?.stack}`;

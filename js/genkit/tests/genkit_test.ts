@@ -15,7 +15,10 @@
  */
 
 import * as assert from 'assert';
+import { spawnSync } from 'child_process';
+import * as net from 'net';
 import { describe, it } from 'node:test';
+import * as path from 'path';
 import { genkit, getClientHeader } from '../src/index.js';
 
 describe('genkit', () => {
@@ -29,5 +32,43 @@ describe('genkit', () => {
 
     assert.ok(getClientHeader().includes('genkit-node/'));
     assert.ok(getClientHeader().includes('foo'));
+  });
+
+  it('surfaces a reflection bind failure as an unhandled rejection, not an exit', async () => {
+    const taken = net.createServer();
+    await new Promise<void>((resolve) => taken.listen(0, '127.0.0.1', resolve));
+    const address = taken.address();
+    assert.ok(address && typeof address === 'object');
+    try {
+      const result = spawnSync(
+        process.execPath,
+        [
+          '--import',
+          'tsx',
+          // Relative to the package root, where `pnpm test` runs; tsx loads
+          // this file as ESM, so __dirname is not available.
+          path.resolve('tests', 'fixtures', 'reflection-bind-failure.ts'),
+        ],
+        {
+          env: {
+            ...process.env,
+            GENKIT_ENV: 'dev',
+            GENKIT_REFLECTION_ENABLED: '',
+            GENKIT_REFLECTION_PORT: '',
+            TAKEN_PORT: String(address.port),
+          },
+          encoding: 'utf8',
+          timeout: 30_000,
+        }
+      );
+      // Reaching the app's own handler proves nothing called process.exit.
+      assert.match(
+        result.stdout,
+        /unhandledRejection: .*Reflection server failed to start: .*EADDRINUSE/
+      );
+      assert.strictEqual(result.status, 7);
+    } finally {
+      await new Promise<void>((resolve) => taken.close(() => resolve()));
+    }
   });
 });

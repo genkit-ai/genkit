@@ -29,7 +29,9 @@ package exp
 // The middleware itself keeps no task registry. The task handle
 // ("<agent>:<snapshotId>") is self-contained and rides in the delegation tool
 // result, so it is recorded in the orchestrator's conversation history; a
-// re-instantiated orchestrator resumes tracking from the IDs in its history.
+// re-instantiated orchestrator resumes tracking from the IDs in its history,
+// and those IDs, with the ones this generate call minted, are the only ones
+// the background-task tools accept (see launchedHere).
 // Status goes through the sub-agent's [aix.AgentHandle] (resolved via
 // resolveAgent, i.e. genkit/exp.LookupAgent, the sanctioned path for
 // third-party middleware): the check tool dispatches the agent's getSnapshot
@@ -53,6 +55,7 @@ import (
 	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/internal/base"
 )
 
 // Names of the shared background-task tools added when [Agents.Async] is set.
@@ -70,12 +73,12 @@ const taskStatusUnknown = "unknown"
 
 // reportSettled reports whether a task report's status can no longer change on
 // its own, which is the rule the wait tool counts by. Report statuses are the
-// runtime's snapshot statuses plus taskStatusUnknown, and the runtime's own
-// rule ([aix.SnapshotStatus.Terminal]) decides for all of them: a pending row
-// and an aborting one (winding down toward its finalize) are the two still in
-// flight, and unknown, like every other status, is settled (see above).
+// runtime's snapshot statuses plus taskStatusUnknown, which is settled (see
+// above). The runtime's own rule ([aix.SnapshotStatus.Terminal]) decides for
+// the rest: a pending row, an aborting one (winding down toward its finalize),
+// and a status the runtime does not know are still in flight.
 func reportSettled(reportStatus string) bool {
-	return aix.SnapshotStatus(reportStatus).Terminal()
+	return reportStatus == taskStatusUnknown || aix.SnapshotStatus(reportStatus).Terminal()
 }
 
 // noTaskIDsNote is the guidance returned when a background-task tool is called
@@ -315,16 +318,48 @@ func maybeDetachRejection(agent *aix.AgentHandle, out *aix.AgentOutput[json.RawM
 func (a *Agents) backgroundTaskTools(st *agentsState) []ai.Tool {
 	names := a.backgroundToolNames()
 	return []ai.Tool{
-		aix.NewTool(names.check,
+		plainTool(names.check,
 			"Returns the current status of background sub-agent tasks without waiting, including results for tasks that finished.",
 			a.taskReportTool(st, readSnapshotOnce)),
-		aix.NewTool(names.wait,
+		a.waitTool(names.wait,
 			"Waits until the given background sub-agent tasks finish and returns their results. Set timeoutSeconds to bound the wait; on timeout the current statuses are returned. Set waitFor to \"first\" to return as soon as any one task settles.",
 			a.waitForBackgroundTasks(st)),
-		aix.NewTool(names.abort,
+		plainTool(names.abort,
 			"Stops background sub-agent tasks whose results are no longer needed, and returns where that left each one. A live task reports \"aborting\" while it winds down and "+stoppedTaskSettles+"; a task that had already finished is unaffected and reports its result.",
 			a.taskReportTool(st, a.abortSnapshot())),
 	}
+}
+
+// waitTool builds the wait tool. With [Agents.MaxWaitSeconds] set, the
+// timeoutSeconds description names the bound, so the model knows what it can
+// ask for. The bound is configuration and a tool's inferred schema is static,
+// so that variant carries a schema of its own, the inferred one with the
+// description extended, and decodes its input itself.
+func (a *Agents) waitTool(name, description string, wait func(context.Context, waitBackgroundTasksInput) (backgroundTasksResult, error)) ai.Tool {
+	if a.MaxWaitSeconds == 0 {
+		return plainTool(name, description, wait)
+	}
+	// SchemaMapFor builds a fresh map on every call, so this instance owns it
+	// and edits it in place.
+	schema := base.SchemaMapFor[waitBackgroundTasksInput]()
+	if props, ok := schema["properties"].(map[string]any); ok {
+		if timeout, ok := props["timeoutSeconds"].(map[string]any); ok {
+			desc, _ := timeout["description"].(string)
+			timeout["description"] = strings.Replace(desc, "until every task settles",
+				fmt.Sprintf("until every task settles, for at most %d seconds", a.MaxWaitSeconds), 1)
+		}
+	}
+	return ai.NewTool(name, description, func(tc *ai.ToolContext, raw any) (backgroundTasksResult, error) {
+		var in waitBackgroundTasksInput
+		b, err := json.Marshal(raw)
+		if err == nil {
+			err = json.Unmarshal(b, &in)
+		}
+		if err != nil {
+			return backgroundTasksResult{}, status.Errorf(status.ErrInvalidArgument, "%s: decode input: %w", name, err)
+		}
+		return wait(tc.Context, in)
+	}, ai.WithInputSchema(schema))
 }
 
 // stoppedTaskSettles is how a task settles once the stop signal reaches it,
@@ -353,9 +388,10 @@ func (a *Agents) taskReportTool(st *agentsState, fetch snapshotFetch) func(conte
 // Each task is followed by the sub-agent's waitForSnapshot companion action, so
 // the waiting happens next to the store that knows when the work finished
 // rather than as a snapshot read per tick here: one action dispatch per task
-// for the whole wait, which is one span each in a trace instead of a stream of
-// them, and a settlement is observed as it happens rather than on the next
-// tick. The waits run concurrently, so the slowest task sets the wall clock.
+// per the sub-agent's wait limit (see [aix.WithMaxSnapshotWait]; the handle
+// asks again until the task settles), which is a few spans in a trace instead
+// of a stream of them, and a settlement is observed as it happens rather than
+// on the next tick. The waits run concurrently, so the slowest task sets the wall clock.
 //
 // A settled task's report is cached for the rest of the generate call (no
 // snapshot re-reads or artifact re-merges when the model checks again), and
@@ -385,24 +421,31 @@ func (a *Agents) waitForBackgroundTasks(st *agentsState) func(context.Context, w
 		if in.TimeoutSeconds < 0 {
 			return a.reportTasks(ctx, st, in.TaskIDs, readSnapshotOnce)
 		}
+		// The operator's bound clamps any other value, "until every task
+		// settles" included, so a prompt cannot decide how long a request
+		// hangs.
+		timeoutSeconds := in.TimeoutSeconds
+		if a.MaxWaitSeconds > 0 && (timeoutSeconds == 0 || timeoutSeconds > a.MaxWaitSeconds) {
+			timeoutSeconds = a.MaxWaitSeconds
+		}
 
 		waitCtx := ctx
-		if in.TimeoutSeconds > 0 {
+		if timeoutSeconds > 0 {
 			// A model-supplied value large enough to overflow the nanosecond
 			// multiplication (about 292 years) is effectively unbounded, the
 			// same as 0; without the clamp it wraps negative and the wait
 			// would return instantly with an already-expired context.
 			const maxWaitSeconds = math.MaxInt64 / int64(time.Second)
-			if int64(in.TimeoutSeconds) <= maxWaitSeconds {
+			if int64(timeoutSeconds) <= maxWaitSeconds {
 				var cancel context.CancelFunc
-				waitCtx, cancel = context.WithTimeout(ctx, time.Duration(in.TimeoutSeconds)*time.Second)
+				waitCtx, cancel = context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
 				defer cancel()
 			}
 		}
 
 		start := time.Now()
 		logger.Debug(ctx, "waiting for background tasks",
-			"tasks", len(in.TaskIDs), "timeoutSeconds", in.TimeoutSeconds)
+			"tasks", len(in.TaskIDs), "timeoutSeconds", timeoutSeconds)
 
 		g := genkit.FromContext(ctx)
 		var reports []backgroundTaskReport
@@ -640,6 +683,11 @@ func (a *Agents) reportTask(ctx context.Context, g *genkit.Genkit, st *agentsSta
 		logger.Debug(ctx, "background task id did not resolve", "taskId", taskID, "error", err)
 		return backgroundTaskReport{TaskID: taskID, Status: taskStatusUnknown, Error: err.Error()}, err
 	}
+	if !launchedHere(st, taskID) {
+		err := notLaunchedHereError(taskID)
+		logger.Debug(ctx, "background task was not launched in this conversation", "taskId", taskID)
+		return backgroundTaskReport{TaskID: taskID, Status: taskStatusUnknown, Error: err.Error()}, err
+	}
 
 	report := backgroundTaskReport{TaskID: taskID, Agent: ref.Name, Name: a.taskLabel(st, taskID)}
 	// Both fetches dispatch a companion action of the sub-agent, which applies
@@ -667,13 +715,13 @@ func (a *Agents) reportTask(ctx context.Context, g *genkit.Genkit, st *agentsSta
 		// the companion action, so whatever surfaces here is worth reporting.
 		// The agent resolved above, so NOT_FOUND here is the snapshot and
 		// nothing else, and re-delegating is genuinely the way to get the
-		// work done; the other dead ends (see deadEndRead) are reported as
+		// work done; the other dead ends (see aix.IsRetryableReadError) are reported as
 		// they are, and anything else is presumed transient.
 		s, _ := status.Classified(err)
 		switch {
 		case s == status.NotFound:
 			report.Error = fmt.Sprintf("No record of this task exists (%v). Delegate the task again if the result is still needed.", err)
-		case deadEndRead(err):
+		case !aix.IsRetryableReadError(err):
 			report.Error = err.Error()
 		default:
 			report.Error = fmt.Sprintf("Could not read the task's status: %v. Check again later.", err)

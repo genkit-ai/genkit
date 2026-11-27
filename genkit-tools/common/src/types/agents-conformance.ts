@@ -33,13 +33,13 @@ import {
   AgentStreamChunkSchema,
   ArtifactSchema,
   SessionStateSchema,
-} from './agent';
+} from './agent.js';
 
 import {
   GenerateResponseChunkSchema,
   GenerateResponseSchema,
   MessageSchema,
-} from './model';
+} from './model.js';
 
 // ---------------------------------------------------------------------------
 // Conformance spec — output assertions
@@ -90,6 +90,12 @@ export const SnapshotAssertionsSchema = z.object({
 
   /** Partial match on snapshot.state. */
   stateContains: SessionStateSchema.partial().optional(),
+  /**
+   * If present, snapshot.state.messages must hold exactly this many messages.
+   * stateContains matches messages as a subsequence, so this is how a case
+   * asserts that a message is absent.
+   */
+  messageCount: z.number().optional(),
   /** If present, asserts snapshot.error contains (at minimum) these fields. */
   errorContains: z.record(z.string(), z.any()).optional(),
 });

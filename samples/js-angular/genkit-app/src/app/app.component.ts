@@ -31,7 +31,6 @@ import { RouterLink, RouterOutlet } from '@angular/router';
     MatTabNavPanel,
     MatButtonModule,
     MatTabsModule,
-    MatToolbarModule,
     MatTooltipModule,
     RouterLink,
   ],

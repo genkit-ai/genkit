@@ -38,6 +38,7 @@ type TaskStatus =
   | 'idle'
   | 'submitting'
   | 'pending'
+  | 'aborting'
   | 'done'
   | 'failed'
   | 'aborted'
@@ -76,9 +77,9 @@ export default function BackgroundAgent() {
           if (gen !== pollGenRef.current) return; // superseded — bail out
           setPollCount((c) => c + 1);
 
-          const s = snapshot.status as TaskStatus;
+          const s = snapshot.status;
 
-          if (s === 'done') {
+          if (s === 'completed') {
             setStatus('done');
             // Extract the model's response from the snapshot state
             const messages: MessageData[] = snapshot.state?.messages || [];
@@ -94,6 +95,10 @@ export default function BackgroundAgent() {
           } else if (s === 'failed') {
             setStatus('failed');
             setError('The background task failed on the server.');
+          } else if (s === 'aborting') {
+            // The abort reached the server: the worker is winding down and
+            // will record the work it kept on the row.
+            setStatus('aborting');
           } else if (s === 'aborted') {
             setStatus('aborted');
           } else if (s === 'expired') {
@@ -141,17 +146,19 @@ export default function BackgroundAgent() {
   }, [agent, topic, status, startPolling]);
 
   // ── Abort the background task ────────────────────────────────────────
+  // The abort flips the row to `aborting` and returns its previous status.
+  // Polling carries on: the row settles as `aborted` once the worker has
+  // recorded the work it kept, and the poll loop reports that.
   const handleAbort = useCallback(async () => {
     if (!taskRef.current) return;
-    stopPolling();
 
     try {
-      await taskRef.current.abort();
-      setStatus('aborted');
+      const previous = await taskRef.current.abort();
+      if (previous === 'pending') setStatus('aborting');
     } catch (err: any) {
       setError(`Abort failed: ${err.message}`);
     }
-  }, [stopPolling]);
+  }, []);
 
   // ── Reset to submit a new task ───────────────────────────────────────
   const handleReset = useCallback(() => {
@@ -221,6 +228,22 @@ export default function BackgroundAgent() {
           </div>
         )}
 
+        {/* ── Aborting ────────────────────────────────────────────────── */}
+        {status === 'aborting' && (
+          <div className="background-status">
+            <div className="background-status-icon">🛑</div>
+            <h3>Aborting…</h3>
+            <p className="background-status-detail">
+              The server is stopping the task and recording the work it kept.
+              The snapshot settles as <code>aborted</code> once that lands.
+            </p>
+            <div className="background-meta">
+              <code>snapshotId: {snapshotId}</code>
+              <span className="background-poll-count">Polls: {pollCount}</span>
+            </div>
+          </div>
+        )}
+
         {/* ── Completed ───────────────────────────────────────────────── */}
         {status === 'done' && (
           <div className="background-result">
@@ -283,8 +306,8 @@ export default function BackgroundAgent() {
             2 seconds.
           </li>
           <li>
-            When <code>status === "done"</code>, the report is extracted from
-            the snapshot's message history.
+            When <code>status === "completed"</code>, the report is extracted
+            from the snapshot's message history.
           </li>
         </ol>
 
@@ -294,13 +317,21 @@ export default function BackgroundAgent() {
             <code>pending</code> — still processing
           </li>
           <li>
-            <code>done</code> — completed successfully
+            <code>aborting</code> — cancelled by the client, still recording the
+            work it kept
+          </li>
+          <li>
+            <code>completed</code> — completed successfully
           </li>
           <li>
             <code>failed</code> — error during processing
           </li>
           <li>
-            <code>aborted</code> — cancelled by the client
+            <code>aborted</code> — cancelled by the client; keeps the turns that
+            finished and can be resumed
+          </li>
+          <li>
+            <code>expired</code> — the worker stopped responding
           </li>
         </ul>
 

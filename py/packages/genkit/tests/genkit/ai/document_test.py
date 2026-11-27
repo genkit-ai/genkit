@@ -52,32 +52,6 @@ def test_media_document() -> None:
     ]
 
 
-def test_from_data_text_document() -> None:
-    """Test creating a text Document using from_data."""
-    data = 'foo'
-    data_type = 'text'
-    metadata = {'embedMetadata': {'embeddingType': 'text'}}
-    doc = Document.from_data(data, data_type, metadata)
-
-    assert doc.text == data
-    assert doc.metadata == metadata
-    assert doc.data_type == data_type
-
-
-def test_from_data_media_document() -> None:
-    """Test creating a media Document using from_data."""
-    data = 'iVBORw0KGgoAAAANSUhEUgAAAAjCB0C8AAAAASUVORK5CYII='
-    data_type = 'image/png'
-    metadata = {'embedMetadata': {'embeddingType': 'image'}}
-    doc = Document.from_data(data, data_type, metadata)
-
-    assert doc.media == [
-        Media(url=data, content_type=data_type),
-    ]
-    assert doc.metadata == metadata
-    assert doc.data_type == data_type
-
-
 def test_concatenates_text() -> None:
     """Test that text concatenates multiple text parts."""
     content = [Part.from_text('hello'), Part.from_text('world')]
@@ -100,32 +74,32 @@ def test_multiple_media_document() -> None:
     ]
 
 
-def test_data_with_text() -> None:
-    """Test data with a text document."""
-    doc = Document.from_text('hello')
+def test_document_from_text_reads_back_through_text() -> None:
+    """Document.from_text('hello') reads back as 'hello' through .text, with its metadata kept."""
+    metadata = {'embedMetadata': {'embeddingType': 'text'}}
+    doc = Document.from_text('hello', metadata)
 
-    assert doc.data == 'hello'
-
-
-def test_data_with_media() -> None:
-    """Test data with a media document."""
-    doc = Document.from_media(url='gs://somebucket/someimage.png', content_type='image/png')
-
-    assert doc.data == 'gs://somebucket/someimage.png'
+    assert doc.text == 'hello'
+    assert doc.metadata == metadata
 
 
-def test_data_type_with_text() -> None:
-    """Test data_type with a text document."""
-    doc = Document.from_text('hello')
+def test_document_from_media_reads_back_through_media_url() -> None:
+    """Document.from_media(url, 'image/png') reads back its url and content type through .media."""
+    url = 'gs://somebucket/someimage.png'
+    metadata = {'embedMetadata': {'embeddingType': 'image'}}
+    doc = Document.from_media(url, 'image/png', metadata)
 
-    assert doc.data_type == 'text'
+    assert doc.media[0].url == url
+    assert doc.media[0].content_type == 'image/png'
+    assert doc.metadata == metadata
 
 
-def test_data_type_with_media() -> None:
-    """Test data_type with a media document."""
-    doc = Document.from_media(url='gs://somebucket/someimage.png', content_type='image/png')
+def test_document_data_part_reads_back_through_content() -> None:
+    """A data part reads back as the dict at doc.content[i].data, not through the document's text."""
+    doc = Document(content=[Part.from_text('hello'), Part.from_data({'sku': 1})])
 
-    assert doc.data_type == 'image/png'
+    assert doc.content[1].data == {'sku': 1}
+    assert doc.text == 'hello'
 
 
 def test_document_accepts_part_factories() -> None:

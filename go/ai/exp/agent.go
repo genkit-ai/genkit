@@ -34,8 +34,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
@@ -45,6 +43,7 @@ import (
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/firebase/genkit/go/internal/genkitbridge"
+	"github.com/firebase/genkit/go/internal/wire"
 )
 
 // --- Heartbeat ---
@@ -132,6 +131,9 @@ type SessionRunner[State any] struct {
 	// is the parent of the next snapshot and the resume point the failed and
 	// detached outputs report.
 	lastSnapshotID string
+	// lastSnapshotAt is the CreatedAt of the lastSnapshotID row, which the
+	// next snapshot must come after (see snapshotTime).
+	lastSnapshotAt time.Time
 
 	// lastTurnFinishReason is the finish reason reported by the most recent
 	// turn (via the [TurnResult] its callback returned), or "" if the turn
@@ -155,7 +157,8 @@ type SessionRunner[State any] struct {
 	// lastTurnCommitted reports whether the most recent turn left state
 	// worth continuing from. A successful turn always has; a failed one has
 	// when its callback returned a [TurnResult] alongside the error. Set by
-	// endTurn each turn, and what decides whether the turn snapshots.
+	// endTurn each turn. It decides whether the turn's row holds the live
+	// state or the last committed one (see emitTurnEnd).
 	lastTurnCommitted bool
 
 	// lastGoodState is a deep copy of the session state as of the most
@@ -174,6 +177,59 @@ type SessionRunner[State any] struct {
 	// is no snapshot to read one from. Written once by captureInitial and
 	// never mutated after.
 	initialState *SessionState[State]
+
+	// usageMu guards the usage totals below. recordUsage feeds them from
+	// whatever goroutine made the model call, which can be a tool's. Each
+	// total is replaced, never mutated, so a value read out stays valid.
+	usageMu sync.Mutex
+	// inTurn reports whether a turn is running. A call the agent function
+	// makes between turns counts toward the invocation and the session, but
+	// toward no turn.
+	inTurn bool
+	// turnUsage totals the running turn's model calls. endTurn moves it to
+	// lastTurnUsage, which the turn-end signal reports.
+	turnUsage     *ai.GenerationUsage
+	lastTurnUsage *ai.GenerationUsage
+	// invocationUsage totals every model call of the invocation, failed
+	// turns included, for [AgentOutput.Usage].
+	invocationUsage *ai.GenerationUsage
+}
+
+// recordUsage is the usage sink the runtime installs on the invocation's work
+// context (see [base.WithUsageSink]). It adds one model call's usage to the
+// session state, the invocation, and the running turn. The state takes it
+// live, and it never rolls back: a resume point that falls to an earlier
+// state carries it over (see withLiveUsage).
+func (s *SessionRunner[State]) recordUsage(v any) {
+	u, ok := v.(*ai.GenerationUsage)
+	if !ok {
+		return
+	}
+	s.mu.Lock()
+	s.state.Usage = ai.SumUsage(s.state.Usage, u)
+	s.mu.Unlock()
+
+	s.usageMu.Lock()
+	defer s.usageMu.Unlock()
+	s.invocationUsage = ai.SumUsage(s.invocationUsage, u)
+	if s.inTurn {
+		s.turnUsage = ai.SumUsage(s.turnUsage, u)
+	}
+}
+
+// sessionUsage returns the session state's usage so far, for
+// [SessionUsageFromContext].
+func (s *SessionRunner[State]) sessionUsage() *ai.GenerationUsage {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.state.Usage
+}
+
+// totalUsage returns the invocation's usage so far.
+func (s *SessionRunner[State]) totalUsage() *ai.GenerationUsage {
+	s.usageMu.Lock()
+	defer s.usageMu.Unlock()
+	return s.invocationUsage
 }
 
 // suspendSnapshots stops all further turn-end snapshot writes for this
@@ -184,11 +240,27 @@ type SessionRunner[State any] struct {
 // is current, not stale), and any later turn end observes the suspension
 // and skips its write. Called by the detach handler, after which the
 // queued inputs roll into a single finalize rewrite of the pending row.
-func (s *SessionRunner[State]) suspendSnapshots() (parentID string) {
+func (s *SessionRunner[State]) suspendSnapshots() (parentID string, parentAt time.Time) {
 	s.snapMu.Lock()
 	defer s.snapMu.Unlock()
 	s.snapshotsSuspended = true
-	return s.lastSnapshotID
+	return s.lastSnapshotID, s.lastSnapshotAt
+}
+
+// snapshotTime returns the CreatedAt for a new snapshot whose parent was
+// created at parentAt: now, but at least a millisecond after the parent.
+// Stores keep only milliseconds, and GetLatestSnapshot breaks a tie by the
+// snapshot ID, which is random, so a row written within a millisecond of its
+// parent (a detach's pending row right after a turn's) would otherwise lose to
+// its parent half the time. A parent stamped ahead of this clock (by another
+// host) keeps every later row in its session ahead too, a millisecond apart,
+// on purpose: the order of the rows matters more than their wall-clock time.
+func snapshotTime(parentAt time.Time) time.Time {
+	now := time.Now()
+	if earliest := parentAt.Add(time.Millisecond); now.Before(earliest) {
+		return earliest
+	}
+	return now
 }
 
 // snapshotsAreSuspended reports whether a detach has stopped turn-end
@@ -236,8 +308,8 @@ type TurnContext struct {
 	// before the turn runs so the handler knows it in advance. A server-managed
 	// turn persists its snapshot under this ID, whether it succeeded or failed.
 	// It is empty for a client-managed agent (no store, so no snapshot) and is
-	// the reserved-but-unused ID for a turn that writes none (one that failed
-	// before committing anything, or one whose snapshots a detach suspended).
+	// the reserved-but-unused ID for a turn whose snapshots a detach
+	// suspended.
 	SnapshotID string
 	// ParentSnapshotID is the ID of the snapshot this turn continues from: the
 	// previous turn's snapshot, or the snapshot the invocation resumed from. It
@@ -280,7 +352,9 @@ type turnSpanOutput[State any] struct {
 // returns the error. What it does with the turn's state depends on what fn
 // returned beside the error: a [TurnResult] commits the turn, which snapshots
 // the session under [SnapshotStatusFailed] with the error on the row, and nil
-// rolls it back, leaving the previous snapshot as the resume point. A
+// rolls its messages back: the failed row it still writes holds the last
+// committed state, with the turn's usage counted, since the tokens were
+// spent. A
 // prompt-backed agent commits whenever the generate call produced a partial
 // response, because that partial ends at a turn seam and is a conversation
 // the caller can continue from; a custom agent commits when it knows the same
@@ -320,6 +394,9 @@ func (s *SessionRunner[State]) Run(ctx context.Context, fn func(ctx context.Cont
 		if s.onStartTurn != nil {
 			s.onStartTurn()
 		}
+		s.usageMu.Lock()
+		s.inTurn, s.turnUsage = true, nil
+		s.usageMu.Unlock()
 		// Reserve this turn's snapshot ID before the turn runs so the per-turn
 		// fn can read it (with the parent ID and turn index) from its context
 		// via [TurnContextFromContext]; the turn-end write persists under it.
@@ -338,9 +415,6 @@ func (s *SessionRunner[State]) Run(ctx context.Context, fn func(ctx context.Cont
 			Name: fmt.Sprintf("runTurn-%d", s.turnIndex+1),
 			Type: "flowStep",
 		}
-		// The result of a turn that errored, captured on the way out of the
-		// span so the failure arm below can read it: non-nil commits.
-		var failedResult *TurnResult
 		_, err := tracing.RunInNewSpan(ctx, spanMeta, input,
 			func(ctx context.Context, input *AgentInput) (any, error) {
 				// Carry the reserved turn context on the per-turn fn's context
@@ -353,7 +427,27 @@ func (s *SessionRunner[State]) Run(ctx context.Context, fn func(ctx context.Cont
 				}
 				tr, err := fn(ctx, input)
 				if err != nil {
-					failedResult = tr
+					reason := AgentFinishReasonFailed
+					if tr != nil && tr.FinishReason != "" {
+						reason = tr.FinishReason
+					}
+					// The caller stopping the run wins over whatever the turn
+					// reported. The detached finalize settles its race on the
+					// same rule (see finalizePendingSnapshot).
+					if callerStopped(ctx.Err(), err) {
+						reason = AgentFinishReasonAborted
+					}
+					// End the turn inside its span, as a successful one does,
+					// so a committed failure tags this span with its snapshot.
+					// A TurnResult beside the error is what commits it.
+					committed := tr != nil
+					s.endTurn(ctx, reason, err, committed)
+					if committed {
+						// A committed failure records the state its snapshot
+						// saved, as a success does; RunInNewSpan keeps an
+						// output returned beside the error.
+						return turnSpanOutput[State]{State: s.State()}, err
+					}
 					return nil, err
 				}
 				// A returned TurnResult sets the reason, nil reports none.
@@ -368,17 +462,6 @@ func (s *SessionRunner[State]) Run(ctx context.Context, fn func(ctx context.Cont
 			},
 		)
 		if err != nil {
-			reason := AgentFinishReasonFailed
-			if failedResult != nil && failedResult.FinishReason != "" {
-				reason = failedResult.FinishReason
-			}
-			// The caller stopping the run wins over whatever the turn
-			// reported. The detached finalize settles its race on the same
-			// rule (see finalizePendingSnapshot).
-			if callerStopped(ctx.Err(), err) {
-				reason = AgentFinishReasonAborted
-			}
-			s.endTurn(ctx, reason, err, failedResult != nil)
 			return err
 		}
 	}
@@ -400,11 +483,15 @@ func (s *SessionRunner[State]) reserveTurnSnapshotID() string {
 // endTurn records how the turn ended and runs the shared turn-end tail:
 // the turn-end emit, the last-good capture, and the turn advance. cause is
 // the turn's error, nil on success; committed says whether its state is a
-// resume point (always so on success).
+// resume point (always so on success). ctx must be the turn span's context:
+// the emit tags that span with the turn's snapshot.
 func (s *SessionRunner[State]) endTurn(ctx context.Context, reason AgentFinishReason, cause error, committed bool) {
 	s.lastTurnFinishReason = reason
 	s.lastTurnErr = cause
 	s.lastTurnCommitted = committed
+	s.usageMu.Lock()
+	s.lastTurnUsage, s.turnUsage, s.inTurn = s.turnUsage, nil, false
+	s.usageMu.Unlock()
 	s.onEndTurn(ctx)
 	if committed {
 		s.captureLastGood()
@@ -415,7 +502,8 @@ func (s *SessionRunner[State]) endTurn(ctx context.Context, reason AgentFinishRe
 // committedState resolves the session state as of the last turn that
 // committed. It is what a run stopping mid-turn must land: the live state
 // holds the unfinished turn's mutations, and an attached turn sheds them by
-// not snapshotting at all.
+// writing its row from this state instead. Every branch but the live state
+// carries the live usage (see withLiveUsage).
 //
 // It always resolves, taking the first source that holds an answer:
 //
@@ -437,23 +525,37 @@ func (s *SessionRunner[State]) committedState(ctx context.Context) *SessionState
 		return s.State()
 	}
 	if s.lastGoodState != nil {
-		return s.lastGoodState
+		return s.withLiveUsage(s.lastGoodState)
 	}
 	if snapped := s.snapshotState(ctx, s.lastSnapshotID); snapped != nil {
-		return snapped
+		return s.withLiveUsage(snapped)
 	}
-	return s.initialState
+	return s.withLiveUsage(s.initialState)
+}
+
+// withLiveUsage returns a shallow copy of state carrying the session's live
+// usage. Usage is a ledger: whatever earlier state a run falls back to, the
+// tokens spent since stay counted.
+func (s *SessionRunner[State]) withLiveUsage(state *SessionState[State]) *SessionState[State] {
+	s.mu.RLock()
+	usage := s.state.Usage
+	s.mu.RUnlock()
+	c := *state
+	c.Usage = usage
+	return &c
 }
 
 // snapshotState reads the state off a snapshot this session already wrote.
 // Returns nil when there is no such snapshot, or when it cannot be read or
 // carries no state, which costs committedState this source but never an
-// answer.
+// answer. The read ignores ctx's cancellation: a turn the caller cancelled
+// still records its row, and that row must not fall back past the turns
+// already committed.
 func (s *SessionRunner[State]) snapshotState(ctx context.Context, snapshotID string) *SessionState[State] {
 	if s.store == nil || snapshotID == "" {
 		return nil
 	}
-	snap, err := s.store.GetSnapshot(ctx, snapshotID)
+	snap, err := s.store.GetSnapshot(context.WithoutCancel(ctx), snapshotID)
 	if err != nil {
 		logger.Error(ctx, "agent: failed to read snapshot for committed state",
 			"snapshotId", snapshotID, "error", err)
@@ -548,9 +650,11 @@ func (s *SessionRunner[State]) invocationReason(result *AgentResult) AgentFinish
 // holding the work up to the turn that did not finish.
 //
 // The turn-end snapshot is the agent's only routine persistence point, and
-// every committed turn writes one, so the newest snapshot is the resume point
-// the failed and detached outputs report. Only a turn that failed before
-// committing anything writes none, leaving its predecessor as that point.
+// every turn writes one, so the newest snapshot is the resume point the
+// failed and detached outputs report. state, when non-nil, is written in
+// place of the live state: a turn that failed before committing anything
+// writes the last committed state, so its messages roll back while its
+// spend stays in the ledger.
 //
 // The body runs under snapMu so the detach handler's suspend-and-capture
 // (suspendSnapshots) cannot interleave with a write: it either waits for
@@ -562,7 +666,7 @@ func (s *SessionRunner[State]) invocationReason(result *AgentResult) AgentFinish
 // context was cancelled is exactly the turn whose snapshot a client needs, so
 // the row must land even though the context it ran under is gone. ctx is
 // still what the write is traced and logged under.
-func (s *SessionRunner[State]) snapshotTurnEnd(ctx context.Context, finishReason AgentFinishReason, cause error) string {
+func (s *SessionRunner[State]) snapshotTurnEnd(ctx context.Context, finishReason AgentFinishReason, cause error, state *SessionState[State]) string {
 	if s.store == nil {
 		return ""
 	}
@@ -573,15 +677,18 @@ func (s *SessionRunner[State]) snapshotTurnEnd(ctx context.Context, finishReason
 		return ""
 	}
 
-	s.mu.RLock()
-	state := s.copyStateLocked()
-	s.mu.RUnlock()
+	if state == nil {
+		s.mu.RLock()
+		live := s.copyStateLocked()
+		s.mu.RUnlock()
+		state = &live
+	}
 
 	parentID := s.lastSnapshotID
 	sessionID := s.SessionID()
 	// Timestamps are caller-managed (the store persists them verbatim); a fresh
 	// turn-end snapshot is created now, so CreatedAt and UpdatedAt are equal.
-	now := time.Now()
+	now := snapshotTime(s.lastSnapshotAt)
 	snapStatus := SnapshotStatusCompleted
 	if cause != nil {
 		snapStatus = terminalStatus(finishReason)
@@ -594,19 +701,23 @@ func (s *SessionRunner[State]) snapshotTurnEnd(ctx context.Context, finishReason
 				Status:       snapStatus,
 				FinishReason: finishReason,
 				Error:        convertKeepText(cause),
-				State:        &state,
+				State:        state,
 				CreatedAt:    now,
 				UpdatedAt:    now,
 			}, nil
 		})
 	if err != nil {
-		logger.Error(ctx, "agent failed to save snapshot",
-			"parentId", parentID,
-			"error", err)
+		// A deleted session is not a failure: the work simply stops being
+		// persisted.
+		if !errors.Is(err, ErrSessionDeleted) {
+			logger.Error(ctx, "agent failed to save snapshot",
+				"parentId", parentID,
+				"error", err)
+		}
 		return ""
 	}
 
-	s.lastSnapshotID = saved.SnapshotID
+	s.lastSnapshotID, s.lastSnapshotAt = saved.SnapshotID, saved.CreatedAt
 	return saved.SnapshotID
 }
 
@@ -732,8 +843,11 @@ func (a *Agent[State]) GetSnapshotAction() api.Action {
 
 // WaitForSnapshotAction returns the agent's waitForSnapshot companion action,
 // which resolves a snapshot the same way getSnapshot does and returns once it
-// settles (input [GetSnapshotRequest], output [SessionSnapshot]). It returns
-// nil when the agent is client-managed (no [SessionStore] configured).
+// settles (input [GetSnapshotRequest], output [SessionSnapshot]). One request
+// holds for at most the agent's [WithMaxSnapshotWait] limit and then returns
+// the snapshot as it stands, still pending or aborting, so a caller asks again
+// until it settles. It returns nil when the agent is client-managed (no
+// [SessionStore] configured).
 //
 // Use it to expose following a detached invocation over a transport (e.g.
 // mount it with genkit.Handler next to the agent itself), so a remote caller
@@ -814,7 +928,7 @@ func (a *Agent[State]) WaitForSnapshot(ctx context.Context, snapshotID string) (
 	if snapshotID == "" {
 		return nil, status.Errorf(status.ErrInvalidArgument, "agent %q: WaitForSnapshot: snapshotID is required", a.Name())
 	}
-	return waitSnapshot(ctx, a.store, a.transform, "waitForSnapshot", snapshotID, "")
+	return waitSnapshot(ctx, a.store, a.transform, "waitForSnapshot", snapshotID, "", 0)
 }
 
 // GetLatestSnapshot fetches a session's most recently created snapshot (whatever
@@ -855,6 +969,51 @@ func (a *Agent[State]) Abort(ctx context.Context, snapshotID string) (SnapshotSt
 		return "", status.Errorf(status.ErrInvalidArgument, "agent %q: Abort: snapshotID is required", a.Name())
 	}
 	return abortPendingSnapshot(ctx, a.store, snapshotID)
+}
+
+// DeleteSession permanently removes every persisted snapshot of a session. A
+// detached run still in flight is aborted first, so the work stops rather than
+// continuing against data that is going away. It reports whether anything was
+// removed and is idempotent: a session with no persisted data is not an error.
+//
+// Resuming by session ID afterwards starts a fresh session, and resuming by
+// snapshot ID fails with [ErrSnapshotNotFound]. A run that is still going when
+// the session is deleted stops persisting instead of failing; it cannot bring
+// the session back. Traces, logs, and durable streams live outside the store
+// and are not touched.
+//
+// This is an in-process API only: no companion action or route is registered
+// for it, so put it behind your own authorization.
+//
+// It returns FAILED_PRECONDITION on a client-managed agent or when the store
+// does not implement [SessionDeleter], and INVALID_ARGUMENT when sessionID is
+// empty.
+func (a *Agent[State]) DeleteSession(ctx context.Context, sessionID string) (bool, error) {
+	if a.store == nil {
+		return false, status.Errorf(ErrSessionStoreNotConfigured, "agent %q: DeleteSession requires a session store", a.Name())
+	}
+	if sessionID == "" {
+		return false, status.Errorf(status.ErrInvalidArgument, "agent %q: DeleteSession: sessionID is required", a.Name())
+	}
+	deleter, ok := a.store.(SessionDeleter)
+	if !ok {
+		return false, status.Errorf(status.ErrFailedPrecondition, "agent %q: the session store does not support DeleteSession", a.Name())
+	}
+	// Stop an in-flight detached run first. Best effort: a failure here is
+	// logged and the delete goes on, because the store also tells the run's
+	// subscription its row is gone and rejects writers that continue the
+	// deleted chain.
+	latest, err := getLatestSnapshotMetadata(ctx, a.store, sessionID)
+	if err != nil {
+		logger.Warn(ctx, "agent: could not look up the session's latest snapshot before deleting it",
+			"sessionId", sessionID, "error", err)
+	} else if latest != nil && latest.Status == SnapshotStatusPending {
+		if _, err := abortPendingSnapshot(ctx, a.store, latest.SnapshotID); err != nil {
+			logger.Warn(ctx, "agent: could not abort the session's pending snapshot before deleting it",
+				"snapshotId", latest.SnapshotID, "error", err)
+		}
+	}
+	return deleter.DeleteSession(ctx, sessionID)
 }
 
 // --- api.BidiAction implementation ---
@@ -1083,6 +1242,7 @@ func newCustomAgent[State any](
 	if cfg.description != "" {
 		metadata["description"] = cfg.description
 	}
+	key := api.KeyFromName(api.ActionTypeAgent, name)
 	action := core.NewBidiActionOf(api.ActionTypeAgent, name,
 		&core.BidiActionOptions{Metadata: metadata},
 		func(
@@ -1098,6 +1258,10 @@ func newCustomAgent[State any](
 			if cfg.contextFunc != nil {
 				ctx = cfg.contextFunc(ctx)
 			}
+			// A transport serving this agent to a client marks ctx (see
+			// genkit.Handler); the output it returns then keeps internal
+			// error text off the wire.
+			served := wire.ServesAction(ctx, key)
 			rt, err := newAgentRuntime(ctx, name, cfg, in, inCh, outCh)
 			if err != nil {
 				// Init failures (a rejected init payload, a failed
@@ -1108,10 +1272,14 @@ func newCustomAgent[State any](
 				// snapshot.
 				return nil, err
 			}
-			return rt.run(ctx, fn)
+			out, err := rt.run(ctx, fn)
+			if served && out != nil {
+				out.Error = clientSafeError(out.Error)
+			}
+			return out, err
 		})
 
-	getSnapshot, wait, abort := newSnapshotActions(name, cfg.store, cfg.transform)
+	getSnapshot, wait, abort := newSnapshotActions(name, cfg.store, cfg.transform, cfg.maxSnapshotWait)
 
 	return &Agent[State]{
 		action:      action,
@@ -1254,16 +1422,14 @@ type fnDoneResult[State any] struct {
 	ctxErr error
 }
 
-// sessionIDSpanAttrKey and snapshotIDSpanAttrKey are the full span-attribute
-// keys under which an agent records its identifiers: the session ID on the
-// root action span, and the turn-end snapshot ID on each server-managed turn
-// span. They are the "genkit:metadata:"-prefixed forms of the
-// "agent:sessionId" / "agent:snapshotId" custom-metadata keys every agent
-// records; the prefix is inlined here because Go's tracing package exposes no
-// custom-metadata helper.
+// sessionIDMetaKey and snapshotIDMetaKey are the custom-metadata keys under
+// which an agent records its identifiers: the session ID on the root action
+// span, and the turn-end snapshot ID on each server-managed turn span. They are
+// recorded via [tracing.SetSpanMetadata], which prefixes them with
+// "genkit:metadata:" on the span.
 const (
-	sessionIDSpanAttrKey  = "genkit:metadata:agent:sessionId"
-	snapshotIDSpanAttrKey = "genkit:metadata:agent:snapshotId"
+	sessionIDMetaKey  = "agent:sessionId"
+	snapshotIDMetaKey = "agent:snapshotId"
 )
 
 func newAgentRuntime[State any](
@@ -1316,10 +1482,9 @@ func newAgentRuntime[State any](
 	// Tag the agent's root action span (the current span here, before any turn
 	// span is opened) with the session ID so traces from the same conversation
 	// can be correlated. It is written once at the start of the action body.
-	// trace.SpanFromContext never returns nil (it yields a no-op span when none
-	// is active), so the SetAttributes is always safe.
-	trace.SpanFromContext(ctx).SetAttributes(
-		attribute.String(sessionIDSpanAttrKey, session.state.SessionID))
+	// SetSpanMetadata is a no-op outside a span, so this is safe.
+	tracing.SetSpanMetadata(ctx, map[string]string{
+		sessionIDMetaKey: session.state.SessionID})
 
 	rt := &agentRuntime[State]{
 		name:     name,
@@ -1343,7 +1508,7 @@ func newAgentRuntime[State any](
 	if parent != nil {
 		// Resumed: chain the first turn's snapshot off the one we loaded, and
 		// make it the resume point a first-turn failure falls back to.
-		rt.sess.lastSnapshotID = parent.SnapshotID
+		rt.sess.lastSnapshotID, rt.sess.lastSnapshotAt = parent.SnapshotID, parent.CreatedAt
 	}
 	rt.sess.onEndTurn = rt.emitTurnEnd
 	// Stream custom-state mutations as customPatch chunks. beginTurn is armed
@@ -1371,30 +1536,35 @@ func newAgentRuntime[State any](
 // [Responder] before each Send returns, and fn returned before this
 // runs, so there is no in-flight router work to wait out.
 //
-// The snapshot is skipped when the turn failed without committing (the live
-// state holds mutations nothing can be resumed from) and when detach has
-// landed (snapshotTurnEnd observes the suspension under snapMu; the pending
+// The snapshot holds the last committed state instead of the live one when
+// the turn failed without committing (the live state holds mutations nothing
+// can be resumed from), and is skipped when detach has landed (snapshotTurnEnd observes the suspension under snapMu; the pending
 // row already captures the invocation and a single finalize rewrite records
 // the cumulative state once the queued inputs drain).
 func (rt *agentRuntime[State]) emitTurnEnd(ctx context.Context) {
 	rt.intake.releaseForward()
 	reason := rt.sess.lastTurnFinishReason
-	var snapshotID string
-	if rt.sess.lastTurnCommitted {
-		snapshotID = rt.sess.snapshotTurnEnd(ctx, reason, rt.sess.lastTurnErr)
+	// A turn that ended without committing still writes its row: the
+	// messages fall back to the last committed state, but the turn's spend is
+	// a ledger entry and stays (see committedState).
+	var state *SessionState[State]
+	if !rt.sess.lastTurnCommitted {
+		state = rt.sess.committedState(ctx)
 	}
+	snapshotID := rt.sess.snapshotTurnEnd(ctx, reason, rt.sess.lastTurnErr, state)
 	// Tag the turn span with the snapshot it persisted, so a server-managed
-	// turn's trace links to its snapshot. ctx is the turn span's context (this
-	// runs inside the runTurn-N span via onEndTurn). The ID is empty, and the
-	// attribute omitted, when client-managed, when the turn failed without
-	// committing, or when a detach suspended snapshots.
+	// turn's trace links to its snapshot. ctx is the turn span's context: Run
+	// ends every turn, a failed one included, inside its runTurn-N span. The
+	// ID is empty, and the attribute omitted, when client-managed, when the
+	// row could not be written, or when a detach suspended snapshots.
 	if snapshotID != "" {
-		trace.SpanFromContext(ctx).SetAttributes(
-			attribute.String(snapshotIDSpanAttrKey, snapshotID))
+		tracing.SetSpanMetadata(ctx, map[string]string{
+			snapshotIDMetaKey: snapshotID})
 	}
 	rt.router.sendChunk(ctx, &AgentStreamChunk{TurnEnd: &TurnEnd{
 		SnapshotID:   snapshotID,
 		FinishReason: reason,
+		Usage:        rt.sess.lastTurnUsage,
 	}})
 }
 
@@ -1409,6 +1579,18 @@ func (rt *agentRuntime[State]) run(
 ) (*AgentOutput[State], error) {
 	workCtx, cancelWork := context.WithCancel(context.WithoutCancel(clientCtx))
 	workCtx = NewSessionContext(workCtx, rt.session)
+	// Count the model calls made under this invocation, and expose the
+	// session's total (see [SessionUsageFromContext]). Both replace what a
+	// calling agent installed, so a subagent's usage stays its own. Only a
+	// store makes the total trustworthy: client-managed state comes back from
+	// the caller, who could drop its usage, so the getter is cleared rather
+	// than left pointing at a calling agent's session.
+	workCtx = base.WithUsageSink(workCtx, rt.sess.recordUsage)
+	var sessionUsage func() *ai.GenerationUsage
+	if rt.cfg.store != nil {
+		sessionUsage = rt.sess.sessionUsage
+	}
+	workCtx = sessionUsageKey.NewContext(workCtx, sessionUsage)
 
 	// Wire custom-state streaming now that the work context exists: every
 	// UpdateCustom mutation during the invocation emits a customPatch chunk
@@ -1581,11 +1763,10 @@ func (rt *agentRuntime[State]) drainAndWait(cancelWork context.CancelFunc) fnDon
 //
 // router.close blocks on the forward goroutine exiting, and fn returning
 // does not imply the router is idle: fn's last accepted chunk may still be
-// in the router's hands, parked on the send to a full out buffer. On the
-// error path stopAndWait closes stopWriting first, deliberately dropping
-// the failed turn's in-flight chunks so close cannot wedge behind a
-// slow/gone consumer. On the success path those chunks are wanted, so
-// close relies on the parked send being released instead: a consuming
+// in the router's hands, parked on the send to a full out buffer. That
+// chunk is often the turn's [TurnEnd], which a failed turn emits like a
+// successful one, so both paths keep it: close relies on the parked send
+// being released, never on stopWriting (which would drop it). A consuming
 // client drains it, a disconnected client's ctx cancellation trips
 // forward's ctx arm, and a client that stopped receiving unparks it when
 // its Output call drains the stream.
@@ -1597,14 +1778,14 @@ func (rt *agentRuntime[State]) handleFnDone(
 	cancelWork()
 	rt.intake.stopAndWait()
 	// A custom-state patch whose transform failed closed latches during fn, so
-	// it is readable now; a failed turn likewise wants its in-flight chunks
-	// dropped. Either way stop router writes before close so it cannot wedge
-	// behind a slow or gone consumer. A stream-transform failure instead puts
-	// the router into discard mode the instant it occurs (forward never parks),
-	// so it needs no stop here and is picked up after close below.
+	// it is readable now; stop router writes before close so no chunk produced
+	// after the refused patch reaches the client. A stream-transform failure
+	// instead puts the router into discard mode the instant it occurs (forward
+	// never parks), so it needs no stop here and is picked up after close
+	// below.
 	_, reason, cause := rt.invocationOutcome(res)
 	fatal := rt.takeFatal()
-	if cause != nil || fatal != nil {
+	if fatal != nil {
 		rt.router.stopAndWait()
 	}
 	rt.router.close()
@@ -1640,6 +1821,7 @@ func (rt *agentRuntime[State]) completedOutput(ctx context.Context, res fnDoneRe
 		SessionID:    rt.session.SessionID(),
 		SnapshotID:   rt.sess.lastSnapshotID,
 		FinishReason: reason,
+		Usage:        rt.sess.totalUsage(),
 	}
 	if res.result != nil {
 		// Deep-copy at the framework boundary so the caller cannot
@@ -1706,6 +1888,22 @@ func convertKeepText(cause error) *status.Error {
 	return e
 }
 
+// clientSafeError returns e as a client of a served agent may see it, under
+// the policy the HTTP handler applies to the errors it returns
+// ([wire.ClientMessage]): unchanged when the client may see its text, and
+// otherwise with the generic message for its status and no details. The full
+// error stays in the store and in this process.
+func clientSafeError(e *status.Error) *status.Error {
+	if e == nil {
+		return nil
+	}
+	msg, own := wire.ClientMessage(e)
+	if own {
+		return e
+	}
+	return &status.Error{Status: e.Status, Message: msg}
+}
+
 // callerStopped reports whether the invocation ended because the caller
 // stopped it rather than because something inside it broke. Two roads reach
 // the same place:
@@ -1716,9 +1914,10 @@ func convertKeepText(cause error) *status.Error {
 // the abort companion action, which cancels the work context on the status
 // flip.
 //
-// Or the run reached a limit the caller set ([ai.ErrMaxTurnsExceeded]). A turn
-// that propagates such an error unchanged is stopped, not broken, and reports
-// so without having to say it in a [TurnResult].
+// Or the run reached a limit the caller set ([ai.ErrMaxTurnsExceeded],
+// [ai.ErrBudgetExceeded]). A turn that propagates such an error unchanged is
+// stopped, not broken, and reports so without having to say it in a
+// [TurnResult].
 //
 // Both roads are read from the context and the sentinels, never from the
 // classified status, which is a wider set than the caller's own doing: a
@@ -1732,7 +1931,8 @@ func callerStopped(ctxErr error, cause error) bool {
 	return ctxErr != nil ||
 		errors.Is(cause, context.Canceled) ||
 		errors.Is(cause, context.DeadlineExceeded) ||
-		errors.Is(cause, ai.ErrMaxTurnsExceeded)
+		errors.Is(cause, ai.ErrMaxTurnsExceeded) ||
+		errors.Is(cause, ai.ErrBudgetExceeded)
 }
 
 // terminalReason is how an invocation or turn that ended with cause reports
@@ -1785,14 +1985,14 @@ func (rt *agentRuntime[State]) invocationOutcome(res fnDoneResult[State]) (Snaps
 // failedOutput assembles the output for an invocation that did not run to
 // completion: [AgentFinishReasonFailed], or [AgentFinishReasonAborted] when
 // the caller stopped it (see callerStopped), the error with its original
-// status, and the resume point: the last turn snapshot's ID when server-managed, or
-// the last-good state inline when client-managed. Both hold the state
-// through the last committed turn, which is the failed turn itself when it
-// committed and its predecessor when it did not, since only a committed turn
-// snapshots and updates lastGoodState. When no turn committed at all, the
-// server-managed ID is "" (or the resumed snapshot's ID) and the
-// client-managed state is the initial state. Message and Artifacts are left
-// empty; they describe the result of a completed run.
+// status, and the resume point: the last turn snapshot's ID when
+// server-managed, or the last-good state inline when client-managed. Both
+// hold the messages through the last committed turn, which is the failed
+// turn itself when it committed and its predecessor when it did not, and
+// both carry the usage of every turn. When no turn wrote a row, the
+// server-managed ID is "" (or the resumed snapshot's ID); when no turn
+// committed, the client-managed state is the initial state. Message and
+// Artifacts are left empty; they describe the result of a completed run.
 //
 // reason is how the run's end is classified: terminalReason against a
 // context's Err (a run the runtime drained itself passes the client context's,
@@ -1803,13 +2003,14 @@ func (rt *agentRuntime[State]) failedOutput(ctx context.Context, reason AgentFin
 		SessionID:    rt.session.SessionID(),
 		FinishReason: reason,
 		Error:        convertKeepText(cause),
+		Usage:        rt.sess.totalUsage(),
 	}
 	if rt.cfg.store == nil {
 		// This is already the failure path, so a transform that also fails
 		// closed while shaping the last-good state cannot escalate further:
 		// omit state (fail closed, no leak) rather than recurse. The original
 		// cause is what the caller needs and is preserved on Error above.
-		if state, err := rt.outboundState(ctx, rt.sess.lastGoodState); err != nil {
+		if state, err := rt.outboundState(ctx, rt.sess.withLiveUsage(rt.sess.lastGoodState)); err != nil {
 			logger.Error(ctx,
 				"agent state transform failed shaping failed-output state; omitting state",
 				"error", err)
@@ -1852,7 +2053,7 @@ func (rt *agentRuntime[State]) handleDetach(
 	// turn-end write already in flight commits first (so the pending row
 	// chains off the real tip instead of becoming its sibling), and any
 	// later turn end skips its write.
-	parentID := rt.sess.suspendSnapshots()
+	parentID, parentAt := rt.sess.suspendSnapshots()
 	sessionID := rt.session.SessionID()
 
 	// Detach intends to outlive the client connection. If clientCtx was
@@ -1873,7 +2074,7 @@ func (rt *agentRuntime[State]) handleDetach(
 	// handles built on this ID rely on the runtime's UUID format (in
 	// particular, it contains no ':'), which a store-minted ID would not
 	// guarantee.
-	now := time.Now()
+	now := snapshotTime(parentAt)
 	pending, err := rt.cfg.store.SaveSnapshot(context.WithoutCancel(clientCtx), uuid.New().String(),
 		func(_ *SessionSnapshot[State]) (*SessionSnapshot[State], error) {
 			return &SessionSnapshot[State]{
@@ -2062,7 +2263,12 @@ func (rt *agentRuntime[State]) finalizePendingSnapshot(
 
 	_, err := rt.cfg.store.SaveSnapshot(ctx, pending.SnapshotID,
 		func(existing *SessionSnapshot[State]) (*SessionSnapshot[State], error) {
-			if existing != nil && existing.Status.Terminal() {
+			if existing == nil {
+				// The pending row is gone: its session was deleted while the
+				// work ran. Writing would bring the session back.
+				return nil, nil
+			}
+			if existing.Status.Terminal() {
 				// Already settled (a retried finalize, or a writer that
 				// landed a terminal status directly): the row describes
 				// itself, so leave it.
@@ -2083,7 +2289,8 @@ func (rt *agentRuntime[State]) finalizePendingSnapshot(
 				UpdatedAt:    now,
 			}, nil
 		})
-	if err != nil {
+	// A deleted session is not a failure: the run simply stops persisting.
+	if err != nil && !errors.Is(err, ErrSessionDeleted) {
 		logger.Error(ctx, "agent: failed to finalize pending snapshot",
 			"snapshotId", pending.SnapshotID, "error", err)
 	}
@@ -2110,7 +2317,7 @@ func loadSession[State any](
 	}
 
 	if init.State != nil && (init.SessionID != "" || init.SnapshotID != "") {
-		return nil, nil, status.Errorf(status.ErrInvalidArgument,
+		return nil, nil, status.PublicErrorf(status.ErrInvalidArgument,
 			"state is mutually exclusive with session ID and snapshot ID; a client-managed conversation's identity rides inside the state (SessionState.SessionID)")
 	}
 
@@ -2149,8 +2356,8 @@ func loadSession[State any](
 		// conversation the snapshot belongs to; a mismatch means the
 		// caller would silently continue the wrong conversation.
 		if init.SessionID != "" && snap.SessionID != init.SessionID {
-			return nil, nil, status.Errorf(status.ErrInvalidArgument,
-				"snapshot %q does not belong to session %q (snapshot's session: %q)", init.SnapshotID, init.SessionID, snap.SessionID)
+			return nil, nil, status.PublicErrorf(status.ErrInvalidArgument,
+				"snapshot %q does not belong to session %q", init.SnapshotID, init.SessionID)
 		}
 		return resumeSessionFrom(s, snap)
 
@@ -2833,6 +3040,14 @@ func (i *detachIntake) stopAndWait() {
 // excluded from session history after generation.
 const promptMessageKey = "_genkit_prompt"
 
+// IsPromptMessage reports whether m is one of the messages an agent's prompt
+// renders on every turn, such as its system prompt or template output. The
+// agent drops these messages from session history, so metadata that a
+// middleware records on one does not persist.
+func IsPromptMessage(m *ai.Message) bool {
+	return m != nil && hasTag(m, promptMessageKey)
+}
+
 // sessionMessageKey marks the session's own messages on their way into the
 // prompt render. The prompt decides where they land, so afterwards this is the
 // only thing separating them from its scaffolding. [tagRenderedMessages] strips
@@ -2926,7 +3141,7 @@ func validateUserMessage(m *ai.Message) error {
 		return nil
 	}
 	if m.Role != "" && m.Role != ai.RoleUser {
-		return status.Errorf(status.ErrInvalidArgument,
+		return status.PublicErrorf(status.ErrInvalidArgument,
 			"agent input message must have role %q, got %q", ai.RoleUser, m.Role)
 	}
 	for _, p := range m.Content {
@@ -2934,7 +3149,7 @@ func validateUserMessage(m *ai.Message) error {
 			continue
 		}
 		if p.IsToolRequest() || p.IsToolResponse() {
-			return status.Errorf(status.ErrInvalidArgument,
+			return status.PublicErrorf(status.ErrInvalidArgument,
 				"agent input message must not contain tool request or response parts; use AgentInput.Resume instead")
 		}
 	}
@@ -3013,20 +3228,23 @@ func ValidateResumeAgainstHistory(resume *ToolResume, history []*ai.Message) err
 	unresolved := func(field, name, ref string) error {
 		for i := pending - 1; i >= 0; i-- {
 			if findIn(i, name, ref) != nil {
-				return status.Errorf(status.ErrInvalidArgument,
+				return status.PublicErrorf(status.ErrInvalidArgument,
 					"resume.%s references tool %q%s from an earlier turn which is no longer pending; only tool requests from the most recent model response can be resumed",
 					field, name, toolRefSuffix(ref))
 			}
 		}
-		return status.Errorf(status.ErrInvalidArgument,
+		return status.PublicErrorf(status.ErrInvalidArgument,
 			"resume.%s references tool %q%s which was not found in session history",
 			field, name, toolRefSuffix(ref))
 	}
 
-	// Restart entries: name + ref must be pending and the input must match
-	// the original request exactly. IsToolRequest only checks the part kind,
-	// so guard the pointer too: a hand-built NewToolRequestPart(nil) is kind
-	// PartToolRequest with a nil ToolRequest.
+	// Restart entries: name + ref must be pending and the input the restart is
+	// accountable for must match the original request exactly. A restart that
+	// revised the input (ai.InterruptedCall.RestartWithInput) preserves the
+	// original it replaced, and that original is what must match; the revised
+	// input is what the tool re-executes with. IsToolRequest only checks the
+	// part kind, so guard the pointer too: a hand-built NewToolRequestPart(nil)
+	// is kind PartToolRequest with a nil ToolRequest.
 	for _, p := range resume.Restart {
 		if !p.IsToolRequest() || p.ToolRequest == nil {
 			continue
@@ -3036,9 +3254,9 @@ func ValidateResumeAgainstHistory(resume *ToolResume, history []*ai.Message) err
 		if match == nil {
 			return unresolved("restart", req.Name, req.Ref)
 		}
-		if !jsonEqual(normalizeJSON(req.Input), normalizeJSON(match.Input)) {
-			return status.Errorf(status.ErrInvalidArgument,
-				"resume.restart for tool %q%s has modified inputs that do not match the original tool request in session history; restart inputs must exactly match the interrupted tool request",
+		if !jsonEqual(normalizeJSON(restartOriginalInput(p)), normalizeJSON(match.Input)) {
+			return status.PublicErrorf(status.ErrInvalidArgument,
+				"resume.restart for tool %q%s has modified inputs that do not match the original tool request in session history; restart inputs must exactly match the interrupted tool request, or a restart that replaces the input must preserve the original it replaced",
 				req.Name, toolRefSuffix(req.Ref))
 		}
 	}
@@ -3055,6 +3273,20 @@ func ValidateResumeAgainstHistory(resume *ToolResume, history []*ai.Message) err
 	}
 
 	return nil
+}
+
+// restartOriginalInput returns the input a restart part is accountable for
+// against history: the original a replaced-input restart preserves, on the
+// typed state or under the wire key a peer runtime writes, else the request's
+// own input.
+func restartOriginalInput(p *ai.Part) any {
+	if p.Restart != nil && p.Restart.OriginalInput != nil {
+		return p.Restart.OriginalInput
+	}
+	if v, ok := p.Metadata["replacedInput"]; ok && v != nil {
+		return v
+	}
+	return p.ToolRequest.Input
 }
 
 // toolRefSuffix renders a " (ref: X)" clause for resume validation errors, or
@@ -3098,7 +3330,7 @@ func agentLoop[State any](r api.Registry, prompt ai.Prompt, defaultInput any) Ag
 			// committed, and the model is called on them again. There has to
 			// be something to continue.
 			if !hasInputPayload(input) && len(history) == 0 {
-				return nil, status.Errorf(status.ErrInvalidArgument,
+				return nil, status.PublicErrorf(status.ErrInvalidArgument,
 					"agent input message or resume is required to start a conversation")
 			}
 
@@ -3134,16 +3366,15 @@ func agentLoop[State any](r api.Registry, prompt ai.Prompt, defaultInput any) Ag
 					return nil
 				},
 			)
-			// An interrupt is a turn outcome, not a failure, even when it
-			// arrives as one. [ai.Generate] reports a restarted tool that
-			// interrupted again with a FAILED_PRECONDITION, because its
-			// caller asked for a completed generation; the agent's caller did
-			// not. The tip that comes back is the same answerable interrupt a
-			// first-run interrupt leaves, and only [Resume] can answer either,
-			// so the turn takes the success path and commits the same way
-			// both times. No other error carries this finish reason.
-			if err != nil && modelResp != nil && modelResp.FinishReason == ai.FinishReasonInterrupted {
-				err = nil
+			// A refusal is a failed turn. [ai.Generate] hands a blocked
+			// response back as data, but a turn that ends on one has no
+			// answer to commit, and continuing from it would send the model
+			// its own refusal.
+			if err == nil && modelResp != nil && modelResp.FinishReason == ai.FinishReasonBlocked {
+				err = status.Errorf(ai.ErrGenerationBlocked, "generation blocked")
+				if modelResp.FinishMessage != "" {
+					err = status.Errorf(ai.ErrGenerationBlocked, "generation blocked: %s", modelResp.FinishMessage)
+				}
 			}
 			if err != nil {
 				// The partial's history ends at a turn seam (see
@@ -3155,7 +3386,19 @@ func agentLoop[State any](r api.Registry, prompt ai.Prompt, defaultInput any) Ag
 				if modelResp == nil || modelResp.Request == nil {
 					return nil, fmt.Errorf("generate: %w", err)
 				}
-				sess.SetMessages(turnSessionMessages(modelResp.History()))
+				// A loop failure (failed or aborted) leaves the seam as its
+				// history: no message from the failing step, or the resumed
+				// message a failed restart recorded its siblings on. Any
+				// other reason is a completion the model finished and the
+				// turn rejected (blocked, or output off the schema). Its
+				// message is not one to continue from, since a re-attempt
+				// would send the model its own rejected output, so only the
+				// request's messages are committed.
+				committed := modelResp.History()
+				if modelResp.FinishReason != ai.FinishReasonFailed && modelResp.FinishReason != ai.FinishReasonAborted {
+					committed = modelResp.Request.Messages
+				}
+				sess.SetMessages(turnSessionMessages(committed))
 				// No reason: the TurnResult here only says the turn committed,
 				// and [SessionRunner.Run] derives the rest from the error it
 				// is handed. The success arm forwards generate's reason
@@ -3353,8 +3596,9 @@ func (c *AgentConnection[State]) SendText(text string) error {
 }
 
 // SendResume sends a resume payload to continue an interrupted generation.
-// Construct the payload with [ai.ToolAction.RestartWith] or
-// [ai.ToolAction.RespondWith] parts.
+// Construct the payload from [ai.InterruptedCall.Restart] and
+// [ai.InterruptedCall.Respond] parts, or [ai.Part.ToToolRestart] and
+// [ai.Part.ToToolResponse].
 func (c *AgentConnection[State]) SendResume(resume *ToolResume) error {
 	return c.conn.Send(&AgentInput{Resume: resume})
 }
@@ -3411,7 +3655,7 @@ func (c *AgentConnection[State]) Receive() iter.Seq2[*AgentStreamChunk, error] {
 func (c *AgentConnection[State]) applyCustomPatch(patch JSONPatch) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if next, err := applyOps(cloneJSON(c.custom), patch); err == nil {
+	if next, err := applyOps(cloneJSON(c.custom), patch, normalizeJSON); err == nil {
 		c.custom = next
 	}
 }

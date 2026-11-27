@@ -207,7 +207,7 @@ describe('jsonlFormat', () => {
           content: [{ text: chunk.text }],
         };
 
-        const responseChunk = new GenerateResponseChunk(newChunk, {
+        const responseChunk = new GenerateResponseChunk<unknown>(newChunk, {
           index: 0,
           role: 'model',
           previousChunks: chunks,
@@ -233,7 +233,7 @@ describe('jsonlFormat', () => {
       content: GenerateResponseChunkData['content'],
       previousContents: GenerateResponseChunkData['content'][]
     ) =>
-      new GenerateResponseChunk(
+      new GenerateResponseChunk<unknown>(
         { index: 0, role: 'model', content },
         {
           index: 0,
@@ -284,7 +284,7 @@ describe('jsonlFormat', () => {
             },
           ],
         };
-        const responseChunk = new GenerateResponseChunk(newChunk, {
+        const responseChunk = new GenerateResponseChunk<unknown>(newChunk, {
           index: 0,
           role: 'model',
           previousChunks: chunks,

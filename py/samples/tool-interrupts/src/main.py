@@ -19,9 +19,9 @@
 from genkit_google_genai import GoogleAI
 from pydantic import BaseModel, Field
 
-from genkit import Genkit, Interrupt, ToolRunContext, respond_to_interrupt, restart_tool
+from genkit import Genkit, Interrupt, ToolContext
 
-ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
 
 
 class TransferRequest(BaseModel):
@@ -31,7 +31,7 @@ class TransferRequest(BaseModel):
 
 
 @ai.tool()
-async def request_transfer(body: TransferRequest, ctx: ToolRunContext) -> dict:
+async def request_transfer(body: TransferRequest, ctx: ToolContext) -> dict:
     # First call pauses. After you resume, is_resumed() is True and the
     # wire actually runs.
     if not ctx.is_resumed():
@@ -53,16 +53,15 @@ async def main() -> None:
     interrupt = response.interrupts[0]
     print(f'paused: {interrupt.metadata}')
 
-    # restart_tool re-runs the tool after the human says yes.
+    # restart() re-runs the tool after the human says yes.
     approved = await ai.generate(
         messages=response.messages,
-        resume_restart=restart_tool(interrupt=interrupt, resumed_metadata={'approved': True}),
+        resume_restart=interrupt.restart(resumed_metadata={'approved': True}),
         tools=[request_transfer],
     )
     print(approved.text)
 
-    # respond_to_interrupt injects a result instead — decline without
-    # sending the wire.
+    # respond() injects a result instead — decline without sending the wire.
     declined = await ai.generate(
         prompt='Please wire $80.00 to Sam Lee (account ending in 9910) for lunch.',
         system='You are a treasury desk. Call request_transfer to send money.',
@@ -74,7 +73,7 @@ async def main() -> None:
 
     done = await ai.generate(
         messages=declined.messages,
-        resume_respond=respond_to_interrupt({'status': 'declined'}, interrupt=declined.interrupts[0]),
+        resume_respond=declined.interrupts[0].respond({'status': 'declined'}),
         tools=[request_transfer],
     )
     print(done.text)

@@ -18,23 +18,25 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from typing import Any, cast
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from genkit_openai.models.image import (
+from genkit_openai import OpenAI
+from genkit_openai._models._image import (
     SUPPORTED_IMAGE_MODELS,
+    OpenAIDalleConfig,
+    OpenAIGptImageConfig,
     OpenAIImageModel,
     _extract_prompt_text,
     _to_generate_response,
     _to_image_generate_params,
 )
+from genkit_openai._openai_plugin import _ModelType
+from pydantic import BaseModel, ValidationError
 
-from genkit import (
-    Message,
-    ModelRequest,
-    Part,
-    Role,
-)
+from genkit import Genkit, GenkitError, Message, Part, Role
+from genkit.model import ModelRequest
 
 
 class TestExtractPromptText:
@@ -109,20 +111,6 @@ class TestToImageGenerateParams:
 
         assert 'response_format' not in got
 
-    def test_gpt_image_version_override_omits_response_format(self) -> None:
-        """Verify the version override is also classified as a GPT Image model."""
-        request = ModelRequest(
-            messages=[
-                Message(role=Role.USER, content=[Part.from_text('a cat')]),
-            ],
-            config={'version': 'gpt-image-1-mini'},
-        )
-
-        got = _to_image_generate_params('gpt-image-1', request)
-
-        assert got['model'] == 'gpt-image-1-mini'
-        assert 'response_format' not in got
-
     def test_gpt_image_config_passthrough(self) -> None:
         """Verify GPT Image-specific options are forwarded unchanged."""
         request = ModelRequest(
@@ -161,29 +149,14 @@ class TestToImageGenerateParams:
         assert got.get('quality') == 'hd'
         assert got.get('n') == 2
 
-    def test_strips_standard_genai_config(self) -> None:
-        """Verify standard GenAI keys are stripped from params."""
-        request = ModelRequest(
-            messages=[
-                Message(role=Role.USER, content=[Part.from_text('test')]),
-            ],
-            config={'temperature': 0.5, 'top_k': 40, 'top_p': 0.9},
-        )
-        got = _to_image_generate_params('dall-e-3', request)
-        assert 'temperature' not in got
-        assert 'top_k' not in got
-        assert 'top_p' not in got
-
-    def test_version_override(self) -> None:
-        """Verify model version override via config."""
-        request = ModelRequest(
-            messages=[
-                Message(role=Role.USER, content=[Part.from_text('test')]),
-            ],
-            config={'version': 'dall-e-3-custom'},
-        )
-        got = _to_image_generate_params('dall-e-3', request)
-        assert got['model'] == 'dall-e-3-custom'
+    @pytest.mark.parametrize('config_cls', [OpenAIDalleConfig, OpenAIGptImageConfig])
+    @pytest.mark.parametrize(
+        'key', ['temperature', 'max_output_tokens', 'maxOutputTokens', 'top_k', 'top_p', 'stop_sequences', 'version']
+    )
+    def test_image_config_rejects_generic_knob(self, config_cls: type[BaseModel], key: str) -> None:
+        """The Images API takes none of the text-generation knobs, so the config rejects them by name."""
+        with pytest.raises(ValidationError, match=key):
+            config_cls.model_validate({key: 1})
 
 
 class TestToModelResponse:
@@ -261,18 +234,47 @@ class TestSupportedImageModels:
             assert 'media' in (info.supports.output or []), f"{name} should support 'media' output"
 
     def test_gpt_image_1_exposes_config_schema(self) -> None:
-        """Verify GPT Image 1 advertises its model-specific config constraints."""
-        schema = SUPPORTED_IMAGE_MODELS['gpt-image-1'].config_schema
-
-        assert schema is not None
+        """Verify GPT Image 1 advertises the constraints of its registered config class."""
+        plugin = OpenAI(api_key='test-key')
+        action = plugin._create_multimodal_action(
+            'gpt-image-1', OpenAIImageModel, SUPPORTED_IMAGE_MODELS, _ModelType.IMAGE
+        )
+        model_meta = cast(dict[str, Any], action.metadata['model'])
+        schema = model_meta['customOptions']
         properties = schema['properties']
-        assert properties['size']['enum'] == ['1024x1024', '1536x1024', '1024x1536', 'auto']
-        assert properties['quality']['enum'] == ['low', 'medium', 'high']
-        assert properties['background']['enum'] == ['transparent', 'opaque', 'auto']
-        assert properties['moderation']['enum'] == ['low', 'auto']
-        assert properties['output_compression'] == {'type': 'integer', 'minimum': 1, 'maximum': 100}
-        assert properties['output_format']['enum'] == ['png', 'jpeg', 'web']
+
+        def _enum(name: str) -> list[str]:
+            return properties[name]['anyOf'][0]['enum']
+
+        def _int_bounds(name: str) -> dict[str, Any]:
+            return properties[name]['anyOf'][0]
+
+        assert _enum('size') == ['1024x1024', '1536x1024', '1024x1536', 'auto']
+        assert _enum('quality') == ['low', 'medium', 'high']
+        assert _enum('background') == ['transparent', 'opaque', 'auto']
+        assert _enum('moderation') == ['low', 'auto']
+        assert _int_bounds('n') == {'type': 'integer', 'minimum': 1, 'maximum': 10}
+        assert _int_bounds('outputCompression') == {'type': 'integer', 'minimum': 1, 'maximum': 100}
+        assert _enum('outputFormat') == ['png', 'jpeg', 'webp']
+        assert 'responseFormat' not in properties
         assert 'response_format' not in properties
+
+    @pytest.mark.asyncio
+    async def test_gpt_image_1_response_format_raises_before_model_call(self) -> None:
+        """`response_format` on gpt-image-1 raises INVALID_ARGUMENT before the endpoint runs."""
+        ai = Genkit(plugins=[OpenAI(api_key='test-key')])
+
+        with patch.object(OpenAIImageModel, 'generate', new_callable=AsyncMock) as generate:
+            with pytest.raises(GenkitError) as err:
+                await ai.generate(
+                    model='openai/gpt-image-1',
+                    prompt='a lighthouse at dusk',
+                    config={'response_format': 'b64_json'},
+                )
+
+        assert err.value.status == 'INVALID_ARGUMENT'
+        assert 'response_format' in str(err.value)
+        generate.assert_not_called()
 
 
 class TestOpenAIImageModel:

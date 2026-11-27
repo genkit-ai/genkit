@@ -17,13 +17,22 @@
 import { GenkitError, StatusName, type ErrorResponseMetadata } from 'genkit';
 import { logger } from 'genkit/logging';
 import { runInNewSpan } from 'genkit/tracing';
+import { InteractionStreamResult } from '../common/interaction-types.js';
 import {
+  INTERACTIONS_API_REVISION,
   buildTraceMetadataInput,
   extractErrMsg,
   getGenkitClientHeader,
+  httpStatusToGenkitStatus,
+  interactionErrorCodeToGenkitStatus,
+  interactionProcessStream,
+  isInteractionUrl,
   parseRetryAfterMs,
   processStream,
+  withoutHeaders,
 } from '../common/utils.js';
+import { isObject } from './utils.js';
+
 import {
   ClientOptions,
   CreateInteractionRequest,
@@ -33,12 +42,8 @@ import {
   GenerateContentRequest,
   GenerateContentResponse,
   GenerateContentStreamResult,
-  ImagenPredictRequest,
-  ImagenPredictResponse,
   ListModelsResponse,
   Model,
-  VeoOperation,
-  VeoPredictRequest,
 } from './types.js';
 
 export const tracingHooks = { runInNewSpan };
@@ -72,6 +77,34 @@ export async function createInteraction(
   return maybeTraceRequest<GeminiInteraction>(url, fetchOptions, {
     request: createInteractionRequest,
     clientOptions,
+  });
+}
+
+export async function createInteractionStream(
+  apiKey: string | undefined,
+  createInteractionRequest: CreateInteractionRequest,
+  clientOptions?: ClientOptions
+): Promise<InteractionStreamResult> {
+  const url = getGoogleAIUrl({
+    resourcePath: 'interactions',
+    clientOptions,
+  });
+
+  const fetchOptions = getFetchOptions({
+    method: 'POST',
+    apiKey,
+    clientOptions,
+    body: JSON.stringify(createInteractionRequest),
+    isInteraction: true,
+  });
+
+  return maybeTraceRequest<InteractionStreamResult>(url, fetchOptions, {
+    request: createInteractionRequest,
+    streaming: true,
+    clientOptions,
+    processFn: async (response) => {
+      return interactionProcessStream(response);
+    },
   });
 }
 
@@ -287,78 +320,6 @@ export async function embedContent(
   });
 }
 
-export async function imagenPredict(
-  apiKey: string | undefined,
-  model: string,
-  imagenPredictRequest: ImagenPredictRequest,
-  clientOptions?: ClientOptions
-): Promise<ImagenPredictResponse> {
-  const url = getGoogleAIUrl({
-    resourcePath: `models/${model}`,
-    resourceMethod: 'predict',
-    clientOptions,
-  });
-
-  const fetchOptions = getFetchOptions({
-    method: 'POST',
-    apiKey,
-    clientOptions,
-    body: JSON.stringify(imagenPredictRequest),
-  });
-
-  return maybeTraceRequest<ImagenPredictResponse>(url, fetchOptions, {
-    model: model,
-    request: imagenPredictRequest,
-    clientOptions,
-  });
-}
-
-export async function veoPredict(
-  apiKey: string | undefined,
-  model: string,
-  veoPredictRequest: VeoPredictRequest,
-  clientOptions?: ClientOptions
-): Promise<VeoOperation> {
-  const url = getGoogleAIUrl({
-    resourcePath: `models/${model}`,
-    resourceMethod: 'predictLongRunning',
-    clientOptions,
-  });
-
-  const fetchOptions = getFetchOptions({
-    method: 'POST',
-    apiKey,
-    clientOptions,
-    body: JSON.stringify(veoPredictRequest),
-  });
-
-  return maybeTraceRequest<VeoOperation>(url, fetchOptions, {
-    model: model,
-    request: veoPredictRequest,
-    clientOptions,
-  });
-}
-
-export async function veoCheckOperation(
-  apiKey: string | undefined,
-  operation: string,
-  clientOptions?: ClientOptions
-): Promise<VeoOperation> {
-  const url = getGoogleAIUrl({
-    resourcePath: operation,
-    clientOptions,
-  });
-  const fetchOptions = getFetchOptions({
-    method: 'GET',
-    apiKey,
-    clientOptions,
-  });
-
-  return maybeTraceRequest<VeoOperation>(url, fetchOptions, {
-    clientOptions,
-  });
-}
-
 /**
  * Generates a Google AI URL.
  *
@@ -453,12 +414,14 @@ function getHeaders(
   clientOptions?: ClientOptions,
   isInteraction?: boolean
 ): HeadersInit {
-  let customHeaders = {};
-  if (clientOptions?.customHeaders) {
-    customHeaders = structuredClone(clientOptions.customHeaders);
-    delete customHeaders['x-goog-api-key']; // Not allowed in user settings
-    delete customHeaders['x-goog-api-client']; // Not allowed in user settings
-  }
+  // Not allowed in user settings (in any letter case). The Interactions
+  // converters only understand INTERACTIONS_API_REVISION's schema, so custom
+  // headers can't change it either.
+  const customHeaders = withoutHeaders(clientOptions?.customHeaders, [
+    'x-goog-api-key',
+    'x-goog-api-client',
+    ...(isInteraction ? ['Api-Revision'] : []),
+  ]);
   const headers: HeadersInit = {
     ...customHeaders,
     'Content-Type': 'application/json',
@@ -466,7 +429,7 @@ function getHeaders(
   };
 
   if (isInteraction) {
-    headers['Api-Revision'] = '2026-05-20';
+    headers['Api-Revision'] = INTERACTIONS_API_REVISION;
   }
 
   if (apiKey) {
@@ -504,13 +467,14 @@ async function maybeTraceRequest<T>(
 
   if (traceOptions.clientOptions?.experimental_debugTraces) {
     return tracingHooks.runInNewSpan(
-      { metadata: { name: 'httpRequest' } },
+      {
+        metadata: {
+          name: 'httpRequest',
+          // Seed input up front so the realtime "pending" span export carries it.
+          input: buildTraceMetadataInput(url, fetchOptions, traceOptions),
+        },
+      },
       async (metadata) => {
-        metadata.input = buildTraceMetadataInput(
-          url,
-          fetchOptions,
-          traceOptions
-        );
         const processedResponse = await call();
 
         if (traceOptions.streaming) {
@@ -587,6 +551,20 @@ async function makeRequest(
           status = 'UNAVAILABLE';
           break;
       }
+      // Interactions API errors carry a specific `error.code` (e.g. `safety`,
+      // `model_not_found`, `quota_exceeded`) that is more precise than the
+      // HTTP status, so prefer it when recognized.
+      if (isInteractionUrl(url)) {
+        const apiError = isObject(errorDetail) ? errorDetail.error : undefined;
+        const codeStatus = interactionErrorCodeToGenkitStatus(
+          isObject(apiError) ? apiError.code : undefined
+        );
+        if (codeStatus) {
+          status = codeStatus;
+        } else if (status === 'UNKNOWN') {
+          status = httpStatusToGenkitStatus(response.status);
+        }
+      }
       // Capture Retry-After header for retry middleware to use
       const retryAfterHeader = response.headers.get('retry-after');
       const retryAfterMs = retryAfterHeader
@@ -616,6 +594,7 @@ export const TEST_ONLY = {
   getFetchOptions,
   getAbortSignal,
   getHeaders,
+  isInteractionUrl,
   makeRequest,
   tracingHooks,
 };

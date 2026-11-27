@@ -41,22 +41,24 @@ export const codeDefinedPrompt = ai.definePrompt({
     topK: 16,
     topP: 0.95,
     stopSequences: ['STAWP!'],
+    // Blocking thresholds (e.g. BLOCK_ONLY_HIGH) aren't supported for
+    // gemini-flash-latest; BLOCK_NONE matches the model default.
     safetySettings: [
       {
         category: 'HARM_CATEGORY_HATE_SPEECH',
-        threshold: 'BLOCK_ONLY_HIGH',
+        threshold: 'BLOCK_NONE',
       },
       {
         category: 'HARM_CATEGORY_DANGEROUS_CONTENT',
-        threshold: 'BLOCK_ONLY_HIGH',
+        threshold: 'BLOCK_NONE',
       },
       {
         category: 'HARM_CATEGORY_HARASSMENT',
-        threshold: 'BLOCK_ONLY_HIGH',
+        threshold: 'BLOCK_NONE',
       },
       {
         category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT',
-        threshold: 'BLOCK_ONLY_HIGH',
+        threshold: 'BLOCK_NONE',
       },
     ],
   },

@@ -7,13 +7,13 @@
     "genai",
     "generative-ai"
   ],
-  "version": "1.42.0",
+  "version": "1.44.0",
   "type": "commonjs",
   "scripts": {
-    "check": "tsc",
+    "check": "tsc -p tsconfig.test.json",
     "compile": "tsup-node",
     "build:clean": "rimraf ./lib",
-    "build": "npm-run-all genversion build:clean check compile",
+    "build": "pnpm genversion && pnpm build:clean && pnpm check && pnpm compile",
     "build:watch": "tsup-node --watch",
     "test": "node --import tsx --test tests/*_test.ts",
     "genversion": "genversion -esf src/__codegen/version.ts"
@@ -52,7 +52,6 @@
     "@types/express": "^4.17.21",
     "@types/node": "^20.11.30",
     "genversion": "^3.2.0",
-    "npm-run-all": "^4.1.5",
     "rimraf": "^6.0.1",
     "tsup": "^8.3.5",
     "tsx": "^4.19.2",
@@ -65,45 +64,80 @@
   "types": "lib/index.d.ts",
   "exports": {
     ".": {
-      "types": "./lib/index.d.ts",
-      "require": "./lib/index.js",
-      "import": "./lib/index.mjs",
+      "import": {
+        "types": "./lib/index.d.mts",
+        "default": "./lib/index.mjs"
+      },
+      "require": {
+        "types": "./lib/index.d.ts",
+        "default": "./lib/index.js"
+      },
       "default": "./lib/index.js"
     },
     "./async": {
-      "types": "./lib/async.ts",
-      "require": "./lib/async.js",
-      "import": "./lib/async.mjs",
+      "import": {
+        "types": "./lib/async.d.mts",
+        "default": "./lib/async.mjs"
+      },
+      "require": {
+        "types": "./lib/async.d.ts",
+        "default": "./lib/async.js"
+      },
       "default": "./lib/async.js"
     },
     "./registry": {
-      "types": "./lib/registry.d.ts",
-      "require": "./lib/registry.js",
-      "import": "./lib/registry.mjs",
+      "import": {
+        "types": "./lib/registry.d.mts",
+        "default": "./lib/registry.mjs"
+      },
+      "require": {
+        "types": "./lib/registry.d.ts",
+        "default": "./lib/registry.js"
+      },
       "default": "./lib/registry.js"
     },
     "./tracing": {
-      "types": "./lib/tracing.d.ts",
-      "require": "./lib/tracing.js",
-      "import": "./lib/tracing.mjs",
+      "import": {
+        "types": "./lib/tracing.d.mts",
+        "default": "./lib/tracing.mjs"
+      },
+      "require": {
+        "types": "./lib/tracing.d.ts",
+        "default": "./lib/tracing.js"
+      },
       "default": "./lib/tracing.js"
     },
     "./logging": {
-      "types": "./lib/logging.d.ts",
-      "require": "./lib/logging.js",
-      "import": "./lib/logging.mjs",
+      "import": {
+        "types": "./lib/logging.d.mts",
+        "default": "./lib/logging.mjs"
+      },
+      "require": {
+        "types": "./lib/logging.d.ts",
+        "default": "./lib/logging.js"
+      },
       "default": "./lib/logging.js"
     },
     "./schema": {
-      "types": "./lib/schema.d.ts",
-      "require": "./lib/schema.js",
-      "import": "./lib/schema.mjs",
+      "import": {
+        "types": "./lib/schema.d.mts",
+        "default": "./lib/schema.mjs"
+      },
+      "require": {
+        "types": "./lib/schema.d.ts",
+        "default": "./lib/schema.js"
+      },
       "default": "./lib/schema.js"
     },
     "./node": {
-      "types": "./lib/node.d.ts",
-      "require": "./lib/node.js",
-      "import": "./lib/node.mjs",
+      "import": {
+        "types": "./lib/node.d.mts",
+        "default": "./lib/node.mjs"
+      },
+      "require": {
+        "types": "./lib/node.d.ts",
+        "default": "./lib/node.js"
+      },
       "default": "./lib/node.js"
     }
   },
@@ -132,7 +166,13 @@
       ],
       "node": [
         "lib/node"
+      ],
+      "async": [
+        "lib/async"
       ]
     }
-  }
+  },
+  "files": [
+    "lib"
+  ]
 }

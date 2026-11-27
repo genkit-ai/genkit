@@ -32,7 +32,7 @@ const ai = genkit({
  */
 ai.defineFlow('citations-text', async () => {
   const response = await ai.generate({
-    model: anthropic.model('claude-sonnet-4-5'),
+    model: anthropic.model('claude-sonnet-5-5'),
     messages: [
       {
         role: 'user',
@@ -80,7 +80,7 @@ ai.defineFlow('citations-text', async () => {
  */
 ai.defineFlow('citations-custom-content', async () => {
   const response = await ai.generate({
-    model: anthropic.model('claude-sonnet-4-5'),
+    model: anthropic.model('claude-sonnet-5-5'),
     messages: [
       {
         role: 'user',

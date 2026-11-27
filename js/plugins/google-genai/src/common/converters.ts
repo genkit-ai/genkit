@@ -28,6 +28,7 @@ import { JSONPath } from 'jsonpath-plus';
 import {
   FunctionCallingMode,
   FunctionDeclaration,
+  FunctionDeclarationSchema,
   FunctionResponse,
   GenerateContentCandidate as GeminiCandidate,
   Content as GeminiContent,
@@ -35,6 +36,7 @@ import {
   PartialArg,
   Schema,
   SchemaType,
+  SpeechMetadata,
   VideoMetadata,
   isObject,
 } from './types.js';
@@ -43,12 +45,16 @@ export function toGeminiTool(tool: ToolDefinition): FunctionDeclaration {
   const declaration: FunctionDeclaration = {
     name: tool.name.replace(/\//g, '__'), // Gemini throws on '/' in tool name
     description: tool.description,
-    parameters: toGeminiSchemaProperty(tool.inputSchema),
+    parameters: toGeminiSchemaProperty(
+      tool.inputSchema
+    ) as FunctionDeclarationSchema,
   };
   return declaration;
 }
 
-function toGeminiSchemaProperty(property?: ToolDefinition['inputSchema']) {
+function toGeminiSchemaProperty(
+  property?: ToolDefinition['inputSchema']
+): Schema | undefined {
   if (!property || !property.type) {
     return undefined;
   }
@@ -75,12 +81,13 @@ function toGeminiSchemaProperty(property?: ToolDefinition['inputSchema']) {
     propertyType = property.type;
   }
   if (propertyType === 'object') {
-    const nestedProperties = {};
+    const nestedProperties: Record<string, Schema> = {};
     if (property.properties) {
       Object.keys(property.properties).forEach((key) => {
-        nestedProperties[key] = toGeminiSchemaProperty(
-          property.properties[key]
-        );
+        const prop = toGeminiSchemaProperty(property.properties![key]);
+        if (prop) {
+          nestedProperties[key] = prop;
+        }
       });
     }
     return {
@@ -96,7 +103,9 @@ function toGeminiSchemaProperty(property?: ToolDefinition['inputSchema']) {
       items: toGeminiSchemaProperty(property.items),
     };
   } else {
-    const schemaType = SchemaType[propertyType.toUpperCase()] as SchemaType;
+    const schemaType = (SchemaType as unknown as Record<string, SchemaType>)[
+      propertyType.toUpperCase()
+    ];
     if (!schemaType) {
       throw new GenkitError({
         status: 'INVALID_ARGUMENT',
@@ -234,9 +243,31 @@ function toGeminiCustom(part: Part): GeminiPart {
 }
 
 function toGeminiText(part: Part): GeminiPart {
+  const speechMetadata = toGeminiSpeechMetadata(part.metadata?.speechMetadata);
   return maybeAddGeminiThoughtSignatureAndMetadata(part, {
     text: part.text ?? '',
+    ...(speechMetadata ? { speechMetadata } : {}),
   });
+}
+
+/**
+ * Reads a text part's `metadata.speechMetadata` (`{ speaker?, style? }`),
+ * used by TTS models to assign each turn to a speaker and set its delivery
+ * style. Returns `undefined` if neither is set.
+ */
+function toGeminiSpeechMetadata(value: unknown): SpeechMetadata | undefined {
+  if (!isObject(value)) {
+    return undefined;
+  }
+  const speaker = typeof value.speaker === 'string' ? value.speaker : undefined;
+  const style = typeof value.style === 'string' ? value.style : undefined;
+  if (!speaker && !style) {
+    return undefined;
+  }
+  return {
+    ...(speaker ? { speaker } : {}),
+    ...(style ? { style } : {}),
+  };
 }
 
 /**

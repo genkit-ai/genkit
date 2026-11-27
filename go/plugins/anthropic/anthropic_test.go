@@ -63,8 +63,13 @@ func TestModelOptionsKnownModels(t *testing.T) {
 		if !opts.Supports.Tools || !opts.Supports.SystemRole {
 			t.Errorf("modelOptions(%q): expected Tools and SystemRole supported, got %+v", name, opts.Supports)
 		}
-		if opts.Stage != ai.ModelStageStable {
-			t.Errorf("modelOptions(%q): Stage = %q, want Stable", name, opts.Stage)
+		// Anthropic deprecated Sonnet 4.5 on September 30, 2026.
+		wantStage := ai.ModelStageStable
+		if name == "claude-sonnet-4-5" {
+			wantStage = ai.ModelStageDeprecated
+		}
+		if opts.Stage != wantStage {
+			t.Errorf("modelOptions(%q): Stage = %q, want %q", name, opts.Stage, wantStage)
 		}
 		if opts.Label == "" {
 			t.Errorf("modelOptions(%q): Label is empty", name)

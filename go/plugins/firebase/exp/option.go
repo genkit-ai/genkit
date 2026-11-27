@@ -73,12 +73,14 @@ type sessionStoreOptions struct {
 
 // --- Option interfaces ---
 
-// StreamManagerOption configures a [FirestoreStreamManager].
+// StreamManagerOption configures a [FirestoreStreamManager]. A later option of
+// the same kind replaces an earlier one.
 type StreamManagerOption interface {
 	applyStreamManager(*streamManagerOptions) error
 }
 
-// SessionStoreOption configures a [FirestoreSessionStore].
+// SessionStoreOption configures a [FirestoreSessionStore]. A later option of
+// the same kind replaces an earlier one.
 type SessionStoreOption interface {
 	applySessionStore(*sessionStoreOptions) error
 }
@@ -100,9 +102,6 @@ type collectionOption struct{ collection string }
 func (o collectionOption) set(dst *string) error {
 	if o.collection == "" {
 		return errors.New("collection name must not be empty (WithCollection)")
-	}
-	if *dst != "" {
-		return errors.New("cannot set collection more than once (WithCollection)")
 	}
 	*dst = o.collection
 	return nil
@@ -134,9 +133,6 @@ func (o timeoutOption) applyStreamManager(opts *streamManagerOptions) error {
 	if o.timeout <= 0 {
 		return errors.New("timeout must be positive (WithTimeout)")
 	}
-	if opts.timeout != 0 {
-		return errors.New("cannot set timeout more than once (WithTimeout)")
-	}
 	opts.timeout = o.timeout
 	return nil
 }
@@ -154,9 +150,6 @@ type ttlOption struct{ ttl time.Duration }
 func (o ttlOption) applyStreamManager(opts *streamManagerOptions) error {
 	if o.ttl <= 0 {
 		return errors.New("TTL must be positive (WithTTL)")
-	}
-	if opts.ttl != 0 {
-		return errors.New("cannot set TTL more than once (WithTTL)")
 	}
 	opts.ttl = o.ttl
 	return nil
@@ -179,9 +172,6 @@ func (o checkpointIntervalOption) applySessionStore(opts *sessionStoreOptions) e
 	if o.turns < 1 {
 		return errors.New("checkpoint interval must be at least 1 (WithCheckpointInterval)")
 	}
-	if opts.checkpointInterval != 0 {
-		return errors.New("cannot set checkpoint interval more than once (WithCheckpointInterval)")
-	}
 	opts.checkpointInterval = o.turns
 	return nil
 }
@@ -203,9 +193,6 @@ func (o shardSizeOption) applySessionStore(opts *sessionStoreOptions) error {
 	if o.bytes < 1 {
 		return errors.New("shard size must be at least 1 byte (WithShardSize)")
 	}
-	if opts.shardSize != 0 {
-		return errors.New("cannot set shard size more than once (WithShardSize)")
-	}
 	opts.shardSize = o.bytes
 	return nil
 }
@@ -226,9 +213,6 @@ type snapshotPathPrefixOption struct {
 func (o snapshotPathPrefixOption) applySessionStore(opts *sessionStoreOptions) error {
 	if o.fn == nil {
 		return errors.New("snapshot path prefix function must not be nil (WithSnapshotPathPrefix)")
-	}
-	if opts.prefixFn != nil {
-		return errors.New("cannot set snapshot path prefix more than once (WithSnapshotPathPrefix)")
 	}
 	opts.prefixFn = o.fn
 	return nil

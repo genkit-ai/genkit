@@ -125,3 +125,20 @@ func TestWrapAPIErrorClientErrorsAreNotRetried(t *testing.T) {
 		t.Errorf("429 maps to %v, which retry does not reissue", s)
 	}
 }
+
+// A provider that answers with a misleading HTTP code names the real status
+// through ClassifyError; an empty answer keeps the HTTP code's status.
+func TestClassifyAPIError(t *testing.T) {
+	notFound := func(*openai.Error) status.Name { return status.NotFound }
+	noOpinion := func(*openai.Error) status.Name { return "" }
+	err := fmt.Errorf("failed to create completion: %w", apiError(http.StatusBadRequest))
+	if got := status.Of(classifyAPIError(err, notFound)); got != status.NotFound {
+		t.Errorf("with a classifier: status = %v, want %v", got, status.NotFound)
+	}
+	if got := status.Of(classifyAPIError(err, noOpinion)); got != status.InvalidArgument {
+		t.Errorf("with no opinion: status = %v, want %v", got, status.InvalidArgument)
+	}
+	if got := status.Of(classifyAPIError(err, nil)); got != status.InvalidArgument {
+		t.Errorf("without a classifier: status = %v, want %v", got, status.InvalidArgument)
+	}
+}

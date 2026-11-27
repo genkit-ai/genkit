@@ -1,0 +1,2674 @@
+# Copyright 2025 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Gemini models."""
+
+import asyncio
+import json
+import math
+from collections.abc import Callable, Collection, Iterable, Mapping
+from datetime import datetime, timedelta, timezone
+from functools import cached_property
+from typing import Annotated, Any, Any as JsonAny, Literal, TypeAlias, cast, get_args
+
+from genkit_google_genai._auth import GOOGLE_AUTH_ERRORS, raise_auth_error
+from genkit_google_genai._constants import is_multi_regional_location, multi_regional_base_url
+from genkit_google_genai._models._context_caching._constants import DEFAULT_TTL
+from genkit_google_genai._models._context_caching._utils import generate_cache_key, validate_context_cache_request
+from genkit_google_genai._models._sdk_config import (
+    GEMINI_MANAGED_BODY_FIELDS,
+    GEMINI_MANAGED_GENERATION_FIELDS,
+    GEMINI_UNSUPPORTED_GENERATION_FIELDS,
+    attach_config_extra,
+    attach_leftovers,
+    check_timeout_seconds,
+    copy_http_options,
+    dump_family_config,
+    reject_bool_timeout,
+    sdk_config_error,
+    split_sdk_fields,
+    timeout_seconds_to_ms,
+)
+from genkit_google_genai._models._secrets import context_api_key, reject_request_config_api_key
+from genkit_google_genai._provider_errors import TRANSPORT_ERRORS, api_error, transport_error
+from google import genai
+from google.auth import default as google_auth_default
+from google.auth.exceptions import DefaultCredentialsError
+from google.genai import types as genai_types
+from google.genai.errors import APIError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    WithJsonSchema,
+    field_validator,
+    model_validator,
+    with_config,
+)
+from pydantic.alias_generators import to_camel, to_snake
+from typing_extensions import NotRequired, Self, TypedDict
+
+from genkit import (
+    ErrorReason,
+    FinishReason,
+    GenkitError,
+    Message,
+    ModelResponse,
+    ModelResponseChunk,
+    Part,
+    Role,
+)
+from genkit.model import (
+    ConstrainedSupport,
+    GenerationUsage,
+    ModelConfig,
+    ModelContext,
+    ModelInfo,
+    ModelRequest,
+    ModelSupports,
+    ToolDefinition,
+)
+
+
+def _to_dict(obj: JsonAny) -> JsonAny:  # noqa: ANN401
+    """Convert object to dict if it's a Pydantic model, otherwise return as-is."""
+    return obj.model_dump() if isinstance(obj, BaseModel) else obj
+
+
+def _to_finish_reason(fr: Any) -> FinishReason:  # noqa: ANN401
+    """Map a google-genai finish reason onto Genkit's FinishReason."""
+    fr_name = getattr(fr, 'name', fr) if fr is not None else None
+    if fr_name == 'STOP':
+        return FinishReason.STOP
+    if fr_name == 'MAX_TOKENS':
+        return FinishReason.LENGTH
+    if fr_name in (
+        'SAFETY',
+        'RECITATION',
+        'BLOCKLIST',
+        'PROHIBITED_CONTENT',
+        'SPII',
+        'LANGUAGE',
+        'MALICIOUS',
+        'IMAGE_SAFETY',
+        'IMAGE_PROHIBITED_CONTENT',
+        'IMAGE_RECITATION',
+    ):
+        return FinishReason.BLOCKED
+    if fr_name in (
+        'OTHER',
+        'MALFORMED_FUNCTION_CALL',
+        'MISSING_THOUGHT_SIGNATURE',
+        'NO_IMAGE',
+        'IMAGE_OTHER',
+        'UNEXPECTED_TOOL_CALL',
+    ):
+        return FinishReason.OTHER
+    return FinishReason.UNKNOWN
+
+
+def _to_float(obj: Any, attr: str) -> float | None:  # noqa: ANN401
+    """Extract an optional numeric attribute as a float."""
+    val = getattr(obj, attr, None)
+    return float(val) if val is not None else None
+
+
+def _cache_ttl_seconds(cache: object) -> float:
+    """TTL for a message's ``metadata['cache']``: ``True`` or ``{'ttlSeconds': N}``.
+
+    The JS spelling is ``ttlSeconds``; ``ttl_seconds`` is accepted too.
+    """
+    if cache is True:
+        return DEFAULT_TTL
+    if not isinstance(cache, Mapping):
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f"metadata.cache must be true or {{'ttlSeconds': N}}, got {type(cache).__name__}",
+        )
+    options = cast(Mapping[str, Any], cache)
+    ttl = options.get('ttlSeconds')
+    if ttl is None:
+        ttl = options.get('ttl_seconds')
+    if ttl is None:
+        return DEFAULT_TTL
+    # bool is an int; True as a TTL is a typo, not one second.
+    if isinstance(ttl, bool) or not isinstance(ttl, (int, float)) or not math.isfinite(ttl) or ttl <= 0:
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f'metadata.cache.ttlSeconds must be a positive number of seconds, got {ttl!r}',
+        )
+    return float(ttl)
+
+
+def _to_string_list(value: Any) -> list[str]:  # noqa: ANN401
+    """Coerce a JSON Schema string array; a bare string is not one."""
+    if not isinstance(value, list):
+        raise TypeError(f'expected a list, got {type(value).__name__}')
+    return [str(item) for item in value]
+
+
+def _to_finite_float(value: Any) -> float:  # noqa: ANN401
+    """Coerce a JSON Schema bound; infinity and NaN have no JSON encoding."""
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError(f'{value!r} is not a finite number')
+    return number
+
+
+def _to_json_value(value: Any) -> Any:  # noqa: ANN401
+    """Return *value* unchanged when it encodes as strict JSON."""
+    json.dumps(value, allow_nan=False)
+    return value
+
+
+def _usage_from_metadata(usage_metadata: Any) -> GenerationUsage:  # noqa: ANN401
+    """Build GenerationUsage from a google-genai usage_metadata block."""
+    if usage_metadata is None:
+        return GenerationUsage()
+
+    return GenerationUsage(
+        input_tokens=_to_float(usage_metadata, 'prompt_token_count'),
+        output_tokens=_to_float(usage_metadata, 'candidates_token_count'),
+        total_tokens=_to_float(usage_metadata, 'total_token_count'),
+        thoughts_tokens=_to_float(usage_metadata, 'thoughts_token_count'),
+        cached_content_tokens=_to_float(usage_metadata, 'cached_content_token_count'),
+    )
+
+
+def _custom_from_feedback(
+    feedback: genai_types.GenerateContentResponsePromptFeedback | None,
+) -> dict[str, Any] | None:
+    """The response's ``custom`` payload: the prompt feedback the service sent, if any."""
+    if feedback is None:
+        return None
+    return {'promptFeedback': feedback.model_dump(mode='json', by_alias=True, exclude_none=True)}
+
+
+def _no_candidates_response(
+    feedback: genai_types.GenerateContentResponsePromptFeedback | None,
+    usage_metadata: Any,  # noqa: ANN401
+) -> ModelResponse:
+    """Response for a reply that carried no candidates.
+
+    A refused prompt comes back with no candidates and the reason in the
+    prompt feedback, and finishes BLOCKED.
+
+    Raises:
+        GenkitError: INTERNAL when the prompt was not blocked.
+    """
+    reason = feedback.block_reason if feedback is not None else None
+    if feedback is None or not reason or reason == genai_types.BlockedReason.BLOCKED_REASON_UNSPECIFIED:
+        raise GenkitError(status='INTERNAL', message='Model returned no candidates.')
+    return ModelResponse(
+        message=Message(role=Role.MODEL, content=[Part.from_text('')]),
+        finish_reason=FinishReason.BLOCKED,
+        finish_message=feedback.block_reason_message or f'prompt blocked: {reason.value}',
+        usage=_usage_from_metadata(usage_metadata),
+        custom=_custom_from_feedback(feedback),
+    )
+
+
+from genkit_google_genai._models._utils import (  # noqa: E402
+    TOOL_INPUT_FIELD,
+    PartConverter,
+    ToolTable,
+    ToolWire,
+)
+
+# Input-only choice sets, exported for annotating caller code. Literals rather
+# than enums so callers pass plain strings (thinking_level='HIGH') without
+# importing anything, and type checkers still reject a value outside the set.
+# The Dev UI schemas below read the same sets with get_args. Model names are
+# never exported this way: model lists change.
+#
+# googlegenai_gemini_test.py pins each set that has a google-genai enum, so an
+# SDK bump that adds a value fails until it is added here. The SDK's
+# *_UNSPECIFIED placeholders are listed only where Genkit already offered
+# them (HarmCategory, HarmBlockMethod, ProminentPeople, PhishBlockThreshold).
+HarmCategory: TypeAlias = Literal[
+    'HARM_CATEGORY_UNSPECIFIED',
+    'HARM_CATEGORY_HATE_SPEECH',
+    'HARM_CATEGORY_SEXUALLY_EXPLICIT',
+    'HARM_CATEGORY_HARASSMENT',
+    'HARM_CATEGORY_DANGEROUS_CONTENT',
+    'HARM_CATEGORY_CIVIC_INTEGRITY',
+    'HARM_CATEGORY_JAILBREAK',
+    'HARM_CATEGORY_IMAGE_HATE',
+    'HARM_CATEGORY_IMAGE_DANGEROUS_CONTENT',
+    'HARM_CATEGORY_IMAGE_HARASSMENT',
+    'HARM_CATEGORY_IMAGE_SEXUALLY_EXPLICIT',
+]
+HarmBlockThreshold: TypeAlias = Literal[
+    'BLOCK_LOW_AND_ABOVE', 'BLOCK_MEDIUM_AND_ABOVE', 'BLOCK_ONLY_HIGH', 'BLOCK_NONE', 'OFF'
+]
+HarmBlockMethod: TypeAlias = Literal['HARM_BLOCK_METHOD_UNSPECIFIED', 'SEVERITY', 'PROBABILITY']
+ThinkingLevel: TypeAlias = Literal['MINIMAL', 'LOW', 'MEDIUM', 'HIGH']
+# genai_types.ImageConfig types aspect_ratio and image_size as str. These
+# follow the Gemini image generation docs, union across image models:
+# https://ai.google.dev/gemini-api/docs/image-generation#aspect_ratios_and_image_size
+ImageAspectRatio: TypeAlias = Literal[
+    '1:1', '1:4', '1:8', '2:3', '3:2', '3:4', '4:1', '4:3', '4:5', '5:4', '8:1', '9:16', '16:9', '21:9'
+]
+ImageSize: TypeAlias = Literal['512', '1K', '2K', '4K']
+ProminentPeople: TypeAlias = Literal['PROMINENT_PEOPLE_UNSPECIFIED', 'ALLOW_PROMINENT_PEOPLE', 'BLOCK_PROMINENT_PEOPLE']
+PhishBlockThreshold: TypeAlias = Literal[
+    'PHISH_BLOCK_THRESHOLD_UNSPECIFIED',
+    'BLOCK_LOW_AND_ABOVE',
+    'BLOCK_MEDIUM_AND_ABOVE',
+    'BLOCK_HIGH_AND_ABOVE',
+    'BLOCK_HIGHER_AND_ABOVE',
+    'BLOCK_VERY_HIGH_AND_ABOVE',
+    'BLOCK_ONLY_EXTREMELY_HIGH',
+]
+# No google-genai enum: ImageConfig.person_generation is a str documented with these values.
+PersonGeneration: TypeAlias = Literal['ALLOW_ALL', 'ALLOW_ADULT', 'ALLOW_NONE']
+ResponseModality: TypeAlias = Literal['TEXT', 'IMAGE', 'AUDIO']
+SearchType: TypeAlias = Literal['web', 'image']
+
+
+@with_config(ConfigDict(extra='forbid'))
+class SafetySetting(TypedDict):
+    """One ``safety_settings`` entry. Sent as ``genai_types.SafetySetting``.
+
+    A TypedDict so a dict literal type-checks without importing it.
+    """
+
+    category: HarmCategory
+    threshold: HarmBlockThreshold
+    method: NotRequired[HarmBlockMethod | None]
+
+
+def _literal_list_schema(choices: tuple[str, ...], description: str) -> WithJsonSchema:
+    """Top-level ``{type: array, items: {enum}}`` so the Dev UI renders a multi-select.
+
+    The Dev UI reads array item enums only off the outer object, so the
+    ``anyOf[array, null]`` pydantic emits for ``list[Literal] | None``
+    renders as free text.
+    """
+    return WithJsonSchema({
+        'type': 'array',
+        'items': {'type': 'string', 'enum': list(choices)},
+        'description': description,
+    })
+
+
+# Flat fields grouped by the nested request object the plugin builds from them.
+_THINKING_FIELDS = ('include_thoughts', 'thinking_budget', 'thinking_level')
+_IMAGE_FIELDS = (
+    'aspect_ratio',
+    'image_size',
+    'output_mime_type',
+    'output_compression_quality',
+    'person_generation',
+    'prominent_people',
+)
+_GOOGLE_SEARCH_OPTIONS = (
+    'google_search_types',
+    'google_search_exclude_domains',
+    'google_search_blocking_confidence',
+    'google_search_start_time',
+    'google_search_end_time',
+)
+
+# Nested keys the flat fields replaced, and what to pass instead. The error
+# repeats the caller's casing, so a .prompt file gets camelCase names.
+_FLATTENED_KEYS: dict[str, tuple[str, ...]] = {
+    'thinking_config': _THINKING_FIELDS,
+    'image_config': _IMAGE_FIELDS,
+    'speech_config': ('voice', 'speakers', 'language_code'),
+    'file_search': ('file_search_store_names', 'file_search_metadata_filter', 'file_search_top_k'),
+    'google_search_retrieval': ('google_search',),
+}
+# Flat fields that only a family subclass declares, and that subclass's constructor.
+_FLATTENED_KEY_OWNERS: dict[str, tuple[str, str]] = {
+    'speech_config': ('GeminiTtsConfig', 'gemini_tts'),
+    'image_config': ('GeminiImageConfig', 'gemini_image'),
+}
+_TOOL_CHOICE_KEYS = frozenset({'function_calling_config', 'tool_config'})
+
+# Settings the Gemini API rejects (google-genai raises before sending). The
+# plugin raises first so the error names the flat field.
+_VERTEX_ONLY_FIELDS = (
+    'output_mime_type',
+    'output_compression_quality',
+    'person_generation',
+    'prominent_people',
+    'google_search_exclude_domains',
+    'google_search_blocking_confidence',
+)
+
+
+# Genkit's generate(tool_choice=) and the Gemini function calling mode it sends.
+_FUNCTION_CALLING_MODES: dict[str, genai_types.FunctionCallingConfigMode] = {
+    'auto': genai_types.FunctionCallingConfigMode.AUTO,
+    'required': genai_types.FunctionCallingConfigMode.ANY,
+    'none': genai_types.FunctionCallingConfigMode.NONE,
+}
+
+
+def _tool_config(tool_choice: str, function_tools: list[genai_types.Tool]) -> genai_types.ToolConfig:
+    """The toolConfig for a request's tool_choice. Function calling has no config fields.
+
+    'required' also names the request's tools as the allowed functions, as Go
+    does; Gemini only reads allowed_function_names in ANY mode.
+    """
+    calling = genai_types.FunctionCallingConfig(mode=_FUNCTION_CALLING_MODES[tool_choice])
+    if tool_choice == 'required':
+        calling.allowed_function_names = [
+            declaration.name
+            for tool in function_tools
+            for declaration in tool.function_declarations or []
+            if declaration.name
+        ]
+    return genai_types.ToolConfig(function_calling_config=calling)
+
+
+def _pop_prefixed(config: dict[str, Any], prefix: str) -> dict[str, Any]:
+    """Pop every ``<prefix>name`` key from *config*, returned as ``{name: value}``."""
+    return {key[len(prefix) :]: config.pop(key) for key in [k for k in config if k.startswith(prefix)]}
+
+
+def present_items(values: Iterable[str] | None) -> list[str]:
+    """Non-empty entries of a list field; an untouched Dev UI list sends ``['']``."""
+    return [v for v in values or [] if v]
+
+
+def file_search_fields(
+    store_names: Iterable[str] | None, options: Mapping[str, Any], *, prefix: str = ''
+) -> tuple[list[str], dict[str, Any]]:
+    """Store names and the set file_search options; options without a store raise.
+
+    ``options`` uses the names after ``file_search_`` (``metadata_filter``,
+    ``top_k``). Shared by Gemini and Deep Research.
+    """
+    stores = present_items(store_names)
+    set_options = {key: value for key, value in options.items() if value is not None}
+    if set_options and not stores:
+        names = ', '.join(f'file_search_{k}' for k in set_options)
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f'{prefix}{names} needs file_search_store_names',
+            reason=ErrorReason.INVALID_INPUT,
+        )
+    return stores, set_options
+
+
+def flattened_key_error(key: str, value: object, fields: Collection[str]) -> GenkitError | None:
+    """The error for a nested key the flat fields replaced, or None if *key* isn't one.
+
+    *fields* are the config class's field names; a hint only names fields
+    that class has. Repeats the caller's casing, so a .prompt file gets
+    camelCase names.
+    """
+    snake = to_snake(key)
+    camel = snake != key
+
+    def names(flat: Iterable[str]) -> str:
+        return ' / '.join(to_camel(f) if camel else f for f in flat)
+
+    if snake in _TOOL_CHOICE_KEYS:
+        message = f"{key} is not a config field; pass ai.generate(tool_choice='auto' | 'required' | 'none')"
+    elif snake in _FLATTENED_KEYS:
+        flat = _FLATTENED_KEYS[snake]
+        if all(f in fields for f in flat):
+            message = f'{key} was flattened; use {names(flat)}'
+        elif snake in _FLATTENED_KEY_OWNERS:
+            owner, constructor = _FLATTENED_KEY_OWNERS[snake]
+            message = (
+                f'{key} was flattened into {names(flat)}, which only {owner} has; '
+                f'build the model ref with {constructor}()'
+            )
+        else:
+            return None
+    elif snake == 'google_search' and isinstance(value, Mapping) and snake in fields:
+        options = [o for o in _GOOGLE_SEARCH_OPTIONS if o in fields]
+        message = f'{key} takes True or False' + (f'; set options with {names(options)}' if options else '')
+    elif snake in ('code_execution', 'url_context') and isinstance(value, Mapping) and snake in fields:
+        message = f'{key} takes True or False'
+    else:
+        return None
+    return GenkitError(status='INVALID_ARGUMENT', message=message, reason=ErrorReason.INVALID_INPUT)
+
+
+def _both_set_error(first: str, second: str) -> ValueError:
+    return ValueError(f'{first} and {second} are both set; pass {first}=None or {second}=None to clear a default')
+
+
+class GeminiConfig(ModelConfig):
+    """Gemini Config.
+
+    Every setting is a flat field; the plugin builds the nested
+    ``GenerateContentConfig`` from them at request time. Unknown keys raise.
+    A request field this class doesn't declare goes in ``extra`` under its
+    wire name and is merged into the request body.
+
+    Example:
+        ```python
+        from genkit import Genkit
+        from genkit_google_genai import GeminiConfig, GoogleAI
+
+        # 1. Initialize plugin and client
+        ai = Genkit(plugins=[GoogleAI()])
+
+        # 2. Run generation with flat reasoning, safety, and search grounding
+        res = await ai.generate(
+            model=GoogleAI.gemini('gemini-flash-latest'),
+            prompt='Review allergy safety for pesto pasta and cite recent culinary guidelines.',
+            config=GeminiConfig(
+                thinking_level='HIGH',
+                include_thoughts=True,
+                safety_settings=[
+                    {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_ONLY_HIGH'},
+                ],
+                google_search=True,
+            ),
+        )
+
+        # 3. Inspect generated text
+        print(res.text)
+        # => Pesto pasta traditionally contains pine nuts and parmesan cheese...
+        ```
+    """
+
+    # GenkitConfig's flags (to_camel, both spellings, extra='forbid') are
+    # inherited; don't pass alias= on fields or type checkers stop accepting
+    # the snake_case kwarg.
+
+    base_url: str | None = Field(
+        default=None, description='Overrides the plugin-configured or default baseUrl, if specified.'
+    )
+    api_version: str | None = Field(
+        default=None, description='Overrides the plugin-configured or default apiVersion, if specified.'
+    )
+    location: str | None = Field(
+        default=None,
+        description=(
+            'Overrides the plugin-configured location/region for this request '
+            "(Vertex AI only). Accepts regions (e.g. 'us-central1'), "
+            "multi-regions ('us', 'eu'), or 'global'."
+        ),
+    )
+    timeout: float | None = Field(
+        default=None,
+        description=(
+            'HTTP timeout for this request, in seconds (positive, finite). Overrides the plugin timeout for this call. '
+            'The Gemini API rejects deadlines under 10s with HTTP 400; Vertex AI accepts shorter values.'
+        ),
+    )
+
+    @field_validator('timeout', mode='before')
+    @classmethod
+    def _no_bool_timeout(cls, value: object) -> object:
+        """``True`` is not a number of seconds."""
+        return reject_bool_timeout(value)
+
+    @field_validator('timeout')
+    @classmethod
+    def _check_timeout(cls, value: float | None) -> float | None:
+        """Reject 0, negative, inf and NaN; ``timeout`` is seconds."""
+        return check_timeout_seconds(value)
+
+    safety_settings: Annotated[
+        list[SafetySetting] | None,
+        WithJsonSchema({
+            'type': 'array',
+            'items': {
+                'type': 'object',
+                'properties': {
+                    'category': {'type': 'string', 'enum': list(get_args(HarmCategory))},
+                    'threshold': {'type': 'string', 'enum': list(get_args(HarmBlockThreshold))},
+                    'method': {'type': 'string', 'enum': list(get_args(HarmBlockMethod))},
+                },
+                'required': ['category', 'threshold'],
+                'additionalProperties': False,
+            },
+            'description': (
+                'Adjust how likely you are to see responses that could be harmful. '
+                'Content is blocked based on the probability that it is harmful.'
+            ),
+        }),
+    ] = Field(
+        default=None,
+    )
+
+    code_execution: bool | None = Field(
+        default=None,
+        description='Enables the model to generate and run code.',
+    )
+
+    context_cache: bool | None = Field(
+        default=None,
+        description=(
+            'Context caching allows you to save and reuse precomputed input tokens that you wish to use repeatedly.'
+        ),
+    )
+
+    response_modalities: Annotated[
+        list[ResponseModality] | None,
+        _literal_list_schema(get_args(ResponseModality), 'The modalities to be used in the response.'),
+    ] = Field(default=None)
+
+    google_search: bool | None = Field(
+        default=None,
+        description=(
+            'Ground the response in public web data with the Google Search tool. '
+            'Left unset, any google_search_* option turns it on. False with options set raises.'
+        ),
+    )
+    google_search_types: Annotated[
+        list[SearchType] | None,
+        _literal_list_schema(get_args(SearchType), 'Search types to enable. Web search when unset.'),
+    ] = Field(default=None)
+    google_search_exclude_domains: list[str] | None = Field(
+        default=None, description='Domains to exclude from results, e.g. ["amazon.com"]. Vertex AI only.'
+    )
+    google_search_blocking_confidence: PhishBlockThreshold | None = Field(
+        default=None, description='Block results at or above this phishing confidence. Vertex AI only.'
+    )
+    google_search_start_time: datetime | None = Field(
+        default=None,
+        description='Only return results from this time on (inclusive). Set with google_search_end_time.',
+    )
+    google_search_end_time: datetime | None = Field(
+        default=None,
+        description='Only return results before this time (exclusive). Set with google_search_start_time.',
+    )
+
+    file_search_store_names: list[str] | None = Field(
+        default=None,
+        description=(
+            'The fileSearchStores to retrieve from; setting it attaches the File Search tool. '
+            'Example: fileSearchStores/my-file-search-store-123'
+        ),
+    )
+    file_search_metadata_filter: str | None = Field(
+        default=None, description='Metadata filter to apply to the semantic retrieval documents and chunks.'
+    )
+    file_search_top_k: int | None = Field(
+        default=None, description='The number of semantic retrieval chunks to retrieve.'
+    )
+
+    url_context: bool | None = Field(
+        default=None, description='Return grounding metadata from links included in the query'
+    )
+
+    @field_validator('response_modalities', mode='before')
+    @classmethod
+    def _upper_case_modalities(cls, value: object) -> object:
+        """Accept 'Text' / 'image' the same as 'TEXT' / 'IMAGE'; the API is case-insensitive here."""
+        if isinstance(value, list):
+            return [v.upper() if isinstance(v, str) else v for v in cast(list[object], value)]
+        return value
+
+    @model_validator(mode='before')
+    @classmethod
+    def _reject_nested_keys(cls, data: Any) -> Any:  # noqa: ANN401
+        """Name the flat fields when a caller passes a nested key they replaced."""
+        if isinstance(data, Mapping):
+            for key, value in cast(Mapping[str, Any], data).items():
+                if isinstance(key, str) and (error := flattened_key_error(key, value, cls.model_fields)) is not None:
+                    raise error
+        return data
+
+    @model_validator(mode='after')
+    def _reject_contradictions(self) -> Self:
+        """Settings that can't both be set. Checked per layer and again on the merged config."""
+        if self.thinking_level is not None and self.thinking_budget is not None:
+            raise _both_set_error('thinking_level', 'thinking_budget')
+        if self.google_search is False:
+            options = [
+                name
+                for name in _GOOGLE_SEARCH_OPTIONS
+                if (val := getattr(self, name)) is not None and (not isinstance(val, list) or any(val))
+            ]
+            if options:
+                raise ValueError(
+                    f'google_search=False with {", ".join(options)} set; drop the options, '
+                    'or pass None for each to clear a default'
+                )
+        return self
+
+    # version, temperature, max_output_tokens, top_k, top_p and stop_sequences
+    # come from ModelConfig and are not re-declared; Gemini's ranges are
+    # applied through common_field_bounds.
+    common_field_bounds = {'temperature': (0.0, 2.0), 'top_p': (0.0, 1.0)}
+
+    thinking_level: ThinkingLevel | None = Field(
+        default=None,
+        description=(
+            'For Gemini 3 and later - the thinking level. A higher level is associated with more '
+            'detailed thinking, which is needed for solving more complex tasks. Not with thinking_budget.'
+        ),
+    )
+    thinking_budget: int | None = Field(
+        default=None,
+        description=(
+            'For Gemini 2.5 - the thinking budget in tokens. 0 is DISABLED. -1 is AUTOMATIC. '
+            'The default values and allowed ranges are model dependent. Not with thinking_level.'
+        ),
+    )
+    include_thoughts: bool | None = Field(
+        default=None,
+        description=(
+            'Include thoughts in the response. Thoughts are returned only if the model supports '
+            'thought and thoughts are available.'
+        ),
+    )
+
+    # Sampling knobs GenerateContentConfig types. Declared so they stay flat
+    # and SDK-validated now that unknown keys raise.
+    seed: int | None = Field(default=None, description='Seed for decoding; repeats the same output for the same input.')
+    presence_penalty: float | None = Field(
+        default=None, description='Penalizes tokens that already appear in the output.'
+    )
+    frequency_penalty: float | None = Field(
+        default=None, description='Penalizes tokens by how often they appear in the output.'
+    )
+    response_logprobs: bool | None = Field(default=None, description='Return log probabilities of the output tokens.')
+    logprobs: int | None = Field(
+        default=None, description='Number of top candidate tokens to return log probabilities for.'
+    )
+
+
+DEFAULT_TTS_VOICE_NAME = 'Kore'
+"""Prebuilt voice sent when a TTS model that needs one gets a request naming no voice."""
+
+_GEMINI_API_TTS_MODELS_NEEDING_VOICE = frozenset({'gemini-3.1-flash-tts-preview'})
+"""Gemini API TTS models that reject a request naming no voice. On Vertex AI every TTS model gets the default."""
+
+
+def _body_names_voice(body: object) -> bool:
+    """Whether a wire-shaped body names a voice under ``generationConfig.speechConfig``.
+
+    A replicated (cloned) voice has no flat field and goes through
+    ``config.extra``. Keys are compared the way google-genai's extra_body
+    merge aligns them: underscores dropped, lowercased.
+    """
+
+    def child(node: object, name: str) -> object:
+        if not isinstance(node, Mapping):
+            return None
+        for key, value in cast(Mapping[str, Any], node).items():
+            if isinstance(key, str) and key.replace('_', '').lower() == name:
+                return value
+        return None
+
+    speech = child(child(body, 'generationconfig'), 'speechconfig')
+    return child(speech, 'voiceconfig') is not None or child(speech, 'multispeakervoiceconfig') is not None
+
+
+def _extra_sets_voice(cfg: genai_types.GenerateContentConfig) -> bool:
+    """Whether the extra body already on *cfg* names a voice, so the default voice stays out."""
+    return _body_names_voice(cfg.http_options.extra_body if cfg.http_options else None)
+
+
+class GeminiTtsConfig(GeminiConfig):
+    """Gemini TTS Config.
+
+    Example:
+        ```python
+        from genkit import Genkit
+        from genkit_google_genai import GeminiTtsConfig, GoogleAI
+
+        # 1. Initialize plugin and client
+        ai = Genkit(plugins=[GoogleAI()])
+
+        # 2. Synthesize multi-speaker podcast audio
+        res = await ai.generate(
+            model=GoogleAI.gemini_tts('gemini-2.5-flash-preview-tts'),
+            prompt='Host: Welcome to Morning Roaster. Chef: Today we review Ethiopian beans.',
+            config=GeminiTtsConfig(
+                speakers={'Host': 'Kore', 'Chef': 'Puck'},
+                language_code='en-US',
+            ),
+        )
+
+        # 3. Access synthesized audio parts
+        print(res.media.url)
+        # => data:audio/wav;base64,UklGRiQAAABXQVZFZ...
+        ```
+    """
+
+    voice: str | None = Field(
+        default=None,
+        description=(
+            'Prebuilt voice name, e.g. "Kore". Not with speakers. Without voice or speakers, '
+            f'models that reject a request without a voice get {DEFAULT_TTS_VOICE_NAME}.'
+        ),
+    )
+    speakers: dict[str, str] | None = Field(
+        default=None,
+        description='Multi-speaker voices as {speaker name in the prompt: prebuilt voice name}. Not with voice.',
+    )
+    language_code: str | None = Field(
+        default=None, description='Language code (ISO 639-1) for the speech, e.g. "en-US".'
+    )
+
+    @model_validator(mode='after')
+    def _one_voice_kind(self) -> Self:
+        if self.voice is not None and self.speakers is not None:
+            raise _both_set_error('voice', 'speakers')
+        return self
+
+
+class GeminiImageConfig(GeminiConfig):
+    """Gemini Image Config.
+
+    Example:
+        ```python
+        from genkit import Genkit
+        from genkit_google_genai import GeminiImageConfig, GoogleAI
+
+        # 1. Initialize plugin and client
+        ai = Genkit(plugins=[GoogleAI()])
+
+        # 2. Generate architectural artwork with specified aspect ratio and size
+        res = await ai.generate(
+            model=GoogleAI.gemini_image('gemini-2.5-flash-preview-image-generation'),
+            prompt='A modern minimalist espresso bar with warm cedar accents.',
+            config=GeminiImageConfig(
+                aspect_ratio='16:9',
+                image_size='2K',
+            ),
+        )
+
+        # 3. Access generated image media
+        print(res.media.url)
+        # => data:image/png;base64,iVBORw0KGgoAAAANSU...
+        ```
+    """
+
+    aspect_ratio: ImageAspectRatio | None = Field(default=None, description='Aspect ratio of the generated images.')
+    image_size: ImageSize | None = Field(default=None, description='Size of the generated images.')
+    output_mime_type: str | None = Field(
+        default=None, description='MIME type of the generated image, e.g. "image/jpeg". Vertex AI only.'
+    )
+    output_compression_quality: int | None = Field(
+        default=None, description='Compression quality of the generated image (image/jpeg only). Vertex AI only.'
+    )
+    person_generation: PersonGeneration | None = Field(default=None, description='Controls the generation of people.')
+    prominent_people: ProminentPeople | None = Field(
+        default=None, description='Whether generating prominent people (celebrities) is allowed.'
+    )
+
+
+class GemmaConfig(GeminiConfig):
+    """Gemma Config."""
+
+    # Gemma takes any temperature; top_p keeps Gemini's range.
+    common_field_bounds = {'top_p': (0.0, 1.0)}
+
+
+GEMINI_TEXT_SUPPORTS = ModelSupports(
+    multiturn=True,
+    media=True,
+    tools=True,
+    tool_choice=True,
+    system_role=True,
+    constrained=ConstrainedSupport.ALL,
+    output=['text', 'json'],
+)
+
+GEMINI_2_5_PRO_EXP_03_25 = ModelInfo(
+    label='Google AI - Gemini 2.5 Pro Exp 03-25',
+    supports=ModelSupports(
+        multiturn=True,
+        media=True,
+        tools=True,
+        tool_choice=True,
+        system_role=True,
+        constrained=ConstrainedSupport.ALL,
+        output=['text', 'json'],
+    ),
+)
+
+GEMINI_2_5_PRO_PREVIEW_03_25 = ModelInfo(
+    label='Google AI - Gemini 2.5 Pro Preview 03-25',
+    supports=ModelSupports(
+        multiturn=True,
+        media=True,
+        tools=True,
+        tool_choice=True,
+        system_role=True,
+        constrained=ConstrainedSupport.ALL,
+        output=['text', 'json'],
+    ),
+)
+
+GEMINI_2_5_PRO_PREVIEW_05_06 = ModelInfo(
+    label='Google AI - Gemini 2.5 Pro Preview 05-06',
+    supports=ModelSupports(
+        multiturn=True,
+        media=True,
+        tools=True,
+        tool_choice=True,
+        system_role=True,
+        constrained=ConstrainedSupport.ALL,
+        output=['text', 'json'],
+    ),
+)
+
+GEMINI_2_5_FLASH_PREVIEW_04_17 = ModelInfo(
+    label='Google AI - Gemini 2.5 Flash Preview 04-17',
+    supports=ModelSupports(
+        multiturn=True,
+        media=True,
+        tools=True,
+        tool_choice=True,
+        system_role=True,
+        constrained=ConstrainedSupport.ALL,
+        output=['text', 'json'],
+    ),
+)
+
+GEMINI_2_5_PRO = ModelInfo(
+    label='Google AI - Gemini 2.5 Pro',
+    supports=GEMINI_TEXT_SUPPORTS,
+)
+
+GEMINI_2_5_FLASH = ModelInfo(
+    label='Google AI - Gemini 2.5 Flash',
+    supports=GEMINI_TEXT_SUPPORTS,
+)
+
+GEMINI_2_5_FLASH_LITE = ModelInfo(
+    label='Google AI - Gemini 2.5 Flash Lite',
+    supports=ModelSupports(
+        multiturn=True,
+        media=True,
+        tools=True,
+        tool_choice=True,
+        system_role=True,
+        constrained=ConstrainedSupport.NO_TOOLS,
+        output=['text', 'json'],
+    ),
+)
+
+GEMINI_3_FLASH_PREVIEW = ModelInfo(
+    label='Google AI - Gemini 3 Flash Preview',
+    supports=ModelSupports(
+        multiturn=True,
+        media=True,
+        tools=True,
+        tool_choice=True,
+        system_role=True,
+        constrained=ConstrainedSupport.ALL,
+        output=['text', 'json'],
+    ),
+)
+
+GEMINI_3_PRO_PREVIEW = ModelInfo(
+    label='Google AI - Gemini 3 Pro Preview',
+    supports=ModelSupports(
+        multiturn=True,
+        media=True,
+        tools=True,
+        tool_choice=True,
+        system_role=True,
+        constrained=ConstrainedSupport.ALL,
+        output=['text', 'json'],
+    ),
+)
+
+GEMINI_3_5_FLASH = ModelInfo(
+    label='Google AI - Gemini 3.5 Flash',
+    supports=ModelSupports(
+        multiturn=True,
+        media=True,
+        tools=True,
+        tool_choice=True,
+        system_role=True,
+        constrained=ConstrainedSupport.ALL,
+        output=['text', 'json'],
+    ),
+)
+
+GEMINI_3_6_FLASH = ModelInfo(
+    label='Google AI - Gemini 3.6 Flash',
+    supports=GEMINI_TEXT_SUPPORTS,
+)
+
+GEMINI_3_7_FLASH = ModelInfo(
+    label='Google AI - Gemini 3.7 Flash',
+    supports=GEMINI_TEXT_SUPPORTS,
+)
+
+GEMINI_3_8_FLASH = ModelInfo(
+    label='Google AI - Gemini 3.8 Flash',
+    supports=GEMINI_TEXT_SUPPORTS,
+)
+
+GEMINI_3_1_PRO_PREVIEW = ModelInfo(
+    label='Google AI - Gemini 3.1 Pro Preview',
+    supports=ModelSupports(
+        multiturn=True,
+        media=True,
+        tools=True,
+        tool_choice=True,
+        system_role=True,
+        constrained=ConstrainedSupport.ALL,
+        output=['text', 'json'],
+    ),
+)
+
+# customtools is registered identically to pro-preview (no distinct config in JS).
+GEMINI_3_1_PRO_PREVIEW_CUSTOMTOOLS = ModelInfo(
+    label='Google AI - Gemini 3.1 Pro Preview (Custom Tools)',
+    supports=ModelSupports(
+        multiturn=True,
+        media=True,
+        tools=True,
+        tool_choice=True,
+        system_role=True,
+        constrained=ConstrainedSupport.ALL,
+        output=['text', 'json'],
+    ),
+)
+
+GEMINI_3_1_FLASH_LITE_PREVIEW = ModelInfo(
+    label='Google AI - Gemini 3.1 Flash Lite Preview',
+    supports=ModelSupports(
+        multiturn=True,
+        media=True,
+        tools=True,
+        tool_choice=True,
+        system_role=True,
+        constrained=ConstrainedSupport.ALL,
+        output=['text', 'json'],
+    ),
+)
+
+GEMINI_3_1_FLASH_LITE = ModelInfo(
+    label='Google AI - Gemini 3.1 Flash Lite',
+    supports=ModelSupports(
+        multiturn=True,
+        media=True,
+        tools=True,
+        tool_choice=True,
+        system_role=True,
+        constrained=ConstrainedSupport.ALL,
+        output=['text', 'json'],
+    ),
+)
+
+GEMINI_FLASH_LITE_LATEST = ModelInfo(
+    label='Google AI - Gemini Flash Lite Latest',
+    supports=GEMINI_TEXT_SUPPORTS,
+)
+
+GEMINI_IMAGE_SUPPORTS = ModelSupports(
+    multiturn=True,
+    media=True,
+    tools=True,
+    tool_choice=True,
+    system_role=True,
+    constrained=ConstrainedSupport.ALL,
+)
+
+GEMINI_3_PRO_IMAGE = ModelInfo(
+    label='Google AI - Gemini 3 Pro Image',
+    supports=GEMINI_IMAGE_SUPPORTS,
+)
+
+GEMINI_3_1_FLASH_IMAGE = ModelInfo(
+    label='Google AI - Gemini 3.1 Flash Image',
+    supports=GEMINI_IMAGE_SUPPORTS,
+)
+
+GEMINI_3_1_FLASH_IMAGE_PREVIEW = ModelInfo(
+    label='Google AI - Gemini 3.1 Flash Image Preview',
+    supports=GEMINI_IMAGE_SUPPORTS,
+)
+
+GEMINI_3_PRO_IMAGE_PREVIEW = ModelInfo(
+    label='Google AI - Gemini 3 Pro Image Preview',
+    supports=GEMINI_IMAGE_SUPPORTS,
+)
+
+GEMINI_2_5_FLASH_IMAGE = ModelInfo(
+    label='Google AI - Gemini 2.5 Flash Image',
+    supports=GEMINI_IMAGE_SUPPORTS,
+)
+
+GEMINI_2_5_FLASH_IMAGE_PREVIEW = ModelInfo(
+    label='Google AI - Gemini 2.5 Flash Image Preview',
+    supports=GEMINI_IMAGE_SUPPORTS,
+)
+
+GEMINI_TTS_SUPPORTS = ModelSupports(
+    multiturn=False,
+    media=False,
+    tools=False,
+    tool_choice=False,
+    system_role=False,
+    constrained=ConstrainedSupport.NONE,
+    output=['media'],
+)
+
+GEMINI_2_5_FLASH_PREVIEW_TTS = ModelInfo(
+    label='Google AI - Gemini 2.5 Flash Preview TTS',
+    supports=GEMINI_TTS_SUPPORTS,
+)
+
+GEMINI_2_5_PRO_PREVIEW_TTS = ModelInfo(
+    label='Google AI - Gemini 2.5 Pro Preview TTS',
+    supports=GEMINI_TTS_SUPPORTS,
+)
+
+GEMINI_3_1_FLASH_TTS_PREVIEW = ModelInfo(
+    label='Google AI - Gemini 3.1 Flash TTS Preview',
+    supports=GEMINI_TTS_SUPPORTS,
+)
+
+GEMINI_3_8_FLASH_TTS = ModelInfo(
+    label='Google AI - Gemini 3.8 Flash TTS',
+    supports=GEMINI_TTS_SUPPORTS,
+)
+
+GEMINI_3_8_FLASH_LITE_TTS = ModelInfo(
+    label='Google AI - Gemini 3.8 Flash Lite TTS',
+    supports=GEMINI_TTS_SUPPORTS,
+)
+
+GEMMA_SUPPORTS = ModelSupports(
+    multiturn=True,
+    media=True,
+    tools=True,
+    tool_choice=True,
+    system_role=True,
+    constrained=ConstrainedSupport.ALL,
+    output=['text', 'json'],
+)
+
+GEMMA_4_26B_A4B_IT = ModelInfo(
+    label='Google AI - Gemma 4 26B A4B IT',
+    supports=GEMMA_SUPPORTS,
+)
+
+GEMMA_4_31B_IT = ModelInfo(
+    label='Google AI - Gemma 4 31B IT',
+    supports=GEMMA_SUPPORTS,
+)
+
+GENERIC_GEMINI_MODEL = ModelInfo(
+    label='Google AI - Gemini',
+    supports=ModelSupports(
+        multiturn=True,
+        media=True,
+        tools=True,
+        tool_choice=True,
+        system_role=True,
+        constrained=ConstrainedSupport.ALL,
+        output=['text', 'json'],
+    ),
+)
+
+GENERIC_TTS_MODEL = ModelInfo(
+    label='Google AI - Gemini TTS',
+    supports=GEMINI_TTS_SUPPORTS,
+)
+
+GENERIC_IMAGE_MODEL = ModelInfo(
+    label='Google AI - Gemini Image',
+    supports=ModelSupports(
+        multiturn=False,
+        media=True,
+        tools=False,
+        tool_choice=False,
+        system_role=True,
+        constrained=ConstrainedSupport.ALL,
+        output=['media'],
+    ),
+)
+
+GENERIC_GEMMA_MODEL = ModelInfo(
+    label='Google AI - Gemma',
+    supports=GEMMA_SUPPORTS,
+)
+
+
+# Quote autocomplete needs a Literal, so these aliases list the ids each
+# constructor autocompletes; SUPPORTED_MODELS is the runtime catalog.
+# Constructors take ``Known* | str``, so an unlisted id still type-checks
+# and routes.
+KnownSharedGemini: TypeAlias = Literal[
+    'gemini-2.5-flash',
+    'gemini-2.5-pro',
+    'gemini-2.5-flash-lite',
+    'gemini-3-flash-preview',
+    'gemini-3.1-flash-lite',
+    'gemini-3.1-pro-preview',
+    'gemini-3.1-pro-preview-customtools',
+    'gemini-3.5-flash',
+    'gemini-3.6-flash',
+    'gemini-3.7-flash',
+    'gemini-3.8-flash',
+]
+# Vertex AI does not serve the rotating ``-latest`` aliases.
+KnownGoogleAIGemini: TypeAlias = Literal[
+    KnownSharedGemini,
+    'gemini-flash-latest',
+    'gemini-flash-lite-latest',
+    'gemini-pro-latest',
+]
+KnownVertexAIGemini: TypeAlias = KnownSharedGemini
+KnownGeminiTts: TypeAlias = Literal[
+    'gemini-2.5-flash-preview-tts',
+    'gemini-2.5-pro-preview-tts',
+    'gemini-3.1-flash-tts-preview',
+    'gemini-3.8-flash-tts',
+    'gemini-3.8-flash-lite-tts',
+]
+KnownGeminiImage: TypeAlias = Literal[
+    'gemini-2.5-flash-image',
+    'gemini-3-pro-image',
+    'gemini-3.1-flash-image',
+]
+KnownGemma: TypeAlias = Literal[
+    'gemma-3-1b-it',
+    'gemma-3-4b-it',
+    'gemma-3-12b-it',
+    'gemma-3-27b-it',
+    'gemma-3n-e4b-it',
+    'gemma-4-26b-a4b-it',
+    'gemma-4-31b-it',
+]
+
+
+SUPPORTED_MODELS = {}
+
+
+def _add_model(model_info: ModelInfo, names: list[str]) -> None:
+    for name in names:
+        SUPPORTED_MODELS[name] = model_info
+    if model_info.versions:
+        for version in model_info.versions:
+            SUPPORTED_MODELS[version] = model_info
+
+
+_add_model(GEMINI_2_5_PRO_EXP_03_25, ['gemini-2.5-pro-exp-03-25'])
+_add_model(GEMINI_2_5_PRO_PREVIEW_03_25, ['gemini-2.5-pro-preview-03-25'])
+_add_model(GEMINI_2_5_PRO_PREVIEW_05_06, ['gemini-2.5-pro-preview-05-06'])
+_add_model(GEMINI_2_5_FLASH_PREVIEW_04_17, ['gemini-2.5-flash-preview-04-17'])
+_add_model(GEMINI_2_5_PRO, ['gemini-2.5-pro'])
+_add_model(GEMINI_2_5_FLASH, ['gemini-2.5-flash'])
+_add_model(GEMINI_2_5_FLASH_LITE, ['gemini-2.5-flash-lite'])
+_add_model(GEMINI_FLASH_LITE_LATEST, ['gemini-flash-lite-latest'])
+_add_model(GEMINI_3_FLASH_PREVIEW, ['gemini-3-flash-preview'])
+_add_model(GEMINI_3_PRO_PREVIEW, ['gemini-3-pro-preview', 'gemini-pro-latest'])
+_add_model(GEMINI_3_5_FLASH, ['gemini-3.5-flash', 'gemini-flash-latest'])
+_add_model(GEMINI_3_6_FLASH, ['gemini-3.6-flash'])
+_add_model(GEMINI_3_7_FLASH, ['gemini-3.7-flash'])
+_add_model(GEMINI_3_8_FLASH, ['gemini-3.8-flash'])
+_add_model(GEMINI_3_1_PRO_PREVIEW, ['gemini-3.1-pro-preview'])
+_add_model(GEMINI_3_1_PRO_PREVIEW_CUSTOMTOOLS, ['gemini-3.1-pro-preview-customtools'])
+_add_model(GEMINI_3_1_FLASH_LITE_PREVIEW, ['gemini-3.1-flash-lite-preview'])
+_add_model(GEMINI_3_1_FLASH_LITE, ['gemini-3.1-flash-lite'])
+_add_model(GEMINI_3_PRO_IMAGE, ['gemini-3-pro-image'])
+_add_model(GEMINI_3_1_FLASH_IMAGE, ['gemini-3.1-flash-image'])
+_add_model(GEMINI_3_1_FLASH_IMAGE_PREVIEW, ['gemini-3.1-flash-image-preview'])
+_add_model(GEMINI_3_PRO_IMAGE_PREVIEW, ['gemini-3-pro-image-preview'])
+_add_model(GEMINI_2_5_FLASH_IMAGE_PREVIEW, ['gemini-2.5-flash-image-preview'])
+_add_model(GEMINI_2_5_FLASH_IMAGE, ['gemini-2.5-flash-image'])
+_add_model(GEMINI_2_5_FLASH_PREVIEW_TTS, ['gemini-2.5-flash-preview-tts'])
+_add_model(GEMINI_2_5_PRO_PREVIEW_TTS, ['gemini-2.5-pro-preview-tts'])
+_add_model(GEMINI_3_1_FLASH_TTS_PREVIEW, ['gemini-3.1-flash-tts-preview'])
+_add_model(GEMINI_3_8_FLASH_TTS, ['gemini-3.8-flash-tts'])
+_add_model(GEMINI_3_8_FLASH_LITE_TTS, ['gemini-3.8-flash-lite-tts'])
+_add_model(GEMMA_4_26B_A4B_IT, ['gemma-4-26b-a4b-it'])
+_add_model(GEMMA_4_31B_IT, ['gemma-4-31b-it'])
+
+# Frozen at import so quote-autocomplete tests do not see ids that
+# resolve() writes into SUPPORTED_MODELS later.
+GEMINI_CATALOG_IDS = frozenset(SUPPORTED_MODELS)
+
+
+DEFAULT_SUPPORTS_MODEL = ModelSupports(
+    multiturn=True,
+    media=True,
+    tools=True,
+    tool_choice=True,
+    system_role=True,
+    constrained=ConstrainedSupport.ALL,
+)
+
+
+def is_gemini_model(name: str) -> bool:
+    """Check if the model is a standard Gemini text generation model.
+
+    Excludes TTS and image variants which have different capabilities.
+
+    Args:
+        name: The model name to check.
+
+    Returns:
+        True if this is a standard Gemini model (not TTS or image).
+
+    Example:
+        >>> is_gemini_model('gemini-2.0-flash-001')
+        True
+        >>> is_gemini_model('gemini-2.5-flash-preview-tts')
+        False
+    """
+    local = name.split('/')[-1].lower()
+    return local.startswith('gemini-') and not is_tts_model(local) and not is_image_model(local)
+
+
+def is_tts_model(name: str) -> bool:
+    """Check if the model is a Gemini text-to-speech (TTS) model.
+
+    TTS is a ``gemini-`` name that contains ``-tts``. Strip the plugin /
+    ``models/`` prefix first so ``googleai/gemini-…-tts`` still routes here.
+
+    Args:
+        name: The model name to check.
+
+    Returns:
+        True if this is a TTS model.
+
+    Example:
+        >>> is_tts_model('gemini-2.5-flash-preview-tts')
+        True
+    """
+    local = name.split('/')[-1].lower()
+    return local.startswith('gemini-') and '-tts' in local
+
+
+def is_image_model(name: str) -> bool:
+    """Check if the model is a Gemini native image generation model.
+
+    Native image is a ``gemini-`` name that contains ``-image``. The
+    ``gemini-`` prefix is required: a bare ``image`` substring would also
+    match ``imagen-`` ids, which have no generate path here.
+
+    Args:
+        name: The model name to check.
+
+    Returns:
+        True if this is a Gemini image model.
+
+    Example:
+        >>> is_image_model('gemini-2.0-flash-preview-image-generation')
+        True
+    """
+    local = name.split('/')[-1].lower()
+    return local.startswith('gemini-') and '-image' in local
+
+
+def is_gemma_model(name: str) -> bool:
+    """Check if the model is a Gemma open model.
+
+    Gemma is the ``gemma-`` prefix on the local name after stripping the
+    plugin / ``models/`` prefix.
+
+    Args:
+        name: The model name to check.
+
+    Returns:
+        True if this is a Gemma model.
+
+    Example:
+        >>> is_gemma_model('gemma-2-27b-it')
+        True
+    """
+    return name.split('/')[-1].lower().startswith('gemma-')
+
+
+def is_tuned_gemini_name(name: str) -> bool:
+    """Check whether a model name refers to a Vertex AI tuned Gemini endpoint.
+
+    Accepts both the short form (``endpoints/ID``) and the fully qualified
+    resource path (``projects/PROJECT/locations/LOCATION/endpoints/ID``).
+    Mirrors ``isTunedGeminiName`` in the Go plugin.
+
+    Args:
+        name: The model name to check.
+
+    Returns:
+        True if this is a tuned endpoint name.
+
+    Example:
+        >>> is_tuned_gemini_name('endpoints/1234567890')
+        True
+        >>> is_tuned_gemini_name('projects/p/locations/us-central1/endpoints/9')
+        True
+        >>> is_tuned_gemini_name('gemini-2.5-flash')
+        False
+    """
+    if name.startswith('endpoints/'):
+        return True
+    return name.startswith('projects/') and '/locations/' in name and '/endpoints/' in name
+
+
+def resolve_vertex_model_name(client: genai.Client, name: str) -> str:
+    """Prepare a model name for the google-genai SDK.
+
+    The SDK's internal model-name transformer prefixes unqualified names with
+    ``publishers/google/models/``, which is wrong for tuned endpoints. For a
+    short-form ``endpoints/ID`` this expands to the fully qualified
+    ``projects/PROJECT/locations/LOCATION/endpoints/ID`` using the client's
+    configured project and location so the SDK passes it through unchanged.
+    Non-tuned names are returned as-is. Mirrors
+    ``gemini.go:resolveVertexModelName`` in the Go plugin.
+
+    Args:
+        client: The genai.Client whose project/location to use.
+        name: The incoming model name.
+
+    Returns:
+        A name safe to hand to ``client.aio.models.generate_content``.
+    """
+    if not is_tuned_gemini_name(name):
+        return name
+    if name.startswith('projects/'):
+        return name
+    api_client = getattr(client, '_api_client', None)
+    if api_client is None or not getattr(api_client, 'vertexai', False):
+        return name
+    project = getattr(api_client, 'project', None) or ''
+    location = getattr(api_client, 'location', None) or ''
+    if not project or not location:
+        return name
+    return f'projects/{project}/locations/{location}/{name}'
+
+
+def get_model_config_schema(name: str) -> type[GeminiConfig]:
+    """Get the appropriate config schema for a dynamically discovered model.
+
+    Different model types (TTS, image, Gemma, standard) have different
+    configuration options. This function returns the correct schema based
+    on the model name.
+
+    Args:
+        name: The model name to determine schema for.
+
+    Returns:
+        The appropriate config schema class:
+        - GeminiTtsConfig for TTS models
+        - GeminiImageConfig for image models
+        - GemmaConfig for Gemma models
+        - GeminiConfig for standard Gemini models
+    """
+    if is_tts_model(name):
+        return GeminiTtsConfig
+    if is_image_model(name):
+        return GeminiImageConfig
+    if is_gemma_model(name):
+        return GemmaConfig
+    return GeminiConfig
+
+
+def google_model_info(
+    version: str,
+) -> ModelInfo:
+    """Generates a ModelInfo object.
+
+    This function returns the best ModelInfo Supports based on model type.
+    Detects TTS, Image, Gemma, and standard Gemini models.
+
+    Args:
+        version: Version of the model.
+
+    Returns:
+        ModelInfo object with appropriate capabilities.
+    """
+    if version in SUPPORTED_MODELS:
+        return SUPPORTED_MODELS[version]
+
+    if is_tts_model(version):
+        return GENERIC_TTS_MODEL
+    if is_image_model(version):
+        return GENERIC_IMAGE_MODEL
+    if is_gemma_model(version):
+        return GENERIC_GEMMA_MODEL
+
+    return ModelInfo(
+        label=f'Google AI - {version}',
+        supports=DEFAULT_SUPPORTS_MODEL,
+    )
+
+
+_adc_project_cache: str | None = None
+_adc_project_probed: bool = False
+
+
+async def _adc_project() -> str | None:
+    """Resolve the project from application default credentials, cached.
+
+    ADC resolution can do file and metadata-server IO, so it runs in a thread
+    and is attempted only once per process. A failed or empty resolution is
+    cached too: without ADC configured (express mode, say) every overridden
+    request would otherwise pay for a probe that can stall on the metadata
+    server. Concurrent first calls may duplicate the probe, which is benign.
+    """
+    global _adc_project_cache, _adc_project_probed
+    if not _adc_project_probed:
+        try:
+            _, project = await asyncio.to_thread(google_auth_default)
+            _adc_project_cache = project
+        except DefaultCredentialsError:
+            _adc_project_cache = None
+        _adc_project_probed = True
+    return _adc_project_cache
+
+
+class GeminiModel:
+    """Gemini model."""
+
+    def __init__(
+        self,
+        version: str,
+        client: genai.Client,
+        client_kwargs: dict[str, Any] | None = None,
+        base_url_pinned: bool = False,
+        legacy_response_schema: bool = False,
+    ) -> None:
+        """Initialize Gemini model.
+
+        Args:
+            version: Gemini version
+            client: Google AI client
+            client_kwargs: The plugin-level kwargs the client was constructed
+                from. Required for a per-request tenant key or client knobs
+                (api_version, base_url, location).
+            base_url_pinned: Whether the plugin caller explicitly pinned a
+                base URL (as opposed to one derived from the location).
+            legacy_response_schema: Send a JSON output schema as Gemini's
+                ``response_schema`` instead of ``response_json_schema``.
+        """
+        self._version = version
+        self._client = client
+        self._client_kwargs = client_kwargs
+        self._base_url_pinned = base_url_pinned
+        self._legacy_response_schema = legacy_response_schema
+
+    def _get_tools(self, request: ModelRequest) -> list[genai_types.Tool]:
+        """Generates VertexAI Gemini compatible tool definitions.
+
+        Args:
+            request: The generation request.
+
+        Returns:
+             list of Gemini tools
+        """
+        tools, _table = self._declare_tools(request)
+        return tools
+
+    def _declare_tools(self, request: ModelRequest) -> tuple[list[genai_types.Tool], ToolTable]:
+        """Declare this turn's tools and the table that unwraps their calls."""
+        tools: list[genai_types.Tool] = []
+        entries: list[ToolWire] = []
+        for tool in request.tools or []:
+            genai_tool, wire = self._create_tool(tool)
+            tools.append(genai_tool)
+            entries.append(wire)
+        return tools, ToolTable(entries)
+
+    def _create_tool(self, tool: ToolDefinition) -> tuple[genai_types.Tool, ToolWire]:
+        """Create a tool that is compatible with Google Genai API.
+
+        Args:
+            tool: Genkit Tool Definition
+
+        Returns:
+            Genai tool compatible with Gemini API, plus how it was declared.
+        """
+        params = self._convert_schema_property(tool.input_schema)
+        wrapped = False
+        # Empty params: Gemini requires type=OBJECT even for no-arg tools.
+        if not params:
+            params = genai_types.Schema(type=genai_types.Type.OBJECT, properties={})
+        elif params.type != genai_types.Type.OBJECT:
+            # wrap after convert so OBJECT / Type.OBJECT / $ref enums / ['null']
+            # all see the same type Gemini will
+            wrapped = True
+            params = genai_types.Schema(
+                type=genai_types.Type.OBJECT,
+                properties={TOOL_INPUT_FIELD: params},
+                required=[TOOL_INPUT_FIELD],
+            )
+
+        wire_name = tool.name.replace('/', '__')
+        function = genai_types.FunctionDeclaration(
+            name=wire_name,
+            description=tool.description,
+            parameters=params,
+            response=self._convert_schema_property(tool.output_schema) if tool.output_schema else None,
+        )
+        return genai_types.Tool(function_declarations=[function]), ToolWire(
+            original_name=tool.name,
+            wire_name=wire_name,
+            wrapped=wrapped,
+        )
+
+    # JSON Schema keywords copied onto a Gemini Schema: (keyword, attribute, coercion).
+    _SCHEMA_SCALAR_KEYS: tuple[tuple[str, str, Callable[[Any], Any]], ...] = (
+        ('format', 'format', str),
+        ('default', 'default', _to_json_value),
+        ('minimum', 'minimum', _to_finite_float),
+        ('maximum', 'maximum', _to_finite_float),
+        ('minItems', 'min_items', int),
+        ('maxItems', 'max_items', int),
+        ('propertyOrdering', 'property_ordering', _to_string_list),
+    )
+
+    # JSON Schema keywords that annotate a node without constraining it.
+    _SCHEMA_ANNOTATION_KEYS = frozenset([
+        'title',
+        'description',
+        'default',
+        'examples',
+        'deprecated',
+        'readOnly',
+        'writeOnly',
+        '$comment',
+        '$schema',
+        '$id',
+        '$defs',
+    ])
+
+    def _convert_schema_property(
+        self,
+        input_schema: dict[str, object] | None,
+        defs: dict[str, object] | None = None,
+        *,
+        strict: bool = False,
+        refs: frozenset[str] = frozenset(),
+    ) -> genai_types.Schema | None:
+        """Convert a JSON Schema dict into a Gemini ``Schema``.
+
+        Resolves local ``$ref``, maps ``anyOf`` and ``oneOf`` on a node with
+        no ``type`` to ``any_of``, folds a ``null`` branch of either or of a
+        ``type`` list into ``nullable``, maps the ``enum`` type to STRING and a
+        string ``const`` to a one-value ``enum``. An ``enum`` is kept only on a
+        STRING node whose members are all strings, dropping a ``null`` member;
+        a node with such an ``enum`` and no ``type`` is treated as a string.
+        Any other node with no ``type``, an array with no ``items`` object or
+        whose ``items`` convert to None, and a ``$ref`` back to a definition
+        that contains it convert to None and are left out of the parent's
+        ``properties`` and ``required``.
+
+        Args:
+            input_schema: A JSON Schema dict.
+            defs: Dictionary with definitions. Optional.
+            strict: Raise ``INVALID_ARGUMENT`` for a node that constrains
+                without a ``type``, for a required property that converts to
+                None, for a ``type`` list, ``anyOf`` or ``oneOf`` that would
+                lose some but not all of its non-null branches and for a
+                keyword value that cannot be coerced, instead of leaving them
+                out. An object with ``additionalProperties`` and no
+                ``properties`` also converts to None.
+            refs: Names of the definitions being expanded on the current path.
+
+        Returns:
+            Schema or None
+        """
+        if input_schema is None:
+            return None
+
+        if defs is None:
+            defs_value = input_schema.get('$defs')
+            defs = cast(dict[str, object], defs_value) if isinstance(defs_value, dict) else {}
+
+        if '$ref' in input_schema:
+            ref_path = input_schema['$ref']
+            if isinstance(ref_path, str):
+                ref_tokens = ref_path.split('/')
+                ref_name = ref_tokens[-1]
+
+                if defs is None or ref_name not in defs:
+                    raise GenkitError(
+                        status='INVALID_ARGUMENT',
+                        message=f'{self._version}: schema $ref {ref_path!r} cannot be resolved',
+                    )
+                if ref_name in refs:
+                    return None
+
+                ref_schema = defs[ref_name]
+                if isinstance(ref_schema, dict):
+                    schema = self._convert_schema_property(
+                        cast(dict[str, object], ref_schema), defs, strict=strict, refs=refs | {ref_name}
+                    )
+                else:
+                    schema = None
+
+                if schema:
+                    self._copy_schema_keywords(input_schema, schema, strict=strict)
+
+                return schema
+
+        if 'type' not in input_schema:
+            for keyword in ('anyOf', 'oneOf'):
+                branches = input_schema.get(keyword)
+                if isinstance(branches, list):
+                    return self._convert_union(
+                        input_schema, keyword, cast(list[object], branches), defs, strict=strict, refs=refs
+                    )
+            enum = input_schema.get('enum')
+            if isinstance(enum, list) and self._string_enum_members(cast(list[object], enum)) is not None:
+                nullable = any(m is None for m in cast(list[object], enum))
+                typed: dict[str, object] = {**input_schema, 'type': ['string', 'null'] if nullable else 'string'}
+                return self._convert_schema_property(typed, defs, strict=strict, refs=refs)
+            if strict:
+                unsupported = sorted(set(input_schema) - self._SCHEMA_ANNOTATION_KEYS)
+                if unsupported:
+                    raise GenkitError(
+                        status='INVALID_ARGUMENT',
+                        message=f'{self._version}: schema with {unsupported[0]} but no type cannot be converted',
+                    )
+            return None
+
+        schema = genai_types.Schema()
+        self._copy_schema_keywords(input_schema, schema, strict=strict)
+
+        if 'required' in input_schema:
+            schema.required = cast(list[str], input_schema['required'])
+
+        raw_type = input_schema['type']
+        if isinstance(raw_type, list):
+            non_null = [t for t in raw_type if t != 'null']
+            if strict and len(non_null) > 1:
+                raise GenkitError(
+                    status='INVALID_ARGUMENT',
+                    message=f'{self._version}: schema type {raw_type!r} cannot be converted',
+                )
+            if len(non_null) < len(raw_type):
+                schema.nullable = True
+            raw_type = non_null[0] if non_null else 'string'
+        if raw_type == 'enum':
+            raw_type = 'string'
+        if not isinstance(raw_type, str) or raw_type.upper() not in genai_types.Type.__members__:
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'{self._version}: schema type {raw_type!r} is not supported',
+            )
+        schema_type = genai_types.Type(raw_type)
+        schema.type = schema_type
+
+        if schema_type == genai_types.Type.STRING:
+            const = input_schema.get('const')
+            enum = input_schema.get('enum')
+            if isinstance(const, str):
+                schema.enum = [const]
+            elif isinstance(enum, list):
+                members = self._string_enum_members(cast(list[object], enum))
+                if members is not None:
+                    schema.enum = members
+
+        if schema_type == genai_types.Type.ARRAY:
+            items_value = input_schema.get('items')
+            if isinstance(items_value, dict):
+                schema.items = self._convert_schema_property(
+                    cast(dict[str, object], items_value), defs, strict=strict, refs=refs
+                )
+            if schema.items is None:
+                return None
+
+        if schema_type == genai_types.Type.OBJECT:
+            additional = input_schema.get('additionalProperties')
+            if strict and not input_schema.get('properties') and (additional is True or isinstance(additional, dict)):
+                return None
+            schema.properties = {}
+            properties_value = input_schema.get('properties', {})
+            if isinstance(properties_value, dict):
+                properties = cast(dict[str, object], properties_value)
+                for key, value in properties.items():
+                    nested_schema = (
+                        self._convert_schema_property(cast(dict[str, object], value), defs, strict=strict, refs=refs)
+                        if isinstance(value, dict)
+                        else None
+                    )
+                    if nested_schema is not None:
+                        schema.properties[key] = nested_schema
+                    elif key in (schema.required or ()):
+                        if strict:
+                            raise GenkitError(
+                                status='INVALID_ARGUMENT',
+                                message=f'{self._version}: required property {key} cannot be converted',
+                            )
+                        schema.required = [name for name in schema.required or () if name != key] or None
+
+        return schema
+
+    def _convert_union(
+        self,
+        input_schema: dict[str, object],
+        keyword: str,
+        union: list[object],
+        defs: dict[str, object] | None,
+        *,
+        strict: bool,
+        refs: frozenset[str],
+    ) -> genai_types.Schema | None:
+        """Convert an ``anyOf`` or ``oneOf`` node to ``any_of``; a ``null`` branch becomes ``nullable``.
+
+        A branch that converts to None is left out, and the node converts to
+        None when every branch does. With ``strict``, leaving out some branches
+        but not all raises instead.
+        """
+        branches = [cast(dict[str, object], b) for b in union if isinstance(b, dict)]
+        typed = [b for b in branches if b.get('type') not in ('null', ['null'])]
+        converted = [
+            s for b in typed if (s := self._convert_schema_property(b, defs, strict=strict, refs=refs)) is not None
+        ]
+        if not converted:
+            return None
+        if strict and len(converted) < len(typed):
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'{self._version}: schema {keyword} branch cannot be converted',
+            )
+
+        schema = converted[0] if len(converted) == 1 else genai_types.Schema(any_of=converted)
+        if len(typed) < len(branches):
+            schema.nullable = True
+        self._copy_schema_keywords(input_schema, schema, strict=strict)
+        return schema
+
+    def _copy_schema_keywords(
+        self, input_schema: dict[str, object], schema: genai_types.Schema, *, strict: bool
+    ) -> None:
+        """Copy the description and the scalar keywords from *input_schema* onto *schema*.
+
+        A value that cannot be coerced raises with ``strict`` and is left out otherwise.
+        """
+        if input_schema.get('description'):
+            schema.description = cast(str, input_schema['description'])
+        for key, attr, coerce in self._SCHEMA_SCALAR_KEYS:
+            value = input_schema.get(key)
+            if value is None:
+                continue
+            try:
+                setattr(schema, attr, coerce(value))
+            except (TypeError, ValueError, OverflowError) as e:
+                if not strict:
+                    continue
+                raise GenkitError(
+                    status='INVALID_ARGUMENT',
+                    message=f'{self._version}: schema keyword {key} has an invalid value {value!r}',
+                ) from e
+
+    @staticmethod
+    def _string_enum_members(enum: list[object]) -> list[str] | None:
+        """Return the non-null members of *enum* when all of them are strings, else None."""
+        members = [m for m in enum if m is not None]
+        if members and all(isinstance(m, str) for m in members):
+            return cast(list[str], members)
+        return None
+
+    async def _retrieve_cached_content(
+        self,
+        request: ModelRequest,
+        model_name: str,
+        cache_config: object,
+        contents: list[genai_types.Content],
+        client: genai.Client | None = None,
+    ) -> genai_types.CachedContent:
+        """Retrieves cached content from the Google API if exists.
+
+        If content is present - increases storage ttl based on the configured `ttlSeconds`
+        If content is not present - creates it and returns creates instance.
+
+        Args:
+            request: incoming generation instance
+            model_name: name of the generation model to use
+            cache_config: the message's ``metadata['cache']``: ``True`` or ``{'ttlSeconds': N}``
+            contents: content to submit for cached context creation
+            client: client to use for cache operations. Defaults to the
+                plugin-configured client.
+
+        Returns:
+            Cached Content instance based on provided params
+        """
+        validate_context_cache_request(request=request, model_name=model_name)
+        cache_client = client if client is not None else self._client
+
+        ttl = _cache_ttl_seconds(cache_config)
+        cache_key = generate_cache_key(contents=contents, model_name=model_name)
+
+        iterator_config = genai_types.ListCachedContentsConfig()
+        cache = None
+        # These calls run before generate, so a provider or credential failure
+        # here is classified the same way a generate failure is.
+        try:
+            pages = await cache_client.aio.caches.list(config=iterator_config)
+
+            async for item in pages:
+                if item.display_name == cache_key:
+                    cache = item
+                    break
+            if cache and cache.name:
+                updated_expiration_time = datetime.now(timezone.utc) + timedelta(seconds=ttl)
+                cache = await cache_client.aio.caches.update(
+                    name=cache.name, config=genai_types.UpdateCachedContentConfig(expire_time=updated_expiration_time)
+                )
+            else:
+                cache = await cache_client.aio.caches.create(
+                    model=model_name,
+                    config=genai_types.CreateCachedContentConfig(
+                        contents=cast(genai_types.ContentListUnion, contents),
+                        display_name=cache_key,
+                        ttl=f'{ttl}s',
+                    ),
+                )
+        except APIError as e:
+            raise api_error(e) from e
+        except GOOGLE_AUTH_ERRORS as e:
+            raise_auth_error(e)
+        except TRANSPORT_ERRORS as e:
+            raise transport_error(e) from e
+        return cache
+
+    async def generate(self, request: ModelRequest, ctx: ModelContext) -> ModelResponse:
+        """Handle a generation request.
+
+        Args:
+            request: The generation request containing messages and parameters.
+            ctx: action context
+
+        Returns:
+            The model's response to the generation request.
+        """
+        model_name = self._version
+        if request.config:
+            version = getattr(request.config, 'version', None)
+            if version:
+                model_name = version
+
+        declared_tools, tool_table = self._declare_tools(request)
+
+        # TODO(#4361): Do not move - this method mutates `request` by extracting system
+        # prompts into configuration object
+        request_cfg = await self._genkit_to_googleai_cfg(request=request, declared_tools=declared_tools)
+
+        # TTS models require response_modalities: ["AUDIO"]; some reject a request that names no voice
+        if is_tts_model(model_name):
+            if not request_cfg:
+                request_cfg = genai_types.GenerateContentConfig()
+            if not request_cfg.response_modalities:
+                request_cfg.response_modalities = ['AUDIO']
+            if self._tts_needs_default_voice(model_name) and not _extra_sets_voice(request_cfg):
+                speech = request_cfg.speech_config
+                if speech is None:
+                    speech = genai_types.SpeechConfig()
+                    request_cfg.speech_config = speech
+                if (
+                    not isinstance(speech, str)
+                    and speech.voice_config is None
+                    and speech.multi_speaker_voice_config is None
+                ):
+                    speech.voice_config = genai_types.VoiceConfig(
+                        prebuilt_voice_config=genai_types.PrebuiltVoiceConfig(voice_name=DEFAULT_TTS_VOICE_NAME)
+                    )
+
+        # Image models require response_modalities: ["TEXT", "IMAGE"]
+        if is_image_model(model_name):
+            if not request_cfg:
+                request_cfg = genai_types.GenerateContentConfig()
+            if not request_cfg.response_modalities:
+                request_cfg.response_modalities = ['TEXT', 'IMAGE']
+
+        # Resolve the client before building messages so context-cache
+        # operations run against the same (possibly overridden) region as the
+        # generate call.
+        client = await self._resolve_request_client(request, context=ctx.context)
+
+        request_contents, cached_content = await self._build_messages(
+            request=request, model_name=model_name, client=client, tools=tool_table
+        )
+
+        if cached_content and cached_content.name:
+            if not request_cfg:
+                request_cfg = genai_types.GenerateContentConfig()
+            request_cfg.cached_content = cached_content.name
+
+        if ctx.is_streaming:
+            response = await self._streaming_generate(
+                request_contents=request_contents,
+                request_cfg=request_cfg,
+                ctx=ctx,
+                model_name=model_name,
+                client=client,
+                tools=tool_table,
+            )
+        else:
+            response = await self._generate(
+                request_contents=request_contents,
+                request_cfg=request_cfg,
+                model_name=model_name,
+                client=client,
+                tools=tool_table,
+            )
+
+        response.usage = self._create_usage_stats(request=request, response=response)
+
+        return response
+
+    def _tts_needs_default_voice(self, model_name: str) -> bool:
+        """Whether a TTS request that names no voice is sent the default voice.
+
+        Args:
+            model_name: The TTS model the request goes to.
+
+        Returns:
+            True on Vertex AI, and for the Gemini API models in ``_GEMINI_API_TTS_MODELS_NEEDING_VOICE``.
+        """
+        if self._client.vertexai:
+            return True
+        return model_name.split('/')[-1].lower() in _GEMINI_API_TTS_MODELS_NEEDING_VOICE
+
+    async def _resolve_request_client(
+        self, request: ModelRequest, context: dict[str, Any] | None = None
+    ) -> genai.Client:
+        """Resolve the client to use for a request.
+
+        A tenant key lives in ``context.secrets``. ``request.config`` is
+        client knobs (``base_url``, ``api_version``, ``location``), not
+        the key. Any of those rebuilds a request-scoped client; otherwise
+        the plugin client is reused.
+        """
+        reject_request_config_api_key(request.config)
+        api_version = None
+        base_url_override = None
+        location_override = None
+        bag = context if isinstance(context, dict) else {}
+        secret_key = context_api_key(bag)
+
+        if request.config:
+            if isinstance(request.config, dict):
+                api_version = request.config.get('api_version')
+                base_url_override = request.config.get('base_url')
+                location_override = request.config.get('location')
+            else:
+                api_version = getattr(request.config, 'api_version', None)
+                base_url_override = getattr(request.config, 'base_url', None)
+                location_override = getattr(request.config, 'location', None)
+
+        if location_override and not self._client.vertexai:
+            # Location is a Vertex AI concept; ignore it for the Gemini API backend.
+            location_override = None
+
+        if not (api_version or secret_key or base_url_override or location_override):
+            return self._client
+
+        if self._client_kwargs is None:
+            raise GenkitError(
+                status='FAILED_PRECONDITION',
+                message='Per-request api_key/api_version/base_url/location overrides require '
+                'a model constructed with client_kwargs.',
+            )
+
+        # Clone the plugin-level client kwargs so the temporary client keeps the
+        # plugin's credentials, endpoint, headers, and timeouts.
+        kwargs = dict(self._client_kwargs)
+        plugin_opts = kwargs.get('http_options')
+        opts = copy_http_options(plugin_opts) if plugin_opts is not None else genai_types.HttpOptions()
+
+        if api_version:
+            opts.api_version = api_version
+        if location_override:
+            kwargs['location'] = location_override
+            if not self._base_url_pinned and not base_url_override:
+                if is_multi_regional_location(location_override):
+                    # Multi-regions are served from dedicated endpoints the SDK
+                    # does not derive itself.
+                    opts.base_url = multi_regional_base_url(location_override)
+                else:
+                    opts.base_url = None
+        if base_url_override:
+            opts.base_url = base_url_override
+        if secret_key:
+            # Express / tenant keys are not a regional Vertex host. Drop
+            # project, location, and the plugin base_url unless this call
+            # set one.
+            kwargs['api_key'] = secret_key
+            kwargs['credentials'] = None
+            kwargs.pop('project', None)
+            kwargs.pop('location', None)
+            if not base_url_override:
+                opts.base_url = None
+        kwargs['http_options'] = opts
+
+        # The plugin's kwargs may carry project=None when the project comes
+        # from ADC. Resolve it here, off the event loop: the SDK's own
+        # resolution would block the loop, and it skips resolution entirely
+        # when a base_url is set. Express mode (api_key) takes no project --
+        # the SDK rejects the two together -- so the probe is skipped there.
+        if self._client.vertexai and not kwargs.get('project') and not kwargs.get('api_key'):
+            kwargs['project'] = getattr(kwargs.get('credentials'), 'project_id', None) or await _adc_project()
+        if self._client.vertexai and not kwargs.get('project') and is_multi_regional_location(kwargs.get('location')):
+            if kwargs.get('api_key'):
+                raise GenkitError(
+                    status='FAILED_PRECONDITION',
+                    message='Multi-region locations are not available in Vertex AI express '
+                    'mode (api_key). Configure the plugin with a project and credentials '
+                    'to use multi-region locations.',
+                )
+            raise GenkitError(
+                status='FAILED_PRECONDITION',
+                message='A project is required when overriding the location with a '
+                'multi-region. Set the project parameter or GOOGLE_CLOUD_PROJECT '
+                'environment variable.',
+            )
+
+        try:
+            return genai.Client(**kwargs)
+        except GOOGLE_AUTH_ERRORS as e:
+            # A Vertex override with no key or explicit credentials makes the SDK look up ADC.
+            raise_auth_error(e)
+        except (ValueError, TypeError) as e:
+            # The SDK rejects bad override combinations (api_key with project, say).
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message='Failed to create google-genai client',
+                cause=e,
+            ) from e
+
+    async def _generate(
+        self,
+        request_contents: list[genai_types.Content],
+        request_cfg: genai_types.GenerateContentConfig | None,
+        model_name: str,
+        client: genai.Client | None = None,
+        tools: ToolTable | None = None,
+    ) -> ModelResponse:
+        """Call google-genai generate.
+
+        Args:
+            request_contents: request contents
+            request_cfg: request configuration
+            model_name: name of generation model to use
+            client: optional client to use for the request
+            tools: tools declared this turn
+
+        Returns:
+            genai response.
+        """
+        client = client or self._client
+        try:
+            response = await client.aio.models.generate_content(
+                model=resolve_vertex_model_name(client, model_name),
+                contents=cast(genai_types.ContentListUnion, request_contents),
+                config=request_cfg,
+            )
+        except APIError as e:
+            raise api_error(e) from e
+        except GOOGLE_AUTH_ERRORS as e:
+            # The SDK resolves and refreshes credentials on the request, not at construction.
+            raise_auth_error(e)
+        except TRANSPORT_ERRORS as e:
+            raise transport_error(e) from e
+
+        if not response.candidates:
+            return _no_candidates_response(response.prompt_feedback, response.usage_metadata)
+
+        content = await self._contents_from_response(response, tools=tools)
+
+        # Ensure we always have at least one content item to avoid UI errors
+        if not content:
+            content = [Part.from_text('')]
+
+        # The reply is candidate 0, the same one _contents_from_response reads.
+        finish_reason = FinishReason.OTHER
+        if response.candidates:
+            finish_reason = _to_finish_reason(response.candidates[0].finish_reason)
+
+        return ModelResponse(
+            message=Message(
+                content=content,
+                role=Role.MODEL,
+            ),
+            finish_reason=finish_reason,
+            usage=_usage_from_metadata(response.usage_metadata),
+            custom=_custom_from_feedback(response.prompt_feedback),
+        )
+
+    async def _streaming_generate(
+        self,
+        request_contents: list[genai_types.Content],
+        request_cfg: genai_types.GenerateContentConfig | None,
+        ctx: ModelContext,
+        model_name: str,
+        client: genai.Client | None = None,
+        tools: ToolTable | None = None,
+    ) -> ModelResponse:
+        """Call google-genai generate for streaming.
+
+        Args:
+            request_contents: request contents
+            request_cfg: request configuration
+            ctx: action context
+            model_name: name of generation model to use
+            client: optional client to use for the request
+            tools: tools declared this turn
+
+        Returns:
+            genai response.
+        """
+        client = client or self._client
+        accumulated_content: list[Part] = []
+        finish_reason = FinishReason.UNKNOWN
+        usage_metadata: Any = None
+        prompt_feedback: genai_types.GenerateContentResponsePromptFeedback | None = None
+        saw_chunk = False
+        saw_candidates = False
+        try:
+            generator = await client.aio.models.generate_content_stream(
+                model=resolve_vertex_model_name(client, model_name),
+                contents=cast(genai_types.ContentListUnion, request_contents),
+                config=request_cfg,
+            )
+            # The HTTP call happens on the first iteration, not on the
+            # await that created the generator, so classify has to cover
+            # the async for as well.
+            async for response_chunk in generator:
+                saw_chunk = True
+                content = await self._contents_from_response(response_chunk, tools=tools)
+                if content:  # Only process if we have content
+                    accumulated_content.extend(content)
+                    ctx.send_chunk(
+                        chunk=ModelResponseChunk(
+                            content=content,
+                            role=Role.MODEL,
+                        )
+                    )
+                # The terminating reason and cumulative token usage ride on the trailing
+                # chunks, so hold onto the latest values we see as the stream drains —
+                # otherwise a streamed turn reports no finish reason and no usage at all.
+                if response_chunk.candidates and response_chunk.candidates[0] is not None:
+                    saw_candidates = True
+                    fr = response_chunk.candidates[0].finish_reason
+                    if fr:
+                        finish_reason = _to_finish_reason(fr)
+                if response_chunk.usage_metadata is not None:
+                    usage_metadata = response_chunk.usage_metadata
+                if response_chunk.prompt_feedback is not None:
+                    prompt_feedback = response_chunk.prompt_feedback
+        except APIError as e:
+            raise api_error(e) from e
+        except GOOGLE_AUTH_ERRORS as e:
+            raise_auth_error(e)
+        except TRANSPORT_ERRORS as e:
+            raise transport_error(e) from e
+
+        # An empty 200 body ends the SDK's stream without a chunk or an error.
+        if not saw_chunk:
+            raise GenkitError(status='UNAVAILABLE', message='Model stream returned no responses.')
+        if not saw_candidates:
+            return _no_candidates_response(prompt_feedback, usage_metadata)
+
+        return ModelResponse(
+            message=Message(
+                role=Role.MODEL,
+                content=accumulated_content,
+            ),
+            finish_reason=finish_reason,
+            usage=_usage_from_metadata(usage_metadata),
+            custom=_custom_from_feedback(prompt_feedback),
+        )
+
+    @cached_property
+    def metadata(self) -> dict:
+        """Model metadata.
+
+        Returns:
+            model metadata.
+        """
+        if self._version in SUPPORTED_MODELS:
+            supports = SUPPORTED_MODELS[self._version].supports.model_dump(by_alias=True, exclude_none=True)
+        else:
+            # Fallback to default supports for models not explicitly listed
+            supports = DEFAULT_SUPPORTS_MODEL.model_dump(by_alias=True, exclude_none=True)
+        return {
+            'model': {
+                'label': f'Google AI - {self._version}',
+                'supports': supports,
+            }
+        }
+
+    async def _build_messages(
+        self,
+        request: ModelRequest,
+        model_name: str,
+        client: genai.Client | None = None,
+        tools: ToolTable | None = None,
+    ) -> tuple[list[genai_types.Content], genai_types.CachedContent | None]:
+        """Build google-genai request contents from Genkit request.
+
+        Args:
+            request: Genkit request.
+            model_name: name of generation model to use
+            client: client to use for context-cache operations. Defaults to
+                the plugin-configured client.
+            tools: tools declared this turn
+
+        Returns:
+            list of google-genai contents.
+        """
+        request_contents: list[genai_types.Content] = []
+        cache = None
+
+        for msg in request.messages:
+            if msg.role == Role.SYSTEM:
+                continue
+            content_parts: list[genai_types.Part] = []
+            for p in msg.content:
+                converted = await PartConverter.to_gemini(p, tools=tools)
+                if isinstance(converted, list):
+                    content_parts.extend(converted)
+                else:
+                    content_parts.append(converted)
+            role = 'model' if msg.role in (Role.MODEL, 'model') else 'user'
+            request_contents.append(genai_types.Content(parts=content_parts, role=role))
+
+            if msg.metadata and msg.metadata.get('cache'):
+                cache = await self._retrieve_cached_content(
+                    request=request,
+                    model_name=model_name,
+                    cache_config=msg.metadata['cache'],
+                    contents=request_contents,
+                    client=client,
+                )
+                # The prefix up to this message is now stored in the cache.
+                # Only post-cache messages should be sent in the generate call.
+                request_contents = []
+
+        if not request_contents:
+            request_contents.append(genai_types.Content(parts=[genai_types.Part(text=' ')], role='user'))
+
+        return request_contents, cache
+
+    async def _contents_from_response(
+        self, response: genai_types.GenerateContentResponse, *, tools: ToolTable | None = None
+    ) -> list:
+        """Retrieve contents from google-genai response.
+
+        Args:
+            response: google-genai response.
+            tools: tools declared this turn.
+
+        Returns:
+            list of generated contents.
+        """
+        content = []
+        # Genkit responses carry one reply: candidate 0.
+        candidate = response.candidates[0] if response.candidates else None
+        if candidate and candidate.content and candidate.content.parts:
+            for part in candidate.content.parts:
+                converted = PartConverter.from_gemini(part=part, tools=tools)
+                if converted:  # Only append if conversion succeeded
+                    content.append(converted)
+
+        # Ensure we always return a list, even if empty
+        return content if content else []
+
+    async def _genkit_to_googleai_cfg(
+        self,
+        request: ModelRequest,
+        *,
+        declared_tools: list[genai_types.Tool] | None = None,
+    ) -> genai_types.GenerateContentConfig | None:
+        """Converts a Genkit ModelRequest to a Gemini GenerateContentConfig.
+
+        The conversion follows a linear pipeline:
+        1. Extract system instructions from messages
+        2. Dump the typed request.config instance into a snake_case dict
+        3. Extract tool-related fields from the dict
+        4. Clean Genkit-specific / unsupported keys from the dict
+        5. Build GenerateContentConfig from known fields; leftovers ride on extra_body,
+           and ``config.extra`` is merged over the top of the request body
+        """
+        system_instruction: list[genai.types.Part] = []
+
+        # 1. System messages
+        system_messages = list(filter(lambda m: m.role == Role.SYSTEM, request.messages))
+        for m in system_messages:
+            if m.content:
+                for p in m.content:
+                    converted = await PartConverter.to_gemini(p)
+                    if isinstance(converted, list):
+                        system_instruction.extend(converted)
+                    else:
+                        system_instruction.append(converted)
+
+        cfg = None
+        tools: list[genai_types.Tool] = []
+
+        leftovers: dict[str, Any] = {}
+        extra: dict[str, Any] | None = None
+        timeout: float | None = None
+        if request.config:
+            # 2. Normalize config into a dict
+            dumped_config = self._normalize_config_to_dict(request.config)
+
+            if dumped_config is not None:
+                # config.extra is wire-shaped; it goes on the body as-is in step 5.
+                extra = dumped_config.pop('extra', None)
+                # timeout is transport, not body: it rides on this request's http_options.
+                timeout = dumped_config.pop('timeout', None)
+
+                # 3. Extract tool-related fields
+                self._check_backend_fields(dumped_config)
+                self._extract_tools_from_config(dumped_config, tools)
+                self._nest_generation_fields(dumped_config, extra)
+
+                # 4. Clean Genkit-specific and unsupported keys
+                self._clean_unsupported_keys(dumped_config)
+
+                # 5. Build GenerateContentConfig from known fields. Leftovers are
+                # declared fields the installed SDK doesn't type yet; they ride
+                # on extra_body under generationConfig.
+                known, leftovers = split_sdk_fields(dumped_config, genai_types.GenerateContentConfig)
+                if known:
+                    try:
+                        cfg = genai_types.GenerateContentConfig(**known)
+                    except ValidationError as e:
+                        raise sdk_config_error(action_name=self._version, error=e) from e
+                    # The SDK types top_k as float and coerces 40 to 40.0; the
+                    # API's topK is int32. Assignment isn't revalidated.
+                    if isinstance(known.get('top_k'), int):
+                        cfg.top_k = known['top_k']
+
+        # Tools from top-level field and config-level fields
+        function_tools = declared_tools if declared_tools is not None else self._get_tools(request)
+        tools.extend(function_tools)
+
+        has_output = bool(request.output_format or request.output_schema or request.output_content_type)
+
+        if cfg is not None or tools or system_instruction or has_output or leftovers or extra or timeout is not None:
+            if cfg is None:
+                cfg = genai_types.GenerateContentConfig()
+
+            if has_output:
+                model_name = self._version
+                if request.config:
+                    version = getattr(request.config, 'version', None)
+                    if version:
+                        model_name = version
+
+                # Check if the model supports constrained generation with this configuration
+                model_info = google_model_info(model_name)
+                model_supports_constrained = (
+                    model_info.supports.constrained
+                    if model_info and model_info.supports
+                    else ConstrainedSupport.NO_TOOLS
+                )
+                supports_constrained = model_supports_constrained == ConstrainedSupport.ALL or (
+                    model_supports_constrained == ConstrainedSupport.NO_TOOLS and not request.tools
+                )
+                if supports_constrained:
+                    self._apply_output_config(cfg, request)
+
+            if tools:
+                cfg.tools = cast(genai_types.ToolListUnion, tools)
+
+            if request.tool_choice and function_tools:
+                cfg.tool_config = _tool_config(request.tool_choice, function_tools)
+
+            cfg.system_instruction = genai_types.Content(parts=system_instruction) if system_instruction else None
+            cfg = attach_leftovers(cfg, leftovers, nest='generationConfig')
+            cfg = attach_config_extra(
+                cfg,
+                extra,
+                action_name=self._version,
+                managed_body_fields=GEMINI_MANAGED_BODY_FIELDS,
+                managed_generation_fields=GEMINI_MANAGED_GENERATION_FIELDS,
+                unsupported_generation_fields=GEMINI_UNSUPPORTED_GENERATION_FIELDS,
+            )
+            if timeout is not None:
+                # google-genai layers a request's http_options over the client's
+                # field by field, but populate_server_timeout_header caches
+                # X-Server-Timeout on the shared client and skips it if present,
+                # so set this call's X-Server-Timeout explicitly too.
+                ms = timeout_seconds_to_ms(timeout)
+                http_options = cfg.http_options.model_copy() if cfg.http_options else genai_types.HttpOptions()
+                http_options.timeout = ms
+                headers = {
+                    key: val for key, val in (http_options.headers or {}).items() if key.lower() != 'x-server-timeout'
+                }
+                headers['X-Server-Timeout'] = str(math.ceil(ms / 1000))
+                http_options.headers = headers
+                cfg.http_options = http_options
+            return cfg
+
+        return None
+
+    # -- Config conversion helpers (called by _genkit_to_googleai_cfg) --
+
+    # Keys that are Genkit-specific and must not be forwarded to the API.
+    # 'version' overrides the model name, others are client-level settings.
+    _GENKIT_ONLY_KEYS = frozenset(['version', 'api_version', 'api_key', 'base_url', 'location', 'context_cache'])
+
+    # Keys that may not be supported by older google-genai SDK versions.
+    _SDK_GATED_KEYS = frozenset(['image_config', 'thinking_config', 'response_modalities'])
+
+    def _apply_output_config(self, cfg: genai_types.GenerateContentConfig, request: ModelRequest) -> None:
+        """Set the response MIME type and schema for the request's output format.
+
+        JSON output turns on JSON mode, and constrained JSON output also sends
+        the schema verbatim as ``response_json_schema``, or as a converted
+        ``response_schema`` when ``legacy_response_schema`` is set. Constrained
+        enum output sends ``text/x.enum`` with a converted ``response_schema``;
+        enum output without a constrained schema sends neither.
+        """
+        schema = request.output_schema
+        json_mode = request.output_format == 'json' or request.output_content_type == 'application/json'
+        enum_mode = request.output_format == 'enum' or request.output_content_type == 'text/enum'
+
+        if json_mode:
+            cfg.response_mime_type = 'application/json'
+            if schema and request.output_constrained:
+                if self._legacy_response_schema:
+                    cfg.response_schema = self._output_response_schema(schema)
+                else:
+                    cfg.response_json_schema = schema
+        elif enum_mode and schema and request.output_constrained:
+            cfg.response_mime_type = 'text/x.enum'
+            cfg.response_schema = self._output_response_schema(schema)
+
+    def _output_response_schema(self, output_schema: dict[str, Any]) -> genai_types.Schema:
+        """Convert the request's output schema for ``response_schema``."""
+        schema = self._convert_schema_property(output_schema, strict=True)
+        if schema is None:
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'{self._version}: output_schema cannot be converted to response_schema',
+            )
+        return schema
+
+    def _normalize_config_to_dict(
+        self,
+        config: GeminiConfig | None,
+    ) -> dict[str, Any] | None:
+        """Dump a typed family config to a snake_case dict for the SDK."""
+        return dump_family_config(
+            config=config,
+            expected_type=GeminiConfig,
+            action_name=self._version,
+        )
+
+    def _invalid_config(self, message: str) -> GenkitError:
+        return GenkitError(
+            status='INVALID_ARGUMENT', message=f'{self._version}: {message}', reason=ErrorReason.INVALID_INPUT
+        )
+
+    def _check_backend_fields(self, config: Mapping[str, Any]) -> None:
+        """Raise for settings the backend rejects, naming the flat field.
+
+        google-genai raises its own ValueError for these, with the nested
+        SDK path; the plugin knows the backend, so it raises first.
+        """
+        if self._client.vertexai:
+            fields = [
+                *(('file_search_store_names',) if present_items(config.get('file_search_store_names')) else ()),
+                *(
+                    name
+                    for name in ('file_search_metadata_filter', 'file_search_top_k')
+                    if config.get(name) is not None
+                ),
+            ]
+            if fields:
+                raise self._invalid_config(f'{", ".join(fields)}: Gemini API only, not supported on Vertex AI')
+            return
+        fields = [
+            name
+            for name in _VERTEX_ONLY_FIELDS
+            if config.get(name) is not None
+            and (name != 'google_search_exclude_domains' or present_items(config.get(name)))
+        ]
+        if any(s.get('method') is not None for s in config.get('safety_settings') or []):
+            fields.append('safety_settings[].method')
+        if fields:
+            raise self._invalid_config(f'{", ".join(fields)}: Vertex AI only, not supported on the Gemini API')
+
+    def _extract_tools_from_config(
+        self,
+        config: dict[str, Any],
+        tools: list[genai_types.Tool],
+    ) -> None:
+        """Turn the flat tool fields into ``tools`` entries.
+
+        Mutates *config* by popping consumed keys and appends to *tools*.
+        Rules that span two fields which can come from different layers
+        (ModelRef, prompt, call) are checked here, on the merged config.
+        """
+        if config.pop('code_execution', None):
+            tools.append(genai_types.Tool(code_execution=genai_types.ToolCodeExecution()))
+
+        # Safety settings — filter out unspecified categories and None methods
+        if 'safety_settings' in config:
+            config['safety_settings'] = [
+                {k: v for k, v in s.items() if v is not None}
+                for s in config['safety_settings']
+                if s['category'] != 'HARM_CATEGORY_UNSPECIFIED'
+            ]
+
+        # Google Search: True, or any option with google_search unset. The
+        # config class already rejected False alongside options. Empty list
+        # options (an untouched Dev UI list) mean unset.
+        search = _pop_prefixed(config, 'google_search_')
+        if 'types' in search and not search['types']:
+            search.pop('types')
+        if 'exclude_domains' in search:
+            domains = present_items(search.pop('exclude_domains'))
+            if domains:
+                search['exclude_domains'] = domains
+        if config.pop('google_search', None) or search:
+            options: dict[str, Any] = {}
+            if 'types' in search:
+                options['search_types'] = {f'{t}_search': {} for t in search.pop('types')}
+            start, end = search.pop('start_time', None), search.pop('end_time', None)
+            if (start is None) != (end is None):
+                raise self._invalid_config('set google_search_start_time and google_search_end_time together')
+            if start is not None:
+                # The API rejects sub-second precision ("Granularity of nano is
+                # not supported"), so datetime.now() would fail as sent. Round
+                # outward so the window only grows and never collapses to empty.
+                options['time_range_filter'] = {
+                    'start_time': start.replace(microsecond=0),
+                    'end_time': end.replace(microsecond=0) + timedelta(seconds=1) if end.microsecond else end,
+                }
+            options.update(search)  # exclude_domains, blocking_confidence
+            tools.append(genai_types.Tool(google_search=genai_types.GoogleSearch(**options)))
+
+        # File Search. Empty store names (an untouched Dev UI list) mean off.
+        file_search = _pop_prefixed(config, 'file_search_')
+        stores, options = file_search_fields(
+            file_search.pop('store_names', None), file_search, prefix=f'{self._version}: '
+        )
+        if stores:
+            tools.append(
+                genai_types.Tool(file_search=genai_types.FileSearch(file_search_store_names=stores, **options))
+            )
+
+        if config.pop('url_context', None):
+            tools.append(genai_types.Tool(url_context=genai_types.UrlContext()))
+
+    def _nest_generation_fields(self, config: dict[str, Any], extra: Mapping[str, Any] | None) -> None:
+        """Group the flat thinking, image and speech fields into their nested request objects.
+
+        Mutates *config*. The dicts use google-genai's snake_case names for
+        ThinkingConfig, ImageConfig and SpeechConfig.
+        """
+        thinking = {key: config.pop(key) for key in _THINKING_FIELDS if key in config}
+        if thinking:
+            config['thinking_config'] = thinking
+
+        image = {key: config.pop(key) for key in _IMAGE_FIELDS if key in config}
+        if image:
+            config['image_config'] = image
+
+        voice, speakers = config.pop('voice', None), config.pop('speakers', None)
+        language_code = config.pop('language_code', None)
+        speech: dict[str, Any] = {}
+        if voice is not None:
+            speech['voice_config'] = {'prebuilt_voice_config': {'voice_name': voice}}
+        if speakers is not None:
+            speech['multi_speaker_voice_config'] = {
+                'speaker_voice_configs': [
+                    {'speaker': speaker, 'voice_config': {'prebuilt_voice_config': {'voice_name': name}}}
+                    for speaker, name in speakers.items()
+                ]
+            }
+        if speech and _body_names_voice(extra):
+            # extra is deep-merged into the body, so both voices would be sent.
+            raise self._invalid_config(
+                f'{"voice" if voice is not None else "speakers"} and extra generationConfig.speechConfig '
+                'both name a voice; pass one'
+            )
+        if language_code is not None:
+            speech['language_code'] = language_code
+        if speech:
+            config['speech_config'] = speech
+
+    def _clean_unsupported_keys(self, config: dict[str, Any]) -> None:
+        """Remove Genkit-specific and SDK-gated keys from the config dict.
+
+        Mutates *config* in place.
+        """
+        for key in self._GENKIT_ONLY_KEYS:
+            config.pop(key, None)
+
+        for key in self._SDK_GATED_KEYS:
+            if key in config and key not in genai_types.GenerateContentConfig.model_fields:
+                del config[key]
+
+    def _create_usage_stats(self, request: ModelRequest, response: ModelResponse) -> GenerationUsage:
+        """Create usage statistics.
+
+        Args:
+            request: Genkit request
+            response: Genkit response
+
+        Returns:
+            usage statistics
+        """
+        if not response.message:
+            usage = GenerationUsage()
+            usage.input_tokens = 0
+            usage.output_tokens = 0
+            usage.total_tokens = 0
+            return usage
+
+        usage = GenerationUsage.from_messages(request.messages, response.message)
+        if response.usage:
+            for field in ('input_tokens', 'output_tokens', 'total_tokens', 'thoughts_tokens', 'cached_content_tokens'):
+                val = getattr(response.usage, field, None)
+                if val is not None:
+                    setattr(usage, field, val)
+
+        return usage

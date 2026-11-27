@@ -78,6 +78,9 @@ func newRouteTestGenkit(t *testing.T) *genkit.Genkit {
 
 func TestAllAgentRoutes(t *testing.T) {
 	g := newRouteTestGenkit(t)
+	// A remote agent forwards with this app's credentials, so the layout
+	// must not serve it: it is absent from the want list below.
+	DefineRemoteAgent(g, "billing", "https://billing.internal/agents/billing")
 
 	got := routeKeys(AllAgentRoutes(g))
 	want := []string{

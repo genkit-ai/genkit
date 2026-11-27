@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
-import { type SpawnOptions } from 'child_process';
+import type { SpawnOptions } from 'child_process';
 import { access, constants } from 'fs/promises';
-import { SERVER_HARNESS_COMMAND } from '../commands/server-harness';
-import { type CLIRuntimeInfo } from './runtime-detector';
+import { SERVER_HARNESS_COMMAND } from '../commands/server-harness.js';
+import type { CLIRuntimeInfo } from './runtime-detector.js';
 
 /**
  * Configuration for spawning a child process

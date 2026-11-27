@@ -22,7 +22,8 @@ from collections.abc import Callable
 
 import httpx
 import pytest
-from genkit_openai.models.utils import (
+from genkit_openai._models._audio import OpenAISttConfig, OpenAITtsConfig
+from genkit_openai._models._utils import (
     DictMessageAdapter,
     MessageAdapter,
     MessageConverter,
@@ -35,19 +36,13 @@ from genkit_openai.models.utils import (
     parse_data_uri_content_type,
     reraise_openai_error,
 )
-from openai import APIStatusError
+from openai import APIConnectionError, APIError, APIResponseValidationError, APIStatusError, APITimeoutError
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from pydantic import BaseModel
 
-from genkit import (
-    GenkitError,
-    Message,
-    ModelRequest,
-    Part,
-    Role,
-    ToolRequest,
-    ToolResponse,
-)
+from genkit import GenkitError, Message, Part, Role
+from genkit.model import ModelRequest, ToolRequest, ToolResponse
+from genkit.plugin_api import StatusName
 
 
 class TestParseDataUriContentType:
@@ -201,6 +196,37 @@ class TestExtractConfigDict:
         """Return empty dict when config is an empty dict."""
         request = self._make_request(config={})
         assert extract_config_dict(request) == {}
+
+    def test_typed_tts_config_keeps_sdk_field_names(self) -> None:
+        """A typed TTS config reaches the SDK as response_format, not responseFormat."""
+        request = self._make_request(config=OpenAITtsConfig(response_format='wav', speed=1.5))
+        assert extract_config_dict(request) == {'response_format': 'wav', 'speed': 1.5}
+
+    def test_typed_stt_config_keeps_sdk_field_names(self) -> None:
+        """A typed STT config reaches the SDK as timestamp_granularities, not timestampGranularities."""
+        config = OpenAISttConfig(response_format='verbose_json', timestamp_granularities=['word'])
+        assert extract_config_dict(self._make_request(config=config)) == {
+            'response_format': 'verbose_json',
+            'timestamp_granularities': ['word'],
+        }
+
+    def test_typed_image_configs_keep_sdk_field_names(self) -> None:
+        """Typed DALL-E and GPT-Image configs reach the SDK with snake_case field names."""
+        from genkit_openai._models._image import OpenAIDalleConfig, OpenAIGptImageConfig, _to_image_generate_params
+
+        dalle_req = self._make_request(config=OpenAIDalleConfig(response_format='url'))
+        assert _to_image_generate_params('dall-e-3', dalle_req) == {
+            'model': 'dall-e-3',
+            'prompt': 'hello',
+            'response_format': 'url',
+        }
+        gpt_img_req = self._make_request(config=OpenAIGptImageConfig(output_format='png', output_compression=80))
+        assert _to_image_generate_params('gpt-image-1', gpt_img_req) == {
+            'model': 'gpt-image-1',
+            'prompt': 'hello',
+            'output_format': 'png',
+            'output_compression': 80,
+        }
 
 
 class TestFindText:
@@ -795,6 +821,114 @@ def test_reraise_openai_error_marks_malformed_tool_json_internal() -> None:
         assert raised.value.status == 'INTERNAL'
         return
     raise AssertionError('expected JSONDecodeError')
+
+
+def _in_band_error(body: dict[str, object]) -> APIError:
+    """The error the SDK raises when a 200 stream sends an SSE chunk with an `error` object."""
+    request = httpx.Request('POST', 'https://api.openai.com/v1/chat/completions')
+    return APIError(str(body.get('message')), request, body=body)
+
+
+@pytest.mark.parametrize(
+    ('body', 'expected_status'),
+    [
+        (
+            {'message': 'Rate limit reached for gpt-4o', 'type': 'requests', 'code': 'rate_limit_exceeded'},
+            'RESOURCE_EXHAUSTED',
+        ),
+        (
+            {'message': 'You exceeded your current quota', 'type': 'insufficient_quota', 'code': 'insufficient_quota'},
+            'RESOURCE_EXHAUSTED',
+        ),
+        ({'message': 'The server had an error', 'type': 'server_error', 'code': None}, 'INTERNAL'),
+        (
+            {'message': 'Invalid tool schema', 'type': 'invalid_request_error', 'code': 'invalid_value'},
+            'INVALID_ARGUMENT',
+        ),
+    ],
+    ids=['rate-limit-code', 'quota', 'server-error-type', 'invalid-request-type'],
+)
+def test_reraise_openai_error_classifies_known_in_band_errors(
+    body: dict[str, object], expected_status: StatusName
+) -> None:
+    """A mid-stream error the provider typed is classified by its code, then its type."""
+    error = _in_band_error(body)
+
+    with pytest.raises(GenkitError) as raised:
+        reraise_openai_error(error)
+
+    assert raised.value.status == expected_status
+    assert raised.value.message == body['message']
+    assert raised.value.__cause__ is error
+
+
+@pytest.mark.parametrize(
+    'error',
+    [
+        _in_band_error({'message': 'Something new went wrong', 'type': 'brand_new_error', 'code': 'brand_new'}),
+        _in_band_error({'message': 'An error occurred during streaming'}),
+    ],
+    ids=['unknown-in-band-type', 'untyped-in-band'],
+)
+def test_reraise_openai_error_marks_unknown_in_band_errors_unknown(error: APIError) -> None:
+    """A mid-stream error the plugin does not know is an UNKNOWN GenkitError that keeps its message and cause."""
+    with pytest.raises(GenkitError) as raised:
+        reraise_openai_error(error)
+
+    assert raised.value.status == 'UNKNOWN'
+    assert raised.value.message == error.message
+    assert raised.value.__cause__ is error
+
+
+def test_connection_refused_is_unavailable() -> None:
+    """A connection the SDK could not open is UNAVAILABLE, so retry and fallback act on it."""
+    error = APIConnectionError(request=httpx.Request('POST', 'https://api.openai.com/v1/chat/completions'))
+
+    with pytest.raises(GenkitError) as raised:
+        reraise_openai_error(error)
+
+    assert raised.value.status == 'UNAVAILABLE'
+    assert raised.value.__cause__ is error
+
+
+def test_timeout_is_deadline_exceeded() -> None:
+    """A request the SDK timed out is DEADLINE_EXCEEDED, not the broader connection UNAVAILABLE."""
+    error = APITimeoutError(request=httpx.Request('POST', 'https://api.openai.com/v1/chat/completions'))
+
+    with pytest.raises(GenkitError) as raised:
+        reraise_openai_error(error)
+
+    assert raised.value.status == 'DEADLINE_EXCEEDED'
+    assert raised.value.__cause__ is error
+
+
+@pytest.mark.parametrize('status_code', [413, 418])
+def test_unmapped_4xx_is_unknown_genkit_error(status_code: int) -> None:
+    """A 4xx with no matching Genkit status is an UNKNOWN GenkitError that keeps the provider message."""
+    error = APIStatusError(
+        'payload too large',
+        response=httpx.Response(status_code, request=httpx.Request('POST', 'https://api.openai.com/v1/chat')),
+        body=None,
+    )
+
+    with pytest.raises(GenkitError) as raised:
+        reraise_openai_error(error)
+
+    assert raised.value.status == 'UNKNOWN'
+    assert raised.value.message == 'payload too large'
+    assert raised.value.__cause__ is error
+
+
+def test_reraise_openai_error_marks_unreadable_response_internal() -> None:
+    """A 200 whose body fails SDK validation is a malformed provider reply."""
+    request = httpx.Request('POST', 'https://api.openai.com/v1/chat/completions')
+    error = APIResponseValidationError(httpx.Response(200, request=request), body={'unexpected': True})
+
+    with pytest.raises(GenkitError) as raised:
+        reraise_openai_error(error)
+
+    assert raised.value.status == 'INTERNAL'
+    assert raised.value.__cause__ is error
 
 
 class TestExtractResponseMetadata:

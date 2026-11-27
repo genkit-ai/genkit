@@ -1,0 +1,206 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Genkit Django handler for serving flows as HTTP endpoints."""
+
+import asyncio
+import contextlib
+import json
+import logging
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from typing import Any, cast
+
+from django.core.exceptions import PermissionDenied, SuspiciousOperation
+from django.http import Http404, HttpRequest, HttpResponse, HttpResponseBase, StreamingHttpResponse
+from django.views.decorators.csrf import csrf_exempt
+
+from genkit import Genkit, GenkitError, PublicError
+from genkit.plugin_api import Action
+from genkit.web import (
+    ContextProvider,
+    RequestData,
+    error_json,
+    error_sse,
+    error_status,
+    read_body,
+    result_json,
+    to_sse,
+    wants_stream,
+)
+
+logger = logging.getLogger(__name__)  # noqa: TID251
+
+
+def _log_failure(*, error: Exception, flow: str, where: str) -> None:
+    """Log a served-action failure to the host web server's stdlib logger, naming the action.
+
+    Intentionally emits to stdlib ``logging`` rather than ``genkit.get_logger``
+    because route failures happen at the HTTP boundary outside the flow span,
+    where Django ``LOGGING`` handlers, Uvicorn/Gunicorn, Sentry
+    ``LoggingIntegration``, and ``pytest`` ``caplog`` listen. 5xx errors include
+    the traceback.
+    """
+    extra = {'genkit_action': flow}
+    if error_status(error) >= 500:
+        logger.exception('served action %r %s failed', flow, where, extra=extra)
+    else:
+        logger.warning('served action %r %s failed: %s', flow, where, error, extra=extra)
+
+
+def _error_response(err: Exception, status: int | None = None) -> HttpResponse:
+    """Return a JSON error body; status comes from the error unless overridden."""
+    return HttpResponse(
+        status=error_status(err) if status is None else status,
+        content=error_json(err).encode('utf-8'),
+        content_type='application/json',
+    )
+
+
+def _request_headers(request: HttpRequest) -> Mapping[str, str]:
+    """Return ``request.headers`` typed as a Mapping.
+
+    Django's ``HttpRequest.headers`` is a ``HttpHeaders`` (a ``CaseInsensitiveMapping``)
+    at runtime but is exposed as a ``cached_property`` to static type checkers, which
+    then can't see ``.get()`` / ``.items()``. Casting once keeps the handler readable.
+    """
+    return cast(Mapping[str, str], request.headers)
+
+
+class _DjangoRequestData(RequestData):
+    """Wraps Django request data for Genkit context."""
+
+    def __init__(self, request: HttpRequest, body: dict[str, Any] | None) -> None:
+        super().__init__(
+            request=request,
+            method=request.method or '',
+            headers=_request_headers(request).items(),
+            input=body.get('data') if body else None,
+        )
+
+
+def genkit_django_handler(
+    ai: Genkit,
+    context_provider: ContextProvider | None = None,
+) -> Callable[[Action], Callable[[HttpRequest], Awaitable[HttpResponseBase]]]:
+    """A decorator for serving Genkit flows via a Django ASGI app.
+
+    ```python
+    from django.urls import path
+    from genkit import FlowContext
+    from genkit_django import genkit_django_handler
+
+
+    @genkit_django_handler(ai)
+    @ai.flow()
+    async def say_hi(name: str, ctx: FlowContext) -> str:
+        stream = ai.generate_stream(prompt=f'tell a joke about {name}')
+        async for chunk in stream.stream:
+            if chunk.text:
+                ctx.send_chunk(chunk.text)
+        res = await stream.response
+        return res.text
+
+
+    urlpatterns = [
+        path('chat/', say_hi),
+    ]
+    ```
+
+    Requires Django ASGI (Django 5.0+). The returned view is `csrf_exempt`
+    because this is a JSON API.
+
+    Args:
+        ai: The Genkit instance.
+        context_provider: Optional function to extract context from the request.
+
+    Returns:
+        A decorator that wraps an Action and returns an async Django view.
+    """
+
+    def decorator(flow: Action) -> Callable[[HttpRequest], Awaitable[HttpResponseBase]]:
+        if not isinstance(flow, Action):
+            raise GenkitError(status='INVALID_ARGUMENT', message='must apply @genkit_django_handler on a @flow')
+
+        @csrf_exempt
+        async def handler(request: HttpRequest) -> HttpResponseBase:
+            if request.method != 'POST':
+                return _error_response(
+                    PublicError('INVALID_ARGUMENT', 'only POST is supported'),
+                    status=405,
+                )
+
+            try:
+                body = json.loads(request.body.decode('utf-8')) if request.body else {}
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                return _error_response(
+                    PublicError('INVALID_ARGUMENT', 'request body must be valid JSON'),
+                )
+
+            try:
+                action_input = read_body(body)
+            except PublicError as e:
+                return _error_response(e)
+
+            request_data = _DjangoRequestData(request, body)
+            action_context: dict[str, object] | None = None
+
+            if context_provider:
+                try:
+                    context = context_provider(request_data)
+                    if asyncio.iscoroutine(context):
+                        context = await context
+                    if isinstance(context, dict):
+                        action_context = context
+                except (PermissionDenied, Http404, SuspiciousOperation):
+                    # Django's own denial; re-raise so it stays 403/404/400.
+                    raise
+                except Exception as e:
+                    _log_failure(error=e, flow=flow.name, where='context provider')
+                    return _error_response(e)
+
+            init = body.get('init')
+
+            stream = cast(str | None, request.GET.get('stream'))
+            if wants_stream(accept=request_data.headers.get('accept'), stream=stream):
+
+                async def event_stream() -> AsyncIterator[str]:
+                    try:
+                        stream_response = flow.stream(input=action_input, context=action_context, init=init)
+                    except Exception as e:
+                        _log_failure(error=e, flow=flow.name, where='stream')
+                        yield error_sse(e)
+                        return
+                    # a client that hangs up closes this generator; aclosing makes
+                    # that cancel the flow right away instead of whenever it's collected.
+                    async with contextlib.aclosing(to_sse(stream_response)) as lines:
+                        async for line in lines:
+                            yield line
+
+                return StreamingHttpResponse(event_stream(), content_type='text/event-stream; charset=utf-8')
+
+            try:
+                response = await flow.run(input=action_input, context=action_context, init=init)
+                return HttpResponse(
+                    content=result_json(response.response).encode('utf-8'),
+                    content_type='application/json',
+                )
+            except Exception as e:
+                _log_failure(error=e, flow=flow.name, where='run')
+                return _error_response(e)
+
+        return handler
+
+    return decorator

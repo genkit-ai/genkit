@@ -95,10 +95,10 @@ var model = googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.Generate
 	},
 })
 
-// imageModel is the same model allowed to answer with a picture. Without IMAGE
-// in ResponseModalities it describes what it would draw instead of drawing it.
+// imageModel is a Gemini image model. The plugin defaults its
+// ResponseModalities to TEXT and IMAGE, so it answers with a picture without
+// asking for one.
 var imageModel = googlegenai.ModelRef("googleai/gemini-3.1-flash-image", &genai.GenerateContentConfig{
-	ResponseModalities: []string{"IMAGE", "TEXT"},
 	ThinkingConfig: &genai.ThinkingConfig{
 		ThinkingLevel: genai.ThinkingLevelMinimal,
 	},
@@ -109,11 +109,10 @@ var imageModel = googlegenai.ModelRef("googleai/gemini-3.1-flash-image", &genai.
 // generateFlow, which sets none, gets the model's own default.
 //
 // It is a whole ref rather than a per-call ai.WithConfig because that option
-// replaces a ref's config instead of merging into it, which would drop
-// ResponseModalities and the pictures with it.
+// replaces a ref's config instead of merging into it, which would drop the
+// minimal thinking level.
 var editModel = googlegenai.ModelRef("googleai/gemini-3.1-flash-image", &genai.GenerateContentConfig{
-	ResponseModalities: []string{"IMAGE", "TEXT"},
-	ImageConfig:        &genai.ImageConfig{AspectRatio: "1:1"},
+	ImageConfig: &genai.ImageConfig{AspectRatio: "1:1"},
 	ThinkingConfig: &genai.ThinkingConfig{
 		ThinkingLevel: genai.ThinkingLevelMinimal,
 	},
@@ -209,7 +208,9 @@ func main() {
 	for _, a := range genkit.ListFlows(g) {
 		mux.HandleFunc("POST /"+a.Name(), genkit.Handler(a))
 	}
-	log.Fatal(server.Start(ctx, "127.0.0.1:8080", mux))
+	if err := server.Start(ctx, "127.0.0.1:8080", mux); err != nil {
+		log.Fatal(err)
+	}
 }
 
 // DefineDescribe reads a picture: the file and the question travel as two parts

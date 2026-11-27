@@ -221,8 +221,7 @@ interface TextEmbeddingPrediction {
 
 type EmbeddingInstance = TextEmbeddingInstance | MultimodalEmbeddingInstance;
 type EmbeddingPrediction =
-  | TextEmbeddingPrediction
-  | MultimodalEmbeddingPrediction;
+  TextEmbeddingPrediction | MultimodalEmbeddingPrediction;
 
 function isMultiModal(embedder: EmbedderReference): boolean {
   const input = embedder.info?.supports?.input || '';

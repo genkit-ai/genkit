@@ -82,6 +82,11 @@ var (
 	}
 )
 
+// mediaTypes are the media OpenAI's chat completions read: images, audio
+// (wav and mp3, on the audio models), and PDF, the only file type chat
+// completions take.
+var mediaTypes = []string{"image/*", "audio/*", "application/pdf"}
+
 // supportedModels curates capabilities for well-known OpenAI models. It is not
 // the set of usable models: any OpenAI model resolves on demand and takes
 // [dynamicModelOptions], so an ID absent here still works. Dated snapshots are
@@ -341,6 +346,7 @@ func (o *OpenAI) Init(ctx context.Context) []api.Action {
 	o.openAICompatible.Opts = append(opts, o.Opts...)
 
 	o.openAICompatible.Provider = provider
+	o.openAICompatible.MediaTypes = mediaTypes
 	actions := o.openAICompatible.Init(ctx)
 
 	// define default models

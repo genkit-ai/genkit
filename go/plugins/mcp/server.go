@@ -16,6 +16,8 @@ package mcp
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -23,6 +25,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/internal/uri"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -35,7 +38,7 @@ type MCPServerOptions struct {
 	Version string
 }
 
-// GenkitMCPServer represents an MCP server that exposes Genkit tools, prompts, and resources
+// GenkitMCPServer represents an MCP server that exposes Genkit tools and resources
 type GenkitMCPServer struct {
 	genkit    *genkit.Genkit
 	options   MCPServerOptions
@@ -126,58 +129,109 @@ func (s *GenkitMCPServer) discoverAndCategorizeActions() ([]ai.Tool, []api.Actio
 	return toolActions, resourceActions, nil
 }
 
-// convertGenkitToolToMCP converts a Genkit tool to MCP format
+// convertGenkitToolToMCP converts a Genkit tool to MCP format, advertising
+// the tool's full input JSON schema.
 func (s *GenkitMCPServer) convertGenkitToolToMCP(tool ai.Tool) mcp.Tool {
 	def := tool.Definition()
+	return mcp.NewToolWithRawSchema(def.Name, def.Description, inputSchemaForMCP(def))
+}
 
-	// Start with basic options
-	options := []mcp.ToolOption{mcp.WithDescription(def.Description)}
-
-	// Convert input schema if available
-	if def.InputSchema != nil {
-		// Parse the JSON schema and convert to MCP tool options
-		if properties, ok := def.InputSchema["properties"].(map[string]interface{}); ok {
-			// Convert each property to appropriate MCP option
-			for propName, propDef := range properties {
-				if propMap, ok := propDef.(map[string]interface{}); ok {
-					propType, _ := propMap["type"].(string)
-
-					switch propType {
-					case "string":
-						options = append(options, mcp.WithString(propName))
-					case "integer", "number":
-						options = append(options, mcp.WithNumber(propName))
-					case "boolean":
-						options = append(options, mcp.WithBoolean(propName))
-					}
-				}
-			}
-		}
+// inputSchemaForMCP returns the JSON schema of the tool's input. MCP requires
+// an object schema, so a tool without one or whose input is not an object
+// gets an empty object schema; a strict client would otherwise reject the
+// whole tools/list response.
+func inputSchemaForMCP(def *ai.ToolDefinition) json.RawMessage {
+	emptyObject := json.RawMessage(`{"type":"object"}`)
+	if def.InputSchema == nil {
+		return emptyObject
 	}
-
-	return mcp.NewTool(def.Name, options...)
+	if t, _ := def.InputSchema["type"].(string); t != "object" {
+		slog.Warn("MCP tool input must be an object, advertising an empty object schema instead", "tool", def.Name, "type", def.InputSchema["type"])
+		return emptyObject
+	}
+	schema, err := json.Marshal(def.InputSchema)
+	if err != nil {
+		slog.Warn("failed to encode tool input schema, advertising an empty object schema instead", "tool", def.Name, "error", err)
+		return emptyObject
+	}
+	return schema
 }
 
 // createToolHandler creates an MCP tool handler for a Genkit tool
 func (s *GenkitMCPServer) createToolHandler(tool ai.Tool) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		// Execute the Genkit tool
-		result, err := tool.RunRaw(ctx, request.Params.Arguments)
+		resp, err := tool.RunRawMultipart(ctx, request.Params.Arguments)
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
-
-		// Convert result to MCP format
-		switch v := result.(type) {
-		case string:
-			return mcp.NewToolResultText(v), nil
-		case nil:
-			return mcp.NewToolResultText(""), nil
-		default:
-			// Convert complex types to string
-			return mcp.NewToolResultText(fmt.Sprintf("%v", v)), nil
-		}
+		return toolResultToMCP(tool.Name(), resp)
 	}
+}
+
+// toolResultToMCP converts a Genkit tool response to an MCP tool result. A
+// string output is sent as is and any other output as its JSON encoding.
+// Content parts follow the output: text parts as text, data parts as their
+// JSON encoding, and image or audio media given as a data: URI as image or
+// audio content. MCP has no content type for other media or for media given
+// by URL, so those parts are dropped with a warning.
+func toolResultToMCP(name string, resp *ai.MultipartToolResponse) (*mcp.CallToolResult, error) {
+	if resp == nil {
+		resp = &ai.MultipartToolResponse{}
+	}
+	var content []mcp.Content
+	switch v := resp.Output.(type) {
+	case nil:
+	case string:
+		content = append(content, mcp.NewTextContent(v))
+	default:
+		b, err := json.Marshal(v)
+		if err != nil {
+			return nil, fmt.Errorf("encoding output of tool %q: %w", name, err)
+		}
+		content = append(content, mcp.NewTextContent(string(b)))
+	}
+	for _, p := range resp.Content {
+		if p == nil {
+			continue
+		}
+		c, err := partToMCP(p)
+		if err != nil {
+			slog.Warn("dropping tool response part that MCP cannot carry", "tool", name, "kind", p.Kind, "error", err)
+			continue
+		}
+		content = append(content, c)
+	}
+	if len(content) == 0 {
+		content = append(content, mcp.NewTextContent(""))
+	}
+	return &mcp.CallToolResult{Content: content}, nil
+}
+
+// partToMCP converts one content part of a tool response to MCP content.
+func partToMCP(p *ai.Part) (mcp.Content, error) {
+	switch {
+	case p.IsText():
+		return mcp.NewTextContent(p.Text), nil
+	case p.IsData():
+		return mcp.NewTextContent(p.DataString()), nil
+	case p.IsMedia():
+		if !strings.HasPrefix(p.Text, "data:") {
+			return nil, fmt.Errorf("media given by URL is not supported")
+		}
+		contentType, data, err := uri.Data(p)
+		if err != nil {
+			return nil, err
+		}
+		encoded := base64.StdEncoding.EncodeToString(data)
+		switch {
+		case strings.HasPrefix(contentType, "image/"):
+			return mcp.NewImageContent(encoded, contentType), nil
+		case strings.HasPrefix(contentType, "audio/"):
+			return mcp.NewAudioContent(encoded, contentType), nil
+		}
+		return nil, fmt.Errorf("media type %q is not supported", contentType)
+	}
+	return nil, fmt.Errorf("part kind is not supported")
 }
 
 // registerResourceWithMCP registers a Genkit resource with the MCP server
@@ -267,14 +321,16 @@ func (s *GenkitMCPServer) ServeStdio() error {
 	return server.ServeStdio(s.mcpServer)
 }
 
-// Serve starts the MCP server with a custom transport
+// Serve starts the MCP server over stdio. It is the same as [GenkitMCPServer.ServeStdio]
+// and exists for compatibility: transport must be nil, and any other value
+// returns an error. To serve over HTTP, wrap [GenkitMCPServer.GetServer] in a
+// transport of the mcp-go server package, such as server.NewStreamableHTTPServer
+// or server.NewSSEServer.
 func (s *GenkitMCPServer) Serve(transport interface{}) error {
-	if err := s.setup(); err != nil {
-		return fmt.Errorf("setup failed: %w", err)
+	if transport != nil {
+		return fmt.Errorf("unsupported MCP transport %T: pass nil to serve over stdio, or wrap GetServer() in an mcp-go server transport for HTTP", transport)
 	}
-
-	// For now, only stdio is supported through the server.ServeStdio function
-	return server.ServeStdio(s.mcpServer)
+	return s.ServeStdio()
 }
 
 // Close shuts down the MCP server
@@ -283,8 +339,13 @@ func (s *GenkitMCPServer) Close() error {
 	return nil
 }
 
-// GetServer returns the underlying MCP server instance
+// GetServer returns the underlying MCP server instance, with the Genkit tools
+// and resources registered on it. It returns nil if they cannot be discovered.
 func (s *GenkitMCPServer) GetServer() *server.MCPServer {
+	if err := s.setup(); err != nil {
+		slog.Error("MCP server setup failed", "name", s.options.Name, "error", err)
+		return nil
+	}
 	return s.mcpServer
 }
 

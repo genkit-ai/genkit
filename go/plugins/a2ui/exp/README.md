@@ -5,16 +5,27 @@ is a transport-agnostic, JSON-based streaming UI protocol. An A2UI-enabled agent
 can stream not just prose, but rich, interactive UI **surfaces** that a client
 renders incrementally.
 
+> **Building with a coding agent? Install the Genkit Go skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-go
+> ```
+>
+> It teaches your agent the current Genkit Go APIs and common gotchas.
+> Source, manual install and skills for other languages:
+> [genkit-ai/skills](https://github.com/genkit-ai/skills).
+
 > Status: in preview. The package lives under `go/plugins/a2ui/exp` and its
 > APIs may change in any minor version release. Samples import it as `a2uix`.
 
 ## Design principle: one representation
 
 A2UI rides on its own part channel: a Genkit **data part** carrying the mime type
-`application/a2ui+json` whose `data` is an object `{ "envelopes": [...] }`
-wrapping an array of A2UI envelope messages. This maps 1:1 onto the A2A binding
-of the A2UI spec, so the same envelopes are byte-compatible with the JS plugin
-and the `@a2ui/*` renderers.
+`application/a2ui+json` whose `data` is the spec's `{ "messages": [...] }`
+payload wrapper around an array of A2UI envelope messages. This maps 1:1 onto
+the A2A binding of the A2UI spec, so the same envelopes are byte-compatible with
+the JS and Dart plugins and the `@a2ui/*` renderers. Parts written by earlier
+versions use `{ "envelopes": [...] }`; they are still read.
 
 ## Usage
 

@@ -14,14 +14,17 @@
  * limitations under the License.
  */
 
-import type { GenerateResponseChunkData, MessageData } from '@genkit-ai/ai';
+import {
+  generateMiddleware,
+  interrupt,
+  modelRef,
+  type GenerateResponseChunkData,
+  type MessageData,
+} from '@genkit-ai/ai';
 import { ModelAction } from '@genkit-ai/ai/model';
 import { Operation, z, type JSONSchema7 } from '@genkit-ai/core';
 import * as assert from 'assert';
 import { beforeEach, describe, it } from 'node:test';
-import { generateMiddleware } from '../../ai/src/generate/middleware';
-import { modelRef } from '../../ai/src/model';
-import { interrupt } from '../../ai/src/tool';
 import { dynamicResource, genkit, tool, type GenkitBeta } from '../src/beta';
 import {
   defineEchoModel,
@@ -241,8 +244,7 @@ describe('generate', () => {
           prompt: 'hi',
           model: 'blockingModel',
         });
-        for await (const chunk of stream) {
-          // nothing
+        for await (const _ of stream) {
         }
         await response;
       });
@@ -255,8 +257,7 @@ describe('generate', () => {
             prompt: 'hi',
             model: 'modelNotFound',
           });
-          for await (const chunk of stream) {
-            // nothing
+          for await (const _ of stream) {
           }
         },
         { status: 'NOT_FOUND' }
@@ -273,7 +274,7 @@ describe('generate', () => {
         });
         return response.text;
       });
-      const text = await flow();
+      await flow();
       assert.ok((model as any).__test__lastStreamingCallback);
     });
 
@@ -287,7 +288,7 @@ describe('generate', () => {
         });
         return response.text;
       });
-      const text = await flow();
+      await flow();
       assert.ok(!(model as any).__test__lastStreamingCallback);
     });
   });

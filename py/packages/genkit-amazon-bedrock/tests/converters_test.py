@@ -22,13 +22,12 @@ The expectations encode Bedrock wire-format truths, not incidental structure.
 import base64
 
 import pytest
-from genkit_amazon_bedrock.config import BedrockConfig
-from genkit_amazon_bedrock.converters import (
+from genkit_amazon_bedrock import BedrockConfig, cache_point_part
+from genkit_amazon_bedrock._converters import (
     REASONING_SIGNATURE_METADATA_KEY,
     REDACTED_CONTENT_METADATA_KEY,
     build_converse_request,
     build_inference_config,
-    cache_point_part,
     content_blocks_to_parts,
     map_finish_reason,
     normalize_config,
@@ -38,15 +37,8 @@ from genkit_amazon_bedrock.converters import (
     usage_from_response,
 )
 
-from genkit import (
-    FinishReason,
-    Message,
-    ModelRequest,
-    Part,
-    Role,
-    ToolDefinition,
-)
-from genkit.plugin_api import GenkitError, ModelConfig
+from genkit import FinishReason, GenkitError, Message, Part, Role
+from genkit.model import ModelConfig, ModelRequest, ToolDefinition
 
 PNG_BYTES = b'\x89PNG\r\n\x1a\nfakeimagedata'
 PNG_B64 = base64.b64encode(PNG_BYTES).decode()
@@ -577,9 +569,10 @@ def test_trailing_assistant_kept_under_tool_choice_none() -> None:
     assert 'toolConfig' not in kwargs
 
 
-def test_additional_model_request_fields_forwarded_verbatim() -> None:
+def test_extra_forwarded_as_additional_model_request_fields() -> None:
+    """`extra` reaches Converse as `additionalModelRequestFields`."""
     thinking = {'thinking': {'type': 'enabled', 'budget_tokens': 2048}}
-    request = user_text_request(config=BedrockConfig(additional_model_request_fields=thinking))
+    request = user_text_request(config=BedrockConfig(extra=thinking))
     kwargs = build_converse_request('amazon.nova-lite-v1:0', request)
     assert kwargs['additionalModelRequestFields'] == thinking
 
@@ -742,16 +735,6 @@ def test_tool_input_float_truncates_for_integer_schema() -> None:
     tool_request = parts[0].tool_request
     assert tool_request is not None
     assert tool_request.input == {'n': 7}
-
-
-def test_reasoning_text_block_becomes_reasoning_part_with_both_keys() -> None:
-    blocks = [{'reasoningContent': {'reasoningText': {'text': 'because', 'signature': 'sig'}}}]
-    parts = content_blocks_to_parts(blocks)
-    root = parts[0]
-    assert root.reasoning == 'because'
-    assert root.metadata is not None
-    assert root.metadata['signature'] == 'sig'
-    assert root.metadata[REASONING_SIGNATURE_METADATA_KEY] == 'sig'
 
 
 def test_redacted_content_block_becomes_reasoning_part() -> None:

@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
-import { context } from '@opentelemetry/api';
-import { logs, SeverityNumber } from '@opentelemetry/api-logs';
+import type { GenkitLogRecord } from './tracing/instrumentation-api.js';
+import { hasRecordLog } from './tracing/instrumentation-api.js';
+import { activeInstrumentations } from './tracing/instrumentation.js';
 
 const LOG_LEVELS = ['debug', 'info', 'warn', 'error'];
 
@@ -65,28 +66,7 @@ class Logger {
         return;
       }
 
-      const otelLogger = logs.getLogger('genkit-logger');
-      let severityNumber: SeverityNumber;
-      switch (level) {
-        case 'debug':
-          severityNumber = SeverityNumber.DEBUG;
-          break;
-        case 'info':
-          severityNumber = SeverityNumber.INFO;
-          break;
-        case 'warn':
-          severityNumber = SeverityNumber.WARN;
-          break;
-        case 'error':
-          severityNumber = SeverityNumber.ERROR;
-          break;
-        default:
-          severityNumber = SeverityNumber.UNSPECIFIED;
-          break;
-      }
-
-      let body;
-      const attributes: Record<string, any> = explicitAttributes || {};
+      let body: unknown;
       if (explicitBody !== undefined) {
         body = explicitBody;
       } else if (args.length === 1 && typeof args[0] === 'string') {
@@ -96,20 +76,19 @@ class Logger {
         body = util.format(...args);
       }
 
-      let activeContext;
-      try {
-        activeContext = context.active();
-      } catch (e) {
-        // No-op if @opentelemetry/api trace is uninitialized or missing right now
-      }
-
-      otelLogger.emit({
-        severityNumber,
-        severityText: level.toUpperCase(),
+      const record: GenkitLogRecord = {
+        severity: level as GenkitLogRecord['severity'],
         body,
-        attributes,
-        ...(activeContext ? { context: activeContext } : {}),
-      });
+        attributes: explicitAttributes || {},
+      };
+
+      // Fan out to any provider that records logs. Each attaches correlation
+      // from its own context source (OTel active context vs Genkit ALS).
+      for (const p of activeInstrumentations()) {
+        if (hasRecordLog(p)) {
+          p.recordLog(record);
+        }
+      }
     } catch (err) {
       // safe ignore
     }

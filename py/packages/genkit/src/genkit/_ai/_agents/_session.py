@@ -27,7 +27,7 @@ from pydantic import BaseModel
 from typing_extensions import TypeVar as TypeVarExt
 
 from genkit._core._error import GenkitError
-from genkit._core._loop_cache import _loop_local_client
+from genkit._core._loop_cache import loop_local_client
 from genkit._core._model import Artifact, Message, SessionSnapshot, SessionState
 from genkit._core._typing import (
     SnapshotStatus,
@@ -48,6 +48,7 @@ def reserve_snapshot_id() -> str:
 # Custom state is a Pydantic model, so StateT is bound to BaseModel; the Any
 # default covers schemaless (client-managed) sessions where custom is plain JSON.
 StateT = TypeVarExt('StateT', bound=BaseModel, default=Any)
+"""Type of a session's custom state: a Pydantic model, or `Any` for schemaless sessions."""
 SessionContextT = TypeVarExt('SessionContextT', default=Any)
 # A store only ever hands custom state back out (it's a phantom over the wire
 # format), so its parameter is covariant.
@@ -71,14 +72,14 @@ class SessionStoreLock:
         try:
             getter = STORE_LOCK_GETTERS.get(self)
             if getter is None:
-                getter = _loop_local_client(lambda: asyncio.Lock())
+                getter = loop_local_client(lambda: asyncio.Lock())
                 STORE_LOCK_GETTERS[self] = getter
             return getter()
         except TypeError:
             # Fallback for classes that disallow weak references
             getter = getattr(self, '_loop_lock_getter', None)
             if getter is None:
-                getter = _loop_local_client(lambda: asyncio.Lock())
+                getter = loop_local_client(lambda: asyncio.Lock())
                 object.__setattr__(self, '_loop_lock_getter', getter)
             return getter()
 

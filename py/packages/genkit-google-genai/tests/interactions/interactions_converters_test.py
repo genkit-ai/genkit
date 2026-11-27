@@ -21,7 +21,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 import pytest
-from genkit_google_genai._interactions.converters import (
+from genkit_google_genai._interactions._converters import (
     ensure_tool_ids,
     from_interaction,
     from_interaction_content,
@@ -40,13 +40,8 @@ from genkit_google_genai._interactions.converters import (
 from google.genai.interactions import Content, Interaction, Step, ThoughtStep, Usage
 from pydantic import BaseModel, TypeAdapter
 
-from genkit import (
-    GenkitError,
-    Part,
-    ToolRequest,
-    ToolResponse,
-)
-from genkit.model import Message, ToolDefinition
+from genkit import GenkitError, Message, Part
+from genkit.model import ToolDefinition, ToolRequest, ToolResponse
 
 ContentAdapter: TypeAdapter[Content] = TypeAdapter(Content)
 StepAdapter: TypeAdapter[Step] = TypeAdapter(Step)
@@ -182,8 +177,9 @@ class TestToInteractionRole:
         assert to_interaction_role('tool') == 'user'
 
     def test_system_raises(self) -> None:
-        with pytest.raises(ValueError, match='system_instruction'):
+        with pytest.raises(GenkitError, match='system_instruction') as raised:
             to_interaction_role('system')
+        assert raised.value.status == 'INVALID_ARGUMENT'
 
 
 class TestToInteractionTool:
@@ -212,8 +208,9 @@ class TestToInteractionContent:
         assert result == {'type': 'image', 'data': 'DATA', 'mime_type': 'image/png'}
 
     def test_image_data_missing_separator(self) -> None:
-        with pytest.raises(ValueError, match='missing payload separator'):
+        with pytest.raises(GenkitError, match='missing payload separator') as raised:
             to_interaction_content(Part.from_media('data:image/png;base64GARBAGE', content_type='image/png'))
+        assert raised.value.status == 'INVALID_ARGUMENT'
 
     def test_image_uri(self) -> None:
         result = to_interaction_content(Part.from_media('gs://bucket/image.png', content_type='image/png'))
@@ -228,8 +225,9 @@ class TestToInteractionContent:
         assert result == {'type': 'document', 'uri': 'gs://bucket/doc.pdf', 'mime_type': 'application/pdf'}
 
     def test_unsupported_media_raises(self) -> None:
-        with pytest.raises(ValueError, match='Unsupported media type'):
+        with pytest.raises(GenkitError, match='Unsupported media type') as raised:
             to_interaction_content(Part.from_media('https://example.com/x', content_type='text/plain'))
+        assert raised.value.status == 'INVALID_ARGUMENT'
 
 
 class TestToInteractionSteps:
@@ -271,8 +269,9 @@ class TestToInteractionSteps:
 
     def test_system_role_rejected(self) -> None:
         messages = [Message(role='system', content=[Part.from_text('be terse')])]
-        with pytest.raises(ValueError, match='system_instruction'):
+        with pytest.raises(GenkitError, match='system_instruction') as raised:
             to_interaction_steps(messages)
+        assert raised.value.status == 'INVALID_ARGUMENT'
 
     def test_code_execution_call_always_sends_python(self) -> None:
         messages = [
@@ -612,21 +611,24 @@ class TestFromInteractionStep:
         )
         assert result == []
 
-    def test_function_call_is_tool_request(self) -> None:
-        result = from_interaction_step(
-            StepAdapter.validate_python({
-                'type': 'function_call',
-                'id': 'c1',
-                'name': 'get_weather',
-                'arguments': {'city': 'Austin'},
-            })
-        )
-        root = result[0]
-        assert root.tool_request is not None
-        assert root.tool_request is not None
-        assert root.tool_request.name == 'get_weather'
-        assert root.tool_request.input == {'city': 'Austin'}
-        assert root.tool_request.ref == 'c1'
+    def test_function_call_is_tool_request_when_pending_and_custom_otherwise(self) -> None:
+        step = StepAdapter.validate_python({
+            'type': 'function_call',
+            'id': 'c1',
+            'name': 'get_weather',
+            'arguments': {'city': 'Austin'},
+        })
+        pending = from_interaction_step(step, is_pending=True)[0]
+        assert pending.tool_request is not None
+        assert pending.tool_request.name == 'get_weather'
+        assert pending.tool_request.input == {'city': 'Austin'}
+        assert pending.tool_request.ref == 'c1'
+
+        resolved = from_interaction_step(step)[0]
+        assert resolved.tool_request is None
+        assert resolved.custom == {
+            'serverFunctionCall': {'id': 'c1', 'name': 'get_weather', 'arguments': {'city': 'Austin'}}
+        }
 
     def test_function_result_is_custom_stash_not_tool_response(self) -> None:
         result = from_interaction_step(
@@ -737,42 +739,46 @@ class TestInboundFlattensToSingleModelMessage:
         }
         assert message.content[0].reasoning is not None
         assert message.content[1].text is not None
-        assert message.content[2].tool_request is not None
+        assert message.content[2].custom == {
+            'serverFunctionCall': {'id': 'c1', 'name': 'get_weather', 'arguments': {'city': 'Austin'}}
+        }
         assert message.content[0].reasoning == 'need a tool'
         assert message.content[1].text == 'checking'
-        assert message.content[2].tool_request.ref == 'c1'
 
     def test_already_resolved_tool_pair_stays_inside_model_message(self) -> None:
-        """A tape that already has function_result still flattens into one model turn."""
+        """A tape that already has function_result stashes both call and result as custom, never tool_request."""
         steps = [
             StepAdapter.validate_python({
                 'type': 'function_call',
                 'id': 'c1',
-                'name': 'get_weather',
-                'arguments': {'city': 'Austin'},
+                'name': 'write_to_file',
+                'arguments': {'path': 'hello.py'},
             }),
             StepAdapter.validate_python({
                 'type': 'function_result',
                 'call_id': 'c1',
-                'name': 'get_weather',
-                'result': {'temp': 92},
+                'name': 'write_to_file',
+                'result': {'ok': True},
             }),
             StepAdapter.validate_python({
                 'type': 'model_output',
-                'content': [{'type': 'text', 'text': '92F'}],
+                'content': [{'type': 'text', 'text': 'Wrote hello.py'}],
             }),
         ]
-        parts = parts_from_steps(steps)
-        assert parts[0].tool_request is not None
+        parts = parts_from_steps(steps, status='requires_action')
+        assert parts[0].tool_request is None
+        assert parts[0].custom == {
+            'serverFunctionCall': {'id': 'c1', 'name': 'write_to_file', 'arguments': {'path': 'hello.py'}}
+        }
         assert parts[1].custom is not None
         assert parts[2].text is not None
         stash = parts[1].custom['serverFunctionResult']
-        assert stash['name'] == 'get_weather'
-        assert stash['result'] == {'temp': 92}
+        assert stash['name'] == 'write_to_file'
+        assert stash['result'] == {'ok': True}
 
 
 class TestFunctionCallRoundTrip:
-    """The bug we hit: function_call must be ToolRequestPart, not CustomPart."""
+    """Pending function_call steps use ToolRequestPart; server-resolved ones round-trip via serverFunctionCall."""
 
     def test_outbound_then_inbound_preserves_tool_request(self) -> None:
         messages = [
@@ -783,9 +789,8 @@ class TestFunctionCallRoundTrip:
         ]
         steps = to_interaction_steps(messages)
         assert steps == [{'type': 'function_call', 'name': 'get_weather', 'arguments': {'city': 'Austin'}, 'id': 'c1'}]
-        inbound = from_interaction_step(StepAdapter.validate_python(steps[0]))
+        inbound = from_interaction_step(StepAdapter.validate_python(steps[0]), is_pending=True)
         root = inbound[0]
-        assert root.tool_request is not None
         assert root.tool_request is not None
         assert root.tool_request.name == 'get_weather'
         assert root.tool_request.input == {'city': 'Austin'}
@@ -797,11 +802,36 @@ class TestFunctionCallRoundTrip:
             'id': 'c1',
             'name': 'get_weather',
             'arguments': {'city': 'Austin'},
+            'signature': 'sig-call',
         })
-        part = from_interaction_step(step)[0]
-        assert part.tool_request is not None
-        again = to_interaction_steps([Message(role='model', content=[part])])
-        assert again == [{'type': 'function_call', 'name': 'get_weather', 'arguments': {'city': 'Austin'}, 'id': 'c1'}]
+        pending_part = from_interaction_step(step, is_pending=True)[0]
+        assert pending_part.tool_request is not None
+        assert pending_part.metadata == {'thoughtSignature': 'sig-call'}
+        assert to_interaction_steps([Message(role='model', content=[pending_part])]) == [
+            {
+                'type': 'function_call',
+                'name': 'get_weather',
+                'arguments': {'city': 'Austin'},
+                'id': 'c1',
+                'signature': 'sig-call',
+            }
+        ]
+
+        server_part = from_interaction_step(step, is_pending=False)[0]
+        assert server_part.tool_request is None
+        assert server_part.custom == {
+            'serverFunctionCall': {'id': 'c1', 'name': 'get_weather', 'arguments': {'city': 'Austin'}}
+        }
+        assert server_part.metadata == {'thoughtSignature': 'sig-call'}
+        assert to_interaction_steps([Message(role='model', content=[server_part])]) == [
+            {
+                'type': 'function_call',
+                'name': 'get_weather',
+                'arguments': {'city': 'Austin'},
+                'id': 'c1',
+                'signature': 'sig-call',
+            }
+        ]
 
     def test_thought_round_trip_keeps_signature(self) -> None:
         messages = [
@@ -952,8 +982,104 @@ class TestFromInteractionStatusMapping:
 
 class TestFromInteractionSync:
     def test_failed_raises(self) -> None:
-        with pytest.raises(ValueError, match='Interaction failed'):
+        with pytest.raises(GenkitError, match='Interaction failed') as raised:
             from_interaction_sync(Interaction.model_validate({'status': 'failed'}))
+        assert raised.value.status == 'UNKNOWN'
+        assert str(raised.value) == 'UNKNOWN: Interaction failed'
+
+    @pytest.mark.parametrize(
+        ('code', 'status'),
+        [
+            ('RESOURCE_EXHAUSTED', 'RESOURCE_EXHAUSTED'),
+            ('resource_exhausted', 'RESOURCE_EXHAUSTED'),
+            ('429', 'RESOURCE_EXHAUSTED'),
+            ('503', 'UNAVAILABLE'),
+            ('3', 'INVALID_ARGUMENT'),
+        ],
+    )
+    def test_failed_with_provider_code_is_classified(self, code: str, status: str) -> None:
+        """A quota failure the server reported keeps its status so retry and fallback can act on it."""
+        interaction = Interaction.model_validate({
+            'id': 'ix-1',
+            'status': 'failed',
+            'errors': [{'code': code, 'message': 'Quota exceeded for lyria'}],
+        })
+        with pytest.raises(GenkitError, match='Quota exceeded for lyria') as raised:
+            from_interaction_sync(interaction)
+        assert raised.value.status == status
+        assert isinstance(raised.value.__cause__, ValueError)
+
+    def test_failed_step_error_grpc_code_is_classified(self) -> None:
+        interaction = Interaction.model_validate({
+            'id': 'ix-1',
+            'status': 'failed',
+            'steps': [{'type': 'model_output', 'error': {'code': 8, 'message': 'out of quota'}}],
+        })
+        with pytest.raises(GenkitError, match='out of quota') as raised:
+            from_interaction_sync(interaction)
+        assert raised.value.status == 'RESOURCE_EXHAUSTED'
+
+    @pytest.mark.parametrize('code', ['UNKNOWN', 'OK', '0', '2', '200', '999', 'SOMETHING_NEW', ''])
+    def test_failed_with_unusable_code_is_unknown(self, code: str) -> None:
+        """No real status from the server: UNKNOWN, which default Retry and Fallback leave alone."""
+        interaction = Interaction.model_validate({
+            'id': 'ix-1',
+            'status': 'failed',
+            'errors': [{'code': code, 'message': 'model crashed'}],
+        })
+        with pytest.raises(GenkitError) as raised:
+            from_interaction_sync(interaction)
+        assert raised.value.status == 'UNKNOWN'
+        assert str(raised.value) == 'UNKNOWN: model crashed'
+
+    def test_queued_is_failed_precondition(self) -> None:
+        with pytest.raises(GenkitError, match='still running') as raised:
+            from_interaction_sync(Interaction.model_validate({'id': '123', 'status': 'queued'}))
+        assert raised.value.status == 'FAILED_PRECONDITION'
+
+    def test_requires_action_returns_pending_tool_requests_and_skips_resolved_sandbox_calls(self) -> None:
+        interaction = Interaction.model_validate({
+            'id': 'v1_abc123',
+            'status': 'requires_action',
+            'environment_id': 'env-123',
+            'steps': [
+                {
+                    'type': 'function_call',
+                    'id': 'sandbox-1',
+                    'name': 'write_to_file',
+                    'arguments': {'path': 'a.txt'},
+                },
+                {
+                    'type': 'function_result',
+                    'call_id': 'sandbox-1',
+                    'name': 'write_to_file',
+                    'result': {'ok': True},
+                },
+                {
+                    'type': 'function_call',
+                    'id': 'call-1',
+                    'name': 'lookup_allergens',
+                    'arguments': {'dish': 'ramen'},
+                },
+            ],
+        })
+        result = from_interaction_sync(interaction)
+        assert result.finish_reason == 'stop'
+        assert result.message is not None
+        assert result.message.metadata == {
+            'interactionId': 'v1_abc123',
+            'environmentId': 'env-123',
+            'interactionStatus': 'requires_action',
+        }
+        assert result.message.content[0].tool_request is None
+        assert result.message.content[0].custom == {
+            'serverFunctionCall': {'id': 'sandbox-1', 'name': 'write_to_file', 'arguments': {'path': 'a.txt'}}
+        }
+        assert result.message.content[1].custom is not None
+        assert result.message.content[2].tool_request is not None
+        assert result.message.content[2].tool_request.name == 'lookup_allergens'
+        assert result.message.content[2].tool_request.ref == 'call-1'
+        assert result.message.content[2].tool_request.input == {'dish': 'ramen'}
 
     def test_cancelled(self) -> None:
         result = from_interaction_sync(Interaction.model_validate({'id': '123', 'status': 'cancelled'}))
@@ -989,8 +1115,9 @@ class TestFromInteractionSync:
         assert result.finish_message == 'Interaction exceeded its budget'
 
     def test_in_progress_raises(self) -> None:
-        with pytest.raises(ValueError, match='still running'):
+        with pytest.raises(GenkitError, match='still running') as raised:
             from_interaction_sync(Interaction.model_validate({'id': '123', 'status': 'in_progress'}))
+        assert raised.value.status == 'FAILED_PRECONDITION'
 
     def test_unknown_status_raises(self) -> None:
         with pytest.raises(ValueError, match='Unknown interaction status'):

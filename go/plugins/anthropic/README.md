@@ -4,6 +4,16 @@ This plugin provides Genkit support for Claude models through Anthropic's
 native Messages API, using the official Go SDK,
 `github.com/anthropics/anthropic-sdk-go`.
 
+> **Building with a coding agent? Install the Genkit Go skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-go
+> ```
+>
+> It teaches your agent the current Genkit Go APIs and common gotchas.
+> Source, manual install and skills for other languages:
+> [genkit-ai/skills](https://github.com/genkit-ai/skills).
+
 Unlike the OpenAI-compatible `compat_oai/anthropic` plugin, this one speaks
 the Messages API itself: thinking content comes back as Genkit reasoning
 parts with their signatures preserved across turns, structured output uses
@@ -33,7 +43,7 @@ ctx := context.Background()
 g := genkit.Init(
     ctx,
     genkit.WithPlugins(&anthropic.Anthropic{}),
-    genkit.WithDefaultModel("anthropic/claude-sonnet-4-5"),
+    genkit.WithDefaultModel("anthropic/claude-sonnet-5"),
 )
 
 response, err := genkit.Generate(ctx, g, ai.WithPrompt("Explain constitutional AI."))
@@ -49,7 +59,7 @@ Init registers nothing: every Claude model resolves on first use, and the
 plugin lists Anthropic's current catalog through the models API, cached for an
 hour. Curated entries describe the current families (`claude-fable-5`,
 `claude-opus-5`, `claude-sonnet-5`, the Claude 4 line, `claude-haiku-4-5`),
-dated snapshots such as `claude-sonnet-4-5-20250929` resolve to the same
+dated snapshots such as `claude-opus-4-5-20251101` resolve to the same
 descriptions, and the `Models` field describes or corrects any model, most
 often one released after this plugin:
 

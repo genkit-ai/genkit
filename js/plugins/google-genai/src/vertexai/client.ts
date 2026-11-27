@@ -19,20 +19,30 @@ import { logger } from 'genkit/logging';
 import { runInNewSpan } from 'genkit/tracing';
 import { GoogleAuth } from 'google-auth-library';
 import {
+  CreateInteractionRequest,
+  GeminiInteraction,
+  InteractionStreamResult,
+} from '../common/interaction-types.js';
+import { isObject } from '../common/types.js';
+import {
+  INTERACTIONS_API_REVISION,
   buildTraceMetadataInput,
   extractErrMsg,
   getGenkitClientHeader,
+  httpStatusToGenkitStatus,
+  interactionErrorCodeToGenkitStatus,
+  interactionProcessStream,
+  isInteractionUrl,
   parseRetryAfterMs,
   processStream,
+  withoutHeaders,
 } from '../common/utils.js';
-import {
-  CreateInteractionRequest,
-  GeminiInteraction,
-} from './interaction-types.js';
 import {
   ClientOptions,
   EmbedContentRequest,
   EmbedContentResponse,
+  EmbedPredictRequest,
+  EmbedPredictResponse,
   GenerateContentRequest,
   GenerateContentResponse,
   GenerateContentStreamResult,
@@ -78,13 +88,14 @@ async function maybeTraceRequest<T>(
 
   if (traceOptions.clientOptions?.experimental_debugTraces) {
     return tracingHooks.runInNewSpan(
-      { metadata: { name: 'httpRequest' } },
+      {
+        metadata: {
+          name: 'httpRequest',
+          // Seed input up front so the realtime "pending" span export carries it.
+          input: buildTraceMetadataInput(url, fetchOptions, traceOptions),
+        },
+      },
       async (metadata) => {
-        metadata.input = buildTraceMetadataInput(
-          url,
-          fetchOptions,
-          traceOptions
-        );
         const processedResponse = await call();
 
         if (traceOptions.streaming) {
@@ -117,13 +128,29 @@ export async function listModels(
   return modelResponse.publisherModels;
 }
 
+/**
+ * Resource path of the Interactions API. Express mode has no project, but
+ * still needs the location: `v1beta1/locations/global/interactions`.
+ * `subPath` is appended for a single interaction (e.g. `<id>/cancel`).
+ */
+function getInteractionsResourcePath(
+  clientOptions: ClientOptions,
+  subPath?: string
+): string {
+  const base =
+    clientOptions.kind == 'express'
+      ? 'locations/global/interactions'
+      : 'interactions';
+  return subPath ? `${base}/${subPath}` : base;
+}
+
 export async function createInteraction(
   createInteractionRequest: CreateInteractionRequest,
   clientOptions: ClientOptions
 ): Promise<GeminiInteraction> {
   const url = getVertexAIUrl({
     includeProjectAndLocation: true,
-    resourcePath: `interactions`,
+    resourcePath: getInteractionsResourcePath(clientOptions),
     clientOptions,
   });
 
@@ -131,10 +158,91 @@ export async function createInteraction(
     method: 'POST',
     clientOptions,
     body: JSON.stringify(createInteractionRequest),
+    isInteraction: true,
   });
 
   return maybeTraceRequest<GeminiInteraction>(url, fetchOptions, {
     request: createInteractionRequest,
+    clientOptions,
+  });
+}
+
+export async function createInteractionStream(
+  createInteractionRequest: CreateInteractionRequest,
+  clientOptions: ClientOptions
+): Promise<InteractionStreamResult> {
+  const url = getVertexAIUrl({
+    includeProjectAndLocation: true,
+    resourcePath: getInteractionsResourcePath(clientOptions),
+    clientOptions,
+  });
+
+  const fetchOptions = await getFetchOptions({
+    method: 'POST',
+    clientOptions,
+    body: JSON.stringify(createInteractionRequest),
+    isInteraction: true,
+  });
+
+  return maybeTraceRequest<InteractionStreamResult>(url, fetchOptions, {
+    request: createInteractionRequest,
+    streaming: true,
+    clientOptions,
+    processFn: async (response) => {
+      return interactionProcessStream(response);
+    },
+  });
+}
+
+/**
+ * Gets an interaction by ID (used to poll background interactions, e.g.
+ * Deep Research).
+ */
+export async function getInteraction(
+  interactionId: string,
+  clientOptions: ClientOptions
+): Promise<GeminiInteraction> {
+  const url = getVertexAIUrl({
+    includeProjectAndLocation: true,
+    resourcePath: getInteractionsResourcePath(clientOptions, interactionId),
+    clientOptions,
+  });
+
+  const fetchOptions = await getFetchOptions({
+    method: 'GET',
+    clientOptions,
+    isInteraction: true,
+  });
+
+  return maybeTraceRequest<GeminiInteraction>(url, fetchOptions, {
+    clientOptions,
+  });
+}
+
+/**
+ * Cancels a background interaction that is still in progress. The platform
+ * returns the interaction with `status: 'cancelled'`.
+ */
+export async function cancelInteraction(
+  interactionId: string,
+  clientOptions: ClientOptions
+): Promise<GeminiInteraction> {
+  const url = getVertexAIUrl({
+    includeProjectAndLocation: true,
+    resourcePath: getInteractionsResourcePath(
+      clientOptions,
+      `${interactionId}/cancel`
+    ),
+    clientOptions,
+  });
+
+  const fetchOptions = await getFetchOptions({
+    method: 'POST',
+    clientOptions,
+    isInteraction: true,
+  });
+
+  return maybeTraceRequest<GeminiInteraction>(url, fetchOptions, {
     clientOptions,
   });
 }
@@ -238,16 +346,48 @@ async function internalPredict<T>(
   });
 }
 
+/**
+ * Calls the `:predict` embeddings method (gemini-embedding-001,
+ * text-embedding-*, multimodalembedding@001).
+ */
+export async function embedPredict(
+  model: string,
+  embedPredictRequest: EmbedPredictRequest,
+  clientOptions: ClientOptions
+): Promise<EmbedPredictResponse> {
+  return internalPredict<EmbedPredictResponse>(
+    model,
+    embedPredictRequest,
+    clientOptions
+  );
+}
+
+/**
+ * Calls the `:embedContent` method (gemini-embedding-2).
+ */
 export async function embedContent(
   model: string,
   embedContentRequest: EmbedContentRequest,
   clientOptions: ClientOptions
 ): Promise<EmbedContentResponse> {
-  return internalPredict<EmbedContentResponse>(
+  const url = getVertexAIUrl({
+    includeProjectAndLocation: true,
+    resourcePath: `publishers/google/models/${model}`,
+    resourceMethod: 'embedContent',
+    clientOptions,
+  });
+
+  const fetchOptions = await getFetchOptions({
+    method: 'POST',
+    clientOptions,
+    body: JSON.stringify(embedContentRequest),
+  });
+
+  return maybeTraceRequest<EmbedContentResponse>(url, fetchOptions, {
     model,
-    embedContentRequest,
-    clientOptions
-  );
+    request: embedContentRequest,
+    clientOptions,
+  });
 }
 
 export async function imagenPredict(
@@ -377,10 +517,11 @@ async function getFetchOptions(params: {
   method: 'POST' | 'GET';
   body?: string;
   clientOptions: ClientOptions;
+  isInteraction?: boolean;
 }) {
   const fetchOptions: RequestInit = {
     method: params.method,
-    headers: await getHeaders(params.clientOptions),
+    headers: await getHeaders(params.clientOptions, params.isInteraction),
     redirect: 'manual',
   };
   if (params.body) {
@@ -410,8 +551,16 @@ function getAbortSignal(clientOptions: ClientOptions): AbortSignal | undefined {
   return undefined;
 }
 
-async function getHeaders(clientOptions: ClientOptions): Promise<HeadersInit> {
-  const customHeaders = clientOptions.customHeaders || {};
+async function getHeaders(
+  clientOptions: ClientOptions,
+  isInteraction?: boolean
+): Promise<HeadersInit> {
+  // The Interactions converters only understand INTERACTIONS_API_REVISION's
+  // schema, so custom headers can't change it (in any letter case).
+  const customHeaders = withoutHeaders(
+    clientOptions.customHeaders,
+    isInteraction ? ['Api-Revision'] : []
+  );
   if (clientOptions.kind == 'express') {
     const headers: HeadersInit = {
       'x-goog-api-key': calculateApiKey(clientOptions.apiKey, undefined),
@@ -420,6 +569,9 @@ async function getHeaders(clientOptions: ClientOptions): Promise<HeadersInit> {
       'User-Agent': getGenkitClientHeader(),
       ...customHeaders,
     };
+    if (isInteraction) {
+      headers['Api-Revision'] = INTERACTIONS_API_REVISION;
+    }
     return headers;
   } else {
     const token = await getToken(clientOptions.authClient);
@@ -433,6 +585,9 @@ async function getHeaders(clientOptions: ClientOptions): Promise<HeadersInit> {
     };
     if (clientOptions.apiKey) {
       headers['x-goog-api-key'] = clientOptions.apiKey;
+    }
+    if (isInteraction) {
+      headers['Api-Revision'] = INTERACTIONS_API_REVISION;
     }
     return headers;
   }
@@ -492,20 +647,18 @@ async function makeRequest(
       } catch (e) {
         // Not JSON or expected format, use the raw text
       }
-      let status: StatusName = 'UNKNOWN';
-      switch (response.status) {
-        case 429:
-          status = 'RESOURCE_EXHAUSTED';
-          break;
-        case 400:
-          status = 'INVALID_ARGUMENT';
-          break;
-        case 500:
-          status = 'INTERNAL';
-          break;
-        case 503:
-          status = 'UNAVAILABLE';
-          break;
+      let status: StatusName = httpStatusToGenkitStatus(response.status);
+      // Interactions API errors carry a specific `error.code` (e.g. `safety`,
+      // `model_not_found`, `quota_exceeded`) that is more precise than the
+      // HTTP status, so prefer it when recognized.
+      if (isInteractionUrl(url)) {
+        const apiError = isObject(errorDetail) ? errorDetail.error : undefined;
+        const codeStatus = interactionErrorCodeToGenkitStatus(
+          isObject(apiError) ? apiError.code : undefined
+        );
+        if (codeStatus) {
+          status = codeStatus;
+        }
       }
       // Capture Retry-After header for retry middleware to use
       const retryAfterHeader = response.headers.get('retry-after');

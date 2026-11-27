@@ -55,3 +55,13 @@ export function toModelName(name: string, prefix?: string): string {
     return maybePluginRef;
   }
 }
+
+/**
+ * Looks up a dynamic string key in a known-models map while preserving its value type.
+ */
+export function lookup<T extends object>(
+  m: T,
+  k: string
+): T[keyof T] | undefined {
+  return (m as Record<string, T[keyof T] | undefined>)[k];
+}

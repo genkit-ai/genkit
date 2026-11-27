@@ -21,15 +21,11 @@ from collections.abc import Callable
 from typing import Any
 
 import pytest
-from genkit_openai.typing import OpenAIConfig
+from genkit_openai._typing import OpenAIConfig
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 
-from genkit import (
-    Message,
-    ModelRequest,
-    Part,
-    Role,
-)
+from genkit import Message, Part, Role
+from genkit.model import ModelRequest
 
 
 @pytest.fixture
@@ -47,8 +43,8 @@ def sample_request() -> ModelRequest:
             model='gpt-4',
             top_p=0.9,
             temperature=0.7,
-            stop=['stop'],
-            max_tokens=100,
+            stop_sequences=['stop'],
+            max_output_tokens=100,
         ),
     )
 

@@ -25,17 +25,17 @@ agents that build up a workspace of documents. Requires GEMINI_API_KEY.
 from __future__ import annotations
 
 from genkit_google_genai import GoogleAI
-from genkit_middleware import Artifacts, Middleware
+from genkit_middleware.exp import Artifacts
 
 from genkit.exp import Genkit
 from genkit.exp.agent import InMemorySessionStore
 
-ai = Genkit(plugins=[GoogleAI(), Middleware()])
+ai = Genkit(plugins=[GoogleAI()])
 store = InMemorySessionStore()
 
 agent = ai.define_agent(
     name='workspaceAgent',
-    model=GoogleAI.gemini_model('gemini-flash-latest'),
+    model=GoogleAI.gemini('gemini-flash-latest'),
     use=[Artifacts()],
     store=store,
 )

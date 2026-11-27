@@ -154,6 +154,11 @@ var (
 	}
 )
 
+// mediaTypes are the media DashScope's compatible mode reads in the form the
+// plugin sends. Its input_audio data is a data URI, not the bare base64 OpenAI
+// takes, and files are not documented.
+var mediaTypes = []string{"image/*"}
+
 // supportedModels curates capabilities for well-known Qwen models. It is not
 // the set of usable models: any Qwen model resolves on demand and takes
 // [dynamicModelOptions], so an ID absent here still works. Dated snapshots are
@@ -296,6 +301,7 @@ func (d *DashScope) Init(ctx context.Context) []api.Action {
 	opts = append(opts, d.Opts...)
 
 	d.openAICompatible.Provider = provider
+	d.openAICompatible.MediaTypes = mediaTypes
 	d.openAICompatible.Opts = opts
 	compatActions := d.openAICompatible.Init(ctx)
 

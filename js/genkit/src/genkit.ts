@@ -102,8 +102,8 @@ import {
   defineSchema,
   isAction,
   isBackgroundAction,
-  isDevEnv,
   registerBackgroundAction,
+  resolveReflectionConfig,
   setClientHeader,
   type Action,
   type ActionContext,
@@ -157,6 +157,15 @@ export interface GenkitOptions {
   name?: string;
   /** Additional attribution information to include in the x-goog-api-client header. */
   clientHeader?: string;
+  /**
+   * Exact port for the reflection API; startup fails if it is taken. `0`
+   * lets the OS pick. When unset, probes upward from 3100.
+   * `GENKIT_REFLECTION_PORT` overrides this.
+   *
+   * Does not turn the reflection API on: it runs under `GENKIT_ENV=dev` or
+   * with `GENKIT_REFLECTION_ENABLED=true`.
+   */
+  reflectionPort?: number;
 }
 
 /**
@@ -188,12 +197,30 @@ export class Genkit extends GenkitAI implements HasRegistry {
       this.registry.context = this.options.context;
     }
     this.configure();
-    if (isDevEnv() && !disableReflectionApi) {
+    // The reflection API runs under GENKIT_ENV=dev, or in any environment with
+    // GENKIT_REFLECTION_ENABLED=true. Resolving here (rather than only inside
+    // the server) keeps an invalid setting a constructor-time error.
+    const reflectionConfig = resolveReflectionConfig(process.env, {
+      port: this.options.reflectionPort,
+    });
+    const reflectionRequested =
+      reflectionConfig.kind === 'v1' || reflectionConfig.kind === 'v2';
+    if (reflectionRequested && !disableReflectionApi) {
       this.reflectionServer = new ReflectionServer(this.registry, {
         configuredEnvs: ['dev'],
         name: this.options.name,
+        port: this.options.reflectionPort,
       });
-      this.reflectionServer.start().catch((e) => logger.error);
+      this.reflectionServer.start().catch((e) => {
+        // Rethrown rather than logged: a reflection server that was asked for
+        // but cannot start must not degrade silently. start() is async, so
+        // this surfaces as an unhandled rejection, which the host app can
+        // observe and which crashes the process by default.
+        throw new GenkitError({
+          status: 'FAILED_PRECONDITION',
+          message: `Reflection server failed to start: ${e instanceof Error ? e.message : e}`,
+        });
+      });
     }
     if (options?.clientHeader) {
       setClientHeader(options?.clientHeader);
@@ -202,6 +229,20 @@ export class Genkit extends GenkitAI implements HasRegistry {
 
   /**
    * Defines and registers a flow function.
+   *
+   * @example
+   * ```ts
+   * const greetFlow = ai.defineFlow(
+   *   {
+   *     name: 'greetFlow',
+   *     inputSchema: z.object({ name: z.string() }),
+   *     outputSchema: z.string(),
+   *   },
+   *   async ({ name }) => `Hello, ${name}!`
+   * );
+   *
+   * const greeting = await greetFlow({ name: 'world' });
+   * ```
    */
   defineFlow<
     I extends z.ZodTypeAny = z.ZodTypeAny,
@@ -548,8 +589,8 @@ export class Genkit extends GenkitAI implements HasRegistry {
    */
   defineEvaluator<
     DataPoint extends typeof BaseDataPointSchema = typeof BaseDataPointSchema,
-    EvalDataPoint extends
-      typeof BaseEvalDataPointSchema = typeof BaseEvalDataPointSchema,
+    EvalDataPoint extends typeof BaseEvalDataPointSchema =
+      typeof BaseEvalDataPointSchema,
     EvaluatorOptions extends z.ZodTypeAny = z.ZodTypeAny,
   >(
     options: {
@@ -760,6 +801,9 @@ function registerActionV2(
         message: 'Action type is missing for ' + resolvedAction.__action.name,
       });
     }
+    // tool()/resource() mark actions as dynamic so generate() registers them per call.
+    // Once a plugin registers them they're no longer dynamic (mirrors defineTool).
+    delete resolvedAction.__action.metadata?.dynamic;
     registry.registerAction(
       resolvedAction.__action.actionType,
       resolvedAction,
@@ -778,6 +822,21 @@ function registerActionV2(
  *
  * This will create a new Genkit registry, register the provided plugins, stores, and other configuration. This
  * should be called before any flows are registered.
+ *
+ * @example
+ * ```ts
+ * import { genkit } from 'genkit';
+ * import { googleAI } from '@genkit-ai/google-genai';
+ *
+ * const ai = genkit({
+ *   plugins: [googleAI()],
+ * });
+ *
+ * const { text } = await ai.generate({
+ *   model: googleAI.model('gemini-flash-latest'),
+ *   prompt: 'Why is Genkit awesome?',
+ * });
+ * ```
  */
 export function genkit(options: GenkitOptions): Genkit {
   return new Genkit(options);

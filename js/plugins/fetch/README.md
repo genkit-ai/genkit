@@ -2,6 +2,16 @@
 
 This plugin provides utilities for exposing Genkit actions (flows, models, etc.) over the **Web Fetch API** (`Request` / `Response`). Use it with any runtime or framework that supports the standard Fetch API (such as Hono, Bun, Cloudflare Workers, Deno, Node (18+), Vercel Edge, Netlify Edge, Elysia, SvelteKit, etc). Express-like API: pass the action first, then call the returned handler with the request.
 
+> **Building with a coding agent? Install the Genkit JS skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-js
+> ```
+>
+> It teaches your agent the current Genkit JS APIs and common gotchas.
+> Source, manual install and skills for other languages:
+> [genkit-ai/skills](https://github.com/genkit-ai/skills).
+
 No framework-specific dependencies; only `genkit` and the standard Web APIs.
 
 ## Installation
@@ -20,7 +30,7 @@ import { Hono } from 'hono';
 
 const simpleFlow = ai.defineFlow('simpleFlow', async (input, { sendChunk }) => {
   const { text } = await ai.generate({
-    model: googleAI.model('gemini-2.0-flash'),
+    model: googleAI.model('gemini-flash-latest'),
     prompt: input,
     onChunk: (c) => sendChunk(c.text),
   });
@@ -35,7 +45,7 @@ For a model, resolve it from the plugin then pass to `fetchHandler`:
 
 ```ts
 const gai = googleAI();
-const model = await gai.model('gemini-2.0-flash');
+const model = await gai.model('gemini-flash-latest');
 app.post('/models/gemini-flash', (c) => fetchHandler(model)(c.req.raw));
 ```
 

@@ -22,9 +22,13 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
+	"sync"
 	"testing"
 
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 // TODO: add tests that compare tracing data saved to disk with goldens.
@@ -137,6 +141,116 @@ func TestSpanMetadataInit(t *testing.T) {
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("\ngot  %v\nwant %v", got, want)
+	}
+}
+
+func TestSpanMetadataInlineMedia(t *testing.T) {
+	media := func(url string) map[string]any {
+		return map[string]any{"media": map[string]string{"url": url}}
+	}
+	tests := []struct {
+		env  string
+		want map[string]string
+	}{
+		{
+			env: "prod",
+			want: map[string]string{
+				"genkit:input":  `{"media":{"url":"data:image/png;base64,[redacted]"}}`,
+				"genkit:init":   `{"media":{"url":"data:image/png;base64,[redacted]"}}`,
+				"genkit:output": `{"media":{"url":"data:image/png;base64,[redacted]"}}`,
+			},
+		},
+		{
+			// The Dev UI renders media from these attributes.
+			env: "dev",
+			want: map[string]string{
+				"genkit:input":  `{"media":{"url":"data:image/png;base64,input-bytes"}}`,
+				"genkit:init":   `{"media":{"url":"data:image/png;base64,init-bytes"}}`,
+				"genkit:output": `{"media":{"url":"data:image/png;base64,output-bytes"}}`,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.env, func(t *testing.T) {
+			t.Setenv("GENKIT_ENV", tt.env)
+			// Fresh per case: encodings are cached on the span, and the
+			// environment never changes mid-run outside tests.
+			sm := &spanMetadata{
+				Input:  media("data:image/png;base64,input-bytes"),
+				Init:   media("data:image/png;base64,init-bytes"),
+				Output: media("data:image/png;base64,output-bytes"),
+			}
+			for _, kv := range append(sm.attributes(), sm.inputAttributes()...) {
+				want, ok := tt.want[string(kv.Key)]
+				if !ok {
+					continue
+				}
+				if got := kv.Value.AsString(); got != want {
+					t.Errorf("%s = %s, want %s", kv.Key, got, want)
+				}
+			}
+		})
+	}
+}
+
+func TestRedactInlineMedia(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "data URL keeps header and field order",
+			in:   `{"url":"data:image/png;base64,AAAA","contentType":"image/png"}`,
+			want: `{"url":"data:image/png;base64,[redacted]","contentType":"image/png"}`,
+		},
+		{
+			name: "every data URL in arrays",
+			in:   `["data:image/png;base64,AAAA",1,"data:audio/wav;base64,BBBB"]`,
+			want: `["data:image/png;base64,[redacted]",1,"data:audio/wav;base64,[redacted]"]`,
+		},
+		{
+			name: "header is case-insensitive",
+			in:   `"DATA:image/png;BASE64,AAAA"`,
+			want: `"DATA:image/png;BASE64,[redacted]"`,
+		},
+		{
+			name: "header with parameters",
+			in:   `"data:text/plain;charset=utf-8;base64,AAAA"`,
+			want: `"data:text/plain;charset=utf-8;base64,[redacted]"`,
+		},
+		{
+			name: "escaped quote does not end a string",
+			in:   `{"a":"x\"data:image/png;base64,AAAA","b":"data:image/png;base64,BBBB"}`,
+			want: `{"a":"x\"data:image/png;base64,AAAA","b":"data:image/png;base64,[redacted]"}`,
+		},
+		{
+			name: "remote URL",
+			in:   `{"url":"https://example.com/image.png"}`,
+			want: `{"url":"https://example.com/image.png"}`,
+		},
+		{
+			name: "data URL inside text",
+			in:   `"see data:image/png;base64,AAAA"`,
+			want: `"see data:image/png;base64,AAAA"`,
+		},
+		{
+			name: "prose with a space in the header",
+			in:   `"data: see notes;base64, then decode"`,
+			want: `"data: see notes;base64, then decode"`,
+		},
+		{
+			name: "data URL without base64",
+			in:   `"data:text/plain,hello"`,
+			want: `"data:text/plain,hello"`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := redactInlineMedia(tt.in); got != tt.want {
+				t.Errorf("redactInlineMedia(%s) = %s, want %s", tt.in, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -542,6 +656,170 @@ func TestIsFailureSourceOnError(t *testing.T) {
 	// on the span via span.SetAttributes() during error handling
 	if err == nil {
 		t.Fatal("Expected error to be returned")
+	}
+}
+
+// TestIsFailureSourceOnlyOnOriginatingSpan verifies that a failure is attributed
+// to the span where the error originates rather than to every span that
+// propagates it, while all of them still report the error and receive it
+// unchanged.
+func TestIsFailureSourceOnlyOnOriginatingSpan(t *testing.T) {
+	ctx := context.Background()
+	boom := errors.New("boom")
+	recorder := tracetest.NewSpanRecorder()
+	tp := TracerProvider()
+	tp.RegisterSpanProcessor(recorder)
+	t.Cleanup(func() { tp.UnregisterSpanProcessor(recorder) })
+
+	var outerSM, middleSM, innerSM *spanMetadata
+
+	_, err := RunInNewSpan(ctx, &SpanMetadata{Name: "outer", Type: "action", Subtype: "flow"}, "in",
+		func(ctx context.Context, in string) (string, error) {
+			outerSM = spanMetaKey.FromContext(ctx)
+			return RunInNewSpan(ctx, &SpanMetadata{Name: "middle", Type: "action"}, in,
+				func(ctx context.Context, in string) (string, error) {
+					middleSM = spanMetaKey.FromContext(ctx)
+					out, err := RunInNewSpan(ctx, &SpanMetadata{Name: "inner", Type: "action", Subtype: "tool"}, in,
+						func(ctx context.Context, in string) (string, error) {
+							innerSM = spanMetaKey.FromContext(ctx)
+							return "", boom
+						})
+					if err != boom {
+						t.Errorf("parent span received %#v from its child, want %#v", err, boom)
+					}
+					return out, err
+				})
+		})
+
+	if err != boom {
+		t.Errorf("outermost span returned %#v, want %#v", err, boom)
+	}
+	if !innerSM.IsFailureSource {
+		t.Error("originating span is not marked as the failure source")
+	}
+	for _, sm := range []*spanMetadata{middleSM, outerSM} {
+		if sm.IsFailureSource {
+			t.Errorf("span %q only propagated the failure but is marked as its source", sm.Name)
+		}
+		if sm.State != spanStateError {
+			t.Errorf("span %q state = %q, want %q", sm.Name, sm.State, spanStateError)
+		}
+	}
+	spans := recorder.Ended()
+	if len(spans) != 3 {
+		t.Fatalf("recorded %d spans, want 3", len(spans))
+	}
+	for _, span := range spans {
+		if status := span.Status(); status.Code != codes.Error || status.Description != boom.Error() {
+			t.Errorf("span %q status = %v, want Error with description %q", span.Name(), status, boom.Error())
+		}
+		if events := span.Events(); len(events) != 1 || events[0].Name != "exception" {
+			t.Errorf("span %q events = %v, want one exception event", span.Name(), events)
+		}
+	}
+}
+
+// TestIsFailureSourceAttribution verifies which span is the failure source when
+// a parent changes the error its child returned before returning it.
+func TestIsFailureSourceAttribution(t *testing.T) {
+	boom := errors.New("boom")
+	cleanupErr := errors.New("cleanup failed")
+	tests := []struct {
+		name string
+		// parent builds the error the parent span returns from the errors its
+		// two child spans returned.
+		parent     func(first, second error) error
+		wantSource bool
+	}{
+		{
+			name:       "wrapped child error",
+			parent:     func(first, _ error) error { return fmt.Errorf("step failed: %w", first) },
+			wantSource: false,
+		},
+		{
+			name:       "joined child errors",
+			parent:     func(first, second error) error { return errors.Join(first, second) },
+			wantSource: false,
+		},
+		{
+			name:       "own failure joined with a child error",
+			parent:     func(first, _ error) error { return errors.Join(cleanupErr, first) },
+			wantSource: true,
+		},
+		{
+			name:       "unrelated error",
+			parent:     func(error, error) error { return cleanupErr },
+			wantSource: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var parentSM *spanMetadata
+			RunInNewSpan(context.Background(), &SpanMetadata{Name: "parent"}, "in",
+				func(ctx context.Context, in string) (string, error) {
+					parentSM = spanMetaKey.FromContext(ctx)
+					fail := func(ctx context.Context, in string) (string, error) { return "", boom }
+					_, first := RunInNewSpan(ctx, &SpanMetadata{Name: "first"}, in, fail)
+					_, second := RunInNewSpan(ctx, &SpanMetadata{Name: "second"}, in, fail)
+					return "", tt.parent(first, second)
+				})
+			if parentSM.IsFailureSource != tt.wantSource {
+				t.Errorf("parent IsFailureSource = %t, want %t", parentSM.IsFailureSource, tt.wantSource)
+			}
+		})
+	}
+}
+
+// TestIsFailureSourceForStoredError verifies that attribution is per trace: an
+// error a child span returned in an earlier trace is attributed to the span
+// that returns it again later, without its child failing.
+func TestIsFailureSourceForStoredError(t *testing.T) {
+	ctx := context.Background()
+	var (
+		once    sync.Once
+		initErr error
+	)
+	step := func(ctx context.Context) *spanMetadata {
+		var stepSM *spanMetadata
+		RunInNewSpan(ctx, &SpanMetadata{Name: "step"}, "in",
+			func(ctx context.Context, in string) (string, error) {
+				stepSM = spanMetaKey.FromContext(ctx)
+				once.Do(func() {
+					_, initErr = RunInNewSpan(ctx, &SpanMetadata{Name: "init"}, in,
+						func(context.Context, string) (string, error) { return "", errors.New("init failed") })
+				})
+				return "", initErr
+			})
+		return stepSM
+	}
+
+	if sm := step(ctx); sm.IsFailureSource {
+		t.Error("first run: step only propagated its child's failure but is marked as its source")
+	}
+	if sm := step(ctx); !sm.IsFailureSource {
+		t.Error("second run: step returned a stored error with no failing child but is not marked as its source")
+	}
+}
+
+type nonComparableError struct{ causes []string }
+
+func (e nonComparableError) Error() string { return strings.Join(e.causes, "; ") }
+
+// TestIsFailureSourceNonComparableError verifies that an error of a
+// non-comparable type does not panic attribution; the parent that returns it
+// is counted as a source too.
+func TestIsFailureSourceNonComparableError(t *testing.T) {
+	var parentSM *spanMetadata
+	RunInNewSpan(context.Background(), &SpanMetadata{Name: "parent"}, "in",
+		func(ctx context.Context, in string) (string, error) {
+			parentSM = spanMetaKey.FromContext(ctx)
+			return RunInNewSpan(ctx, &SpanMetadata{Name: "child"}, in,
+				func(context.Context, string) (string, error) {
+					return "", nonComparableError{causes: []string{"boom"}}
+				})
+		})
+	if !parentSM.IsFailureSource {
+		t.Error("parent IsFailureSource = false, want true for an error that cannot be matched")
 	}
 }
 

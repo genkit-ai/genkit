@@ -14,15 +14,14 @@
  * limitations under the License.
  */
 import { z } from 'zod';
-import { DocumentDataSchema } from './document';
-import { RuntimeErrorSchema } from './error';
-import { MiddlewareRefSchema } from './middleware';
+import { DocumentDataSchema } from './document.js';
+import { RuntimeErrorSchema } from './error.js';
+import { MiddlewareRefSchema } from './middleware.js';
 import {
   CustomPartSchema,
   DataPartSchema,
   MediaPartSchema,
   MultipartToolResponseSchema,
-  Part,
   PartSchema,
   ReasoningPartSchema,
   ResourcePartSchema,
@@ -33,18 +32,18 @@ import {
   type DataPart,
   type MediaPart,
   type MultipartToolResponse,
+  type Part,
   type ReasoningPart,
   type ResourcePart,
   type TextPart,
   type ToolRequestPart,
   type ToolResponsePart,
-} from './parts';
+} from './parts.js';
 export {
   CustomPartSchema,
   DataPartSchema,
   MediaPartSchema,
   MultipartToolResponseSchema,
-  Part,
   PartSchema,
   ReasoningPartSchema,
   ResourcePartSchema,
@@ -55,6 +54,7 @@ export {
   type DataPart,
   type MediaPart,
   type MultipartToolResponse,
+  type Part,
   type ReasoningPart,
   type ResourcePart,
   type TextPart,
@@ -332,6 +332,7 @@ export const GenerationUsageSchema = z.object({
   custom: z.record(z.number()).optional(),
   thoughtsTokens: z.number().optional(),
   cachedContentTokens: z.number().optional(),
+  cacheWriteTokens: z.number().optional(),
 });
 
 /**
@@ -388,7 +389,17 @@ export const ModelResponseSchema = z.object({
    */
   error: RuntimeErrorSchema.optional(),
   latencyMs: z.number().optional(),
+  /** Usage of the model call that produced this response. */
   usage: GenerationUsageSchema.optional(),
+  /**
+   * Usage of every model call made under one generate run, summed field by
+   * field (`custom` key by key): the tool loop's calls and the calls its
+   * tools and hooks make, such as a nested generate or a fallback model.
+   * Set by generate, never by a model: `usage` reports only the call that
+   * produced the response. A subagent's calls count in its own session
+   * instead, and a resumed run counts only its own calls.
+   */
+  totalUsage: GenerationUsageSchema.optional(),
   /** @deprecated use `raw` instead */
   custom: z.unknown(),
   raw: z.unknown(),

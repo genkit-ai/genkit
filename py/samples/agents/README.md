@@ -1,9 +1,11 @@
 # Agents (experimental)
 
-Agents are experimental. Import the instance from `genkit.exp`:
+Agents are experimental. Import the instance from `genkit.exp` and agent
+types from `genkit.exp.agent`:
 
 ```python
-from genkit.exp import Genkit, InMemorySessionStore
+from genkit.exp import Genkit
+from genkit.exp.agent import InMemorySessionStore
 ```
 
 One `Agent`, a `store=`, and `send` / `resume`. These samples use

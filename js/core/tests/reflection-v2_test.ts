@@ -30,7 +30,6 @@ import { TestSpanExporter } from './utils.js';
 initNodeFeatures();
 const spanExporter = new TestSpanExporter();
 enableTelemetry({
-  exporter: spanExporter,
   spanProcessor: new SimpleSpanProcessor(spanExporter),
 });
 
@@ -579,6 +578,60 @@ describe('ReflectionServerV2', () => {
     (server as any).baseDelayMs = 10; // Fast for testing
     await server.start();
     await reconnected;
+  });
+
+  it('sends the secret in register', async () => {
+    const registered = new Promise<unknown>((resolve) => {
+      wss.on('connection', (ws) => {
+        ws.on('message', (data) => {
+          const msg = JSON.parse(data.toString());
+          if (msg.method === 'register') {
+            ws.send(JSON.stringify({ jsonrpc: '2.0', result: {}, id: msg.id }));
+            resolve(msg.params.secret);
+          }
+        });
+      });
+    });
+
+    server = new ReflectionServerV2(registry, {
+      url: `ws://localhost:${port}`,
+      secret: 's3cret',
+    });
+    await server.start();
+    assert.strictEqual(await registered, 's3cret');
+  });
+
+  it('stops without reconnecting when register is rejected with -32001', async () => {
+    let connectionCount = 0;
+    const closedByRuntime = new Promise<void>((resolve) => {
+      wss.on('connection', (ws) => {
+        connectionCount++;
+        ws.on('close', () => resolve());
+        ws.on('message', (data) => {
+          const msg = JSON.parse(data.toString());
+          if (msg.method === 'register') {
+            ws.send(
+              JSON.stringify({
+                jsonrpc: '2.0',
+                error: { code: -32001, message: 'bad secret' },
+                id: msg.id,
+              })
+            );
+          }
+        });
+      });
+    });
+
+    server = new ReflectionServerV2(registry, {
+      url: `ws://localhost:${port}`,
+      secret: 'wrong',
+    });
+    await server.start();
+    await closedByRuntime;
+    // Longer than the first reconnect delay (500ms), so a scheduled
+    // reconnect would have shown up as a second connection.
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    assert.strictEqual(connectionCount, 1);
   });
 
   it('should handle bidi streaming action with input and output streams', async () => {

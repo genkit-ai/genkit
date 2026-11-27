@@ -10,6 +10,18 @@
 
 It offers a unified interface for integrating AI models from providers like [Google](https://genkit.dev/docs/plugins/google-genai), [OpenAI](https://genkit.dev/docs/plugins/openai), [Anthropic](https://thefireco.github.io/genkit-plugins/docs/plugins/genkitx-anthropic), [Ollama](https://genkit.dev/docs/plugins/ollama/), and more. Rapidly build and deploy production-ready chatbots, automations, and recommendation systems using streamlined APIs for multimodal content, structured outputs, tool calling, and agentic workflows.
 
+> **Building with a coding agent? Install the Genkit skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-js      # JavaScript/TypeScript
+> npx skills add genkit-ai/skills --skill developing-genkit-go      # Go
+> npx skills add genkit-ai/skills --skill developing-genkit-python  # Python
+> npx skills add genkit-ai/skills --skill developing-genkit-dart    # Dart
+> ```
+>
+> It teaches your agent the current Genkit APIs and common gotchas.
+> Source and manual install: [genkit-ai/skills](https://github.com/genkit-ai/skills).
+
 Get started with just a few lines of code:
 
 ```ts

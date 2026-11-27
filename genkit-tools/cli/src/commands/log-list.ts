@@ -22,10 +22,12 @@ import {
   logger,
 } from '@genkit-ai/tools-common/utils';
 import { Command, Option } from 'commander';
-import { runWithManager } from '../utils/manager-utils';
+import { runWithManager } from '../utils/manager-utils.js';
+import { parsePositiveInt } from '../utils/option-parsers.js';
+import { writeStdout } from '../utils/output.js';
 
 export interface LogListOptions {
-  limit: string;
+  limit: number;
   traceId?: string;
   spanId?: string;
   severity?: string;
@@ -41,7 +43,12 @@ export const logList = new Command('log:list')
   .description(
     'list logs, in reverse chronological order. Filtering by trace-id is highly recommended.'
   )
-  .option('-l, --limit <number>', 'limit the number of returned logs', '15')
+  .option(
+    '-l, --limit <number>',
+    'limit the number of returned logs',
+    parsePositiveInt,
+    15
+  )
   .option('--trace-id <id>', 'filter by trace ID')
   .option('--span-id <id>', 'filter by span ID')
   .option(
@@ -85,16 +92,8 @@ export const logList = new Command('log:list')
           }
         }
 
-        const limit = Number.parseInt(options.limit, 10);
-        if (Number.isNaN(limit) || limit <= 0) {
-          logger.error(
-            `Invalid limit: "${options.limit}". It must be a positive integer.`
-          );
-          return;
-        }
-
         const listRequest = {
-          limit,
+          limit: options.limit,
           continuationToken: options.continuationToken,
           filter: Object.keys(filter).length > 0 ? filter : undefined,
         };
@@ -110,10 +109,10 @@ export const logList = new Command('log:list')
 
         if (options.format === 'jsonl') {
           logs.forEach((log) => {
-            console.log(JSON.stringify(log));
+            writeStdout(JSON.stringify(log));
           });
         } else {
-          console.log(
+          writeStdout(
             `Found ${logs.length} log${logs.length === 1 ? '' : 's'}:\n`
           );
           logs.forEach((log) => {
@@ -134,17 +133,17 @@ export const logList = new Command('log:list')
             const message = formatBody(log.body);
             const attributes = formatAttributes(log.attributes);
 
-            console.log(`ID:       ${id}`);
+            writeStdout(`ID:       ${id}`);
             if (!options.traceId && log.traceId)
-              console.log(`Trace ID: ${log.traceId}`);
+              writeStdout(`Trace ID: ${log.traceId}`);
             if (!options.spanId && log.spanId)
-              console.log(`Span ID:  ${log.spanId}`);
-            console.log(`Severity: ${severity}`);
-            console.log(`Time:     ${time}`);
-            if (message) console.log(`Message:  ${message}`);
-            if (attributes) console.log(`Attrs:    ${attributes}`);
+              writeStdout(`Span ID:  ${log.spanId}`);
+            writeStdout(`Severity: ${severity}`);
+            writeStdout(`Time:     ${time}`);
+            if (message) writeStdout(`Message:  ${message}`);
+            if (attributes) writeStdout(`Attrs:    ${attributes}`);
 
-            console.log('---');
+            writeStdout('---');
           });
         }
 
@@ -154,13 +153,14 @@ export const logList = new Command('log:list')
               `To get the next page, use: --continuation-token ${response.continuationToken}`
             );
           } else {
-            console.log(
+            writeStdout(
               `\nTo get the next page, use: --continuation-token ${response.continuationToken}`
             );
           }
         }
       } catch (e) {
         logger.error(`Error listing logs: ${e}`);
+        process.exitCode = 1;
       }
     };
 

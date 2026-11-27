@@ -2,6 +2,16 @@
 
 The Google AI plugin provides a unified interface to connect with Google's generative AI models through the **Gemini Developer API** or **Vertex AI** using API key authentication or Google Cloud credentials.
 
+> **Building with a coding agent? Install the Genkit Go skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-go
+> ```
+>
+> It teaches your agent the current Genkit Go APIs and common gotchas.
+> Source, manual install and skills for other languages:
+> [genkit-ai/skills](https://github.com/genkit-ai/skills).
+
 The plugin supports a wide range of capabilities:
 
 - **Language Models**: Gemini models for text generation, reasoning, and multimodal tasks
@@ -166,7 +176,6 @@ Genkit automatically discovers available models supported by the [Go GenAI SDK](
 Commonly used models include:
 
 - **Gemini Series**: `gemini-flash-latest`, `gemini-3.7-flash`, `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`
-- **Imagen Series**: `imagen-4.0-generate-001`
 - **Veo Series**: `veo-3.1-generate-preview`
 
 > **Note:** You can use any model ID supported by the underlying SDK. For a complete and up-to-date list of models and their specific capabilities, refer to the [Google Generative AI models documentation](https://ai.google.dev/gemini-api/docs/models). On Vertex AI, see the [Vertex AI model documentation](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models).
@@ -509,17 +518,14 @@ resp, err := genkit.Generate(ctx, g,
 
 ### Generating Text and Images
 
-Some Gemini models (like `gemini-3.1-flash-image`) can output images natively alongside text.
+Gemini image models (`gemini-*-image`, like `gemini-3.1-flash-image`) output
+images natively alongside text. They default `ResponseModalities` to
+`["TEXT", "IMAGE"]`; set it in the config to ask for something else.
 
 ```go
-import "google.golang.org/genai"
-
 resp, err := genkit.Generate(ctx, g,
     ai.WithModelName("googleai/gemini-3.1-flash-image"),
     ai.WithPrompt("Create a picture of a futuristic city and describe it"),
-    ai.WithConfig(&genai.GenerateContentConfig{
-        ResponseModalities: []string{"IMAGE", "TEXT"},
-    }),
 )
 
 for _, part := range resp.Message.Content {
@@ -584,31 +590,12 @@ automatically; the response carries one embedding per input, in input order.
 
 ## Image Models
 
-### Available Models
-
-**Imagen 4 Series**:
-
-- `imagen-4.0-generate-001`
-- `imagen-4.0-fast-generate-001`
-- `imagen-4.0-ultra-generate-001`
-
-### Usage
-
-```go
-import "google.golang.org/genai"
-
-resp, err := genkit.Generate(ctx, g,
-    ai.WithModelName("googleai/imagen-4.0-generate-001"),
-    ai.WithPrompt("A serene Japanese garden with cherry blossoms"),
-    ai.WithConfig(&genai.GenerateImagesConfig{
-        NumberOfImages: 4,
-        AspectRatio:    "16:9",
-        PersonGeneration: "allow_adult",
-    }),
-)
-
-// Access generated images in resp.Message.Content
-```
+Imagen is shut down on the Gemini API (August 17, 2026) and retired on Vertex
+AI (June 30, 2026), so the plugin curates no Imagen model. Use a Gemini image
+model such as `gemini-3.1-flash-image` instead; see
+[Generating Text and Images](#generating-text-and-images) above. An Imagen
+model ID still resolves and takes `genai.GenerateImagesConfig`, for a backend
+that still serves one.
 
 ## Video Models
 

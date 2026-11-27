@@ -46,8 +46,8 @@ capability means adding it there and to the table below. Known capabilities:
 
 | Capability | Meaning |
 |------------|---------|
-| `resumable-failures` | A failed turn commits what the generate call left at its last turn seam and persists it as a `failed` snapshot carrying the error; resume accepts that snapshot, and an input with no payload of its own re-attempts the turn. Gates model `error` entries, the empty input, a `failed` snapshot as a resume target, and the `promptAgentWithToolsAndStore` fixture. Implemented by: Go. |
-| `resumable-aborts` | An aborted invocation persists the state through the last turn that committed, rolling back the one that did not finish, and resume accepts that snapshot. Gates an `aborted` snapshot carrying state, one as a resume target, and the `customAgentAbortable` fixture. Implemented by: Go. |
+| `resumable-failures` | A failed turn commits what the generate call left at its last turn seam and persists it as a `failed` snapshot carrying the error; resume accepts that snapshot, and an input with no payload of its own re-attempts the turn. Gates model `error` entries, the empty input, a `failed` snapshot as a resume target, and the `promptAgentWithToolsAndStore` fixture. Implemented by: Go, JS. |
+| `resumable-aborts` | An aborted invocation persists the state through the last turn that committed, rolling back the one that did not finish, and resume accepts that snapshot. Gates an `aborted` snapshot carrying state, one as a resume target, and the `customAgentAbortable` fixture. Implemented by: Go, JS. |
 
 ### Step Types
 
@@ -141,6 +141,7 @@ steps.
 | `finishReason` | `string` | Expected `snapshot.finishReason` (e.g. `failed`). Distinct from `status` — a failed run records `finishReason: failed` in addition to `status: failed`. |
 | `hasSessionId` | `boolean` | If `true`, asserts `snapshot.state.sessionId` is a non-empty string. |
 | `stateContains` | `SessionState` (partial) | Subset match on `snapshot.state`. |
+| `messageCount` | `number` | If present, `snapshot.state.messages` must hold exactly this many messages. `stateContains` matches messages as a subsequence, so this is how a case asserts that a message is absent. |
 | `errorContains` | `object` (partial) | If present, asserts that `snapshot.error` contains (at minimum) these fields. Uses "contains" / subset matching. |
 
 

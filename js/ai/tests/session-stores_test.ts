@@ -63,7 +63,7 @@ describe('InMemorySessionStore', () => {
     state.foo = 'baz';
 
     const got = await store.getSnapshot({ snapshotId: 'snap-123' });
-    assert.strictEqual(got?.state.custom?.foo, 'bar');
+    assert.strictEqual(got?.state?.custom?.foo, 'bar');
   });
 
   it('resolves the latest leaf snapshot by sessionId', async () => {
@@ -88,6 +88,34 @@ describe('InMemorySessionStore', () => {
 
     const leaf = await store.getSnapshot({ sessionId });
     assert.strictEqual(leaf?.snapshotId, second);
+  });
+});
+
+describe('InMemorySessionStore onSnapshotStateChange', () => {
+  it('notifies every listener even when one unsubscribes mid-dispatch', async () => {
+    const store = new InMemorySessionStore<{ foo: string }>();
+    const seen: string[] = [];
+    // The first listener unsubscribes itself as soon as it is notified, as the
+    // detach runtime does on an abort; the second must still be notified.
+    const unsubscribeFirst = store.onSnapshotStateChange('snap-1', () => {
+      seen.push('first');
+      if (typeof unsubscribeFirst === 'function') unsubscribeFirst();
+    });
+    store.onSnapshotStateChange('snap-1', () => {
+      seen.push('second');
+    });
+
+    await store.saveSnapshot('snap-1', () => ({
+      createdAt: new Date().toISOString(),
+      status: 'aborted',
+    }));
+    assert.deepStrictEqual(seen, ['first', 'second']);
+
+    await store.saveSnapshot('snap-1', () => ({
+      createdAt: new Date().toISOString(),
+      status: 'completed',
+    }));
+    assert.deepStrictEqual(seen, ['first', 'second', 'second']);
   });
 });
 
@@ -126,7 +154,7 @@ describe('FileSessionStore', () => {
 
     const got = await store.getSnapshot({ snapshotId });
     assert.strictEqual(got?.snapshotId, snapshotId);
-    assert.strictEqual(got?.state.sessionId, sessionId);
+    assert.strictEqual(got?.state?.sessionId, sessionId);
   });
 
   it('resolves the latest leaf snapshot by sessionId', async () => {
@@ -624,7 +652,7 @@ describe('FileSessionStore', () => {
       }));
       assert.strictEqual(saved, id);
       const snap = await store.getSnapshot({ snapshotId: id });
-      assert.deepStrictEqual(snap?.state.custom, { ok: true });
+      assert.deepStrictEqual(snap?.state?.custom, { ok: true });
     });
   });
 });

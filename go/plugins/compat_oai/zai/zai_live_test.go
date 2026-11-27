@@ -15,37 +15,33 @@
 package zai_test
 
 import (
-	"context"
-	"os"
 	"testing"
 
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/compat_oai/internal/livetest"
 	"github.com/firebase/genkit/go/plugins/compat_oai/zai"
+	"github.com/firebase/genkit/go/plugins/internal/livetest"
+	"github.com/firebase/genkit/go/plugins/internal/oailive"
 )
 
 func TestPluginLive(t *testing.T) {
-	if os.Getenv("ZAI_API_KEY") == "" {
-		t.Skip("ZAI_API_KEY is not set")
-	}
-
-	ctx := context.Background()
-	g := genkit.Init(ctx,
-		genkit.WithPlugins(&zai.ZAI{}),
-		genkit.WithDefaultModel("zai/glm-5.1"),
-	)
+	livetest.Env(t, "ZAI_API_KEY")
+	g := livetest.Init(t, &zai.ZAI{})
 
 	// Thinking is on by default, so the cheap checks turn it off and the
 	// reasoning checks turn it back on.
-	livetest.Run(t, g, livetest.Suite{
-		Model: zai.ModelRef("glm-5.1", &zai.ChatConfig{
-			Thinking: &zai.ThinkingConfig{Type: "disabled"},
-		}),
-		ReasoningModel: zai.ModelRef("glm-5.1", &zai.ChatConfig{
-			Thinking: &zai.ThinkingConfig{Type: "enabled"},
-		}),
-		ReasoningContent: true,
-		VisionModel:      zai.ModelRef("glm-4.6v-flash", nil),
+	noThinking := &zai.ThinkingConfig{Type: zai.ThinkingTypeDisabled}
+	oailive.Run(t, g, oailive.Suite{
+		Suite: livetest.Suite{
+			Model: zai.ModelRef("glm-5.1", &zai.ChatConfig{Thinking: noThinking}),
+			ReasoningModel: zai.ModelRef("glm-5.1", &zai.ChatConfig{
+				Thinking: &zai.ThinkingConfig{Type: zai.ThinkingTypeEnabled},
+			}),
+			ReasoningContent: true,
+			VisionModel:      zai.ModelRef("glm-5v-turbo", nil),
+			DocumentModel:    zai.ModelRef("glm-4.6v", nil),
+			LimitConfig:      &zai.ChatConfig{MaxOutputTokens: 16, Thinking: noThinking},
+			BadKeyPlugin:     &zai.ZAI{APIKey: "invalid"},
+			Skip:             map[string]string{},
+		},
 		ExtraConfig: map[string]any{
 			"thinking": map[string]any{"type": "disabled"},
 			"extra":    map[string]any{"user_id": "genkit-livetest"},

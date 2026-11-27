@@ -18,44 +18,94 @@
 
 from __future__ import annotations
 
+import asyncio
+import sys
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, cast
 
-from pydantic import BaseModel, Field
+from pydantic import Field, field_validator
 
-from genkit import GenkitError
-from genkit._core._action import Action, ActionKind
-from genkit._core._model import ModelResponse
-from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
+from genkit import GenkitError, ModelResponse, ModelResponseChunk
+from genkit.middleware import Middleware, MiddlewareContext, ModelHookParams
+from genkit.model import ModelRef, ModelRequest
+from genkit.plugin_api import Action, GenkitConfig
+from genkit_middleware._statuses import TRANSIENT_STATUSES
 
-_DEFAULT_FALLBACK_STATUSES: list[str] = [
-    'UNAVAILABLE',
-    'DEADLINE_EXCEEDED',
-    'RESOURCE_EXHAUSTED',
-    'ABORTED',
-    'INTERNAL',
-    'NOT_FOUND',
-    'UNIMPLEMENTED',
-]
+# Everything Retry would retry, plus failures another model may not have:
+# this model doesn't exist or can't do what the request asks.
+_DEFAULT_FALLBACK_STATUSES: list[str] = [*TRANSIENT_STATUSES, 'NOT_FOUND', 'UNIMPLEMENTED']
 
 
-class FallbackConfig(BaseModel):
+class FallbackModelEntry(GenkitConfig):
+    """A backup model and the config that model runs with."""
+
+    name: str
+    config: dict[str, Any] | None = None
+
+
+class FallbackConfig(GenkitConfig):
     """Models and statuses that trigger fallback."""
 
-    models: list[str] = Field(default_factory=list)
+    models: list[str | FallbackModelEntry] = Field(default_factory=list)
     statuses: list[str] = Field(default_factory=lambda: list(_DEFAULT_FALLBACK_STATUSES))
 
+    @field_validator('models', mode='before')
+    @classmethod
+    def coerce_models(cls, value: object) -> object:
+        """A string is the model name; a ref carries that model's own config."""
+        if not isinstance(value, list):
+            return value
+        entries: list[str | FallbackModelEntry | dict[str, Any]] = []
+        for item in value:
+            if isinstance(item, str | FallbackModelEntry):
+                entries.append(item)
+            elif isinstance(item, ModelRef):
+                entries.append(FallbackModelEntry(name=item.name, config=config_from_ref(item)))
+            elif isinstance(item, dict):
+                entries.append(cast(dict[str, Any], item))
+            elif isinstance(item, Action):
+                raise ValueError(f"Fallback models are names or a ModelRef(...); pass '{item.name}', not the action")
+            else:
+                raise ValueError('each Fallback model must be a model name or a ModelRef(...)')
+        return entries
 
-class Fallback(BaseMiddleware[FallbackConfig]):
+
+def config_from_ref(model: ModelRef[Any]) -> dict[str, Any] | None:
+    """The config this backup runs with: the ref's version and config only.
+
+    Stored as wire keys (``by_alias=True``) because ``FallbackConfig`` is a
+    JSON middleware config, with ``ref.version < ref.config`` and an explicit
+    ``None`` kept. The backup model's own defaults and validation apply when
+    it runs.
+    """
+    bag: dict[str, Any] = {}
+    if model.version is not None:
+        bag['version'] = model.version
+    if model.config is not None:
+        bag.update(model.config.model_dump(by_alias=True, exclude_unset=True, exclude_none=False))
+    return bag or None
+
+
+def fallback_request_config(entry: str | FallbackModelEntry) -> dict[str, Any] | None:
+    """A string entry uses the model's defaults; a ref entry uses only its config."""
+    if isinstance(entry, str):
+        return None
+    return entry.config
+
+
+class Fallback(Middleware[FallbackConfig]):
     """Fallback middleware to try alternative models on failure."""
+
+    name = 'fallback'
+    description = 'Falls back to alternative models on failure'
 
     async def _resolve_fallback_model(
         self,
-        ctx: GenerateMiddlewareContext,
+        ctx: MiddlewareContext,
         model_name: str,
-    ) -> Action[Any, Any, Any]:
-        """Look up a fallback model on the per-call registry."""
-        action = await ctx.ai.registry.resolve_action(ActionKind.MODEL, model_name)
+    ) -> Action[ModelRequest, ModelResponse, ModelResponseChunk]:
+        """Look up a fallback model among the app's models."""
+        action = await ctx.ai.lookup_model(model_name)
         if action is None:
             raise GenkitError(
                 status='NOT_FOUND',
@@ -66,33 +116,48 @@ class Fallback(BaseMiddleware[FallbackConfig]):
     async def wrap_model(
         self,
         params: ModelHookParams,
-        ctx: GenerateMiddlewareContext,
-        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ctx: MiddlewareContext,
+        next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         """Try the primary model, then fall back to alternates on retryable errors."""
         last_error: Exception | None = None
         try:
             return await next_fn(params, ctx)
         except Exception as exc:
-            if not isinstance(exc, GenkitError) or exc.status not in self.config.statuses:
+            if not self._should_fall_back(exc):
                 raise
             last_error = exc
 
         assert last_error is not None  # noqa: S101
         on_chunk = ctx.on_chunk
-        for model_name in self.config.models:
+        for entry in self.config.models:
+            model_name = entry if isinstance(entry, str) else entry.name
             fallback_action = await self._resolve_fallback_model(ctx, model_name)
+            # A plain ModelRequest with a dict config, so the backup model parses
+            # it into its own class like any other call. A copy of the primary's
+            # typed request would pass a dict straight through when both models
+            # share a config class.
+            fallback_request = ModelRequest.model_validate(
+                {**dict(params.request), 'config': fallback_request_config(entry) or {}},
+            )
             try:
-                result = await fallback_action.run(
-                    input=params.request,
-                    context=ctx.custom_context,
+                result = await fallback_action._run(
+                    input=fallback_request,
+                    context=ctx.context,
                     on_chunk=on_chunk,
-                    abort_signal=ctx.abort_signal,
                 )
                 return result.response  # type: ignore[return-value]
             except Exception as e2:
                 last_error = e2
-                if not isinstance(e2, GenkitError) or e2.status not in self.config.statuses:
+                if not self._should_fall_back(e2):
                     raise
 
         raise last_error
+
+    def _should_fall_back(self, exc: Exception) -> bool:
+        # A raw exception has no status, so it stays on this model. Only a
+        # listed GenkitError status sends the request on.
+        curr = asyncio.current_task()
+        if curr is not None and sys.version_info >= (3, 11) and curr.cancelling() > 0:
+            return False
+        return isinstance(exc, GenkitError) and exc.status in self.config.statuses

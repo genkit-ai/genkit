@@ -150,8 +150,11 @@ export interface ActionRunOptions<S, Init = any> {
 /**
  * Options (side channel) data to pass to the model for bi-directional actions.
  */
-export interface BidiActionRunOptions<S, I = any, Init = any>
-  extends ActionRunOptions<S, Init> {
+export interface BidiActionRunOptions<
+  S,
+  I = any,
+  Init = any,
+> extends ActionRunOptions<S, Init> {
   /**
    * Streaming input (optional).
    */
@@ -381,8 +384,7 @@ export type MiddlewareWithOptions<I = any, O = any, S = any> = (
  * Middleware function for actions.
  */
 export type Middleware<I = any, O = any, S = any> =
-  | SimpleMiddleware<I, O>
-  | MiddlewareWithOptions<I, O, S>;
+  SimpleMiddleware<I, O> | MiddlewareWithOptions<I, O, S>;
 
 /**
  * Creates an action with provided middleware.
@@ -407,12 +409,12 @@ export function actionWithMiddleware<
     req: z.infer<I>,
     options?: ActionRunOptions<z.infer<S>, z.infer<Init>>
   ): Promise<ActionResult<z.infer<O>>> => {
-    let telemetry;
+    let telemetry: { traceId: string; spanId: string } | undefined;
     const dispatch = async (
       index: number,
       req: z.infer<I>,
       opts?: ActionRunOptions<z.infer<S>, z.infer<Init>>
-    ) => {
+    ): Promise<z.infer<O>> => {
       if (index === middleware.length) {
         // end of the chain, call the original model action
         const result = await action.run(req, opts);
@@ -444,7 +446,10 @@ export function actionWithMiddleware<
       ).streamBidi;
     }
 
-    return { result: await dispatch(0, req, options), telemetry };
+    return {
+      result: await dispatch(0, req, options),
+      telemetry: telemetry ?? { traceId: '', spanId: '' },
+    };
   };
   return wrapped;
 }
@@ -527,13 +532,19 @@ export function action<
       options = { ...options, init: validatedInit };
     }
 
-    let traceId;
-    let spanId;
+    let traceId: string | undefined;
+    let spanId: string | undefined;
     const genkitKey = actionFn.__action.key;
     let output = await runInNewSpan(
       {
         metadata: {
           name: actionName,
+          // Seed input (and init) up front so the realtime "pending" span
+          // export carries them; both are already resolved by this point.
+          // `init` is stored raw (like `input`) so the tracing layer serializes
+          // them consistently.
+          input,
+          ...(options?.init !== undefined ? { init: options.init } : {}),
         },
         labels: {
           [SPAN_TYPE_ATTR]: 'action',
@@ -568,13 +579,6 @@ export function action<
           options.onTraceStart({ traceId, spanId });
         }
         metadata.name = actionName;
-        metadata.input = input;
-        if (options?.init !== undefined) {
-          // Store `init` raw (like `input`) so it is serialized consistently by
-          // the tracing layer. Pre-stringifying here would diverge from `input`
-          // and could throw on non-serializable values, failing the whole run.
-          metadata.init = options.init;
-        }
 
         try {
           const actFn = () =>
@@ -619,8 +623,8 @@ export function action<
     return {
       result: output,
       telemetry: {
-        traceId,
-        spanId,
+        traceId: traceId ?? '',
+        spanId: spanId ?? '',
       },
     };
   };

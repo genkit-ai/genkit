@@ -54,7 +54,7 @@ export const EmbeddingConfigSchema = z
     version: z.string().optional(),
     /**
      * The `outputDimensionality` parameter allows you to specify the dimensionality of the embedding output.
-     * By default, `gemini-embedding-2`, `gemini-embedding-2-preview` and `gemini-embedding-001` generate embeddings with 3072 dimensions.
+     * By default, `gemini-embedding-2` and `gemini-embedding-001` generate embeddings with 3072 dimensions.
      * By selecting a smaller output dimensionality, users can save memory and storage space, leading to more efficient computations.
      **/
     outputDimensionality: z.number().min(1).optional(),
@@ -85,19 +85,25 @@ function commonRef(
 
 const GENERIC_MODEL = commonRef('embedder');
 
+// Models we no longer suggest, but that still work: they still resolve and
+// are still registered as actions, but aren't in the KnownModels type, so
+// they don't show up in autocomplete. Use this for models that are deprecated
+// or < 1 month from shutdown (note the shutdown date).
+const HIDDEN_MODELS = {} as const;
+
 const KNOWN_MODELS = {
-  'gemini-embedding-2-preview': commonRef('gemini-embedding-2-preview', {
-    supports: {
-      input: ['text', 'image', 'video'],
-    },
-  }),
+  'gemini-embedding-001': commonRef('gemini-embedding-001'),
   'gemini-embedding-2': commonRef('gemini-embedding-2', {
     supports: {
       input: ['text', 'image', 'video'],
     },
   }),
-  'gemini-embedding-001': commonRef('gemini-embedding-001'),
 } as const;
+
+const ALL_MODELS = {
+  ...HIDDEN_MODELS,
+  ...KNOWN_MODELS,
+};
 export type KnownModels = keyof typeof KNOWN_MODELS; // For autocomplete
 
 export type EmbedderModelName = `gemini-embedding-${string}`;
@@ -111,8 +117,8 @@ export function model(
 ): EmbedderReference<ConfigSchemaType> {
   const name = checkModelName(version);
 
-  if (isKnownKey(name, KNOWN_MODELS)) {
-    const known = KNOWN_MODELS[name];
+  if (isKnownKey(name, ALL_MODELS)) {
+    const known = ALL_MODELS[name];
     return embedderRef({
       name: known.name,
       info: known.info,
@@ -147,7 +153,7 @@ export function listActions(models: Model[]): ActionMetadata[] {
 }
 
 export function listKnownModels(options?: GoogleAIPluginOptions) {
-  return Object.keys(KNOWN_MODELS).map((name) => defineEmbedder(name, options));
+  return Object.keys(ALL_MODELS).map((name) => defineEmbedder(name, options));
 }
 
 export function defineEmbedder(

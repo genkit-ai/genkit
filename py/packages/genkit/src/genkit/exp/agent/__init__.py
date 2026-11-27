@@ -17,13 +17,14 @@
 """Agent types. Experimental — import the instance from ``genkit.exp``.
 
 ```python
-from genkit.exp import Genkit, InMemorySessionStore
+from genkit.exp import Genkit
+from genkit.exp.agent import InMemorySessionStore
 from genkit_google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])
 agent = ai.define_agent(
     name='weatherAgent',
-    model=GoogleAI.gemini_model('gemini-flash-latest'),
+    model=GoogleAI.gemini('gemini-flash-latest'),
     system='Weather assistant.',
     store=InMemorySessionStore(),
 )
@@ -35,22 +36,30 @@ from genkit._ai._agents._client import (
     AgentChat,
     AgentChunk,
     AgentClient,
-    AgentError,
     AgentInterrupt,
     AgentResponse,
     AgentTransport,
     AgentTurn,
     DetachedTask,
 )
-from genkit._ai._agents._runtime import AgentFn, AgentInitError, SessionRunner
+from genkit._ai._agents._runtime import AgentContext, AgentFn, AgentInitError, SessionRunner
 from genkit._ai._agents._session import (
     Session,
     SessionStore,
     SnapshotStatusStream,
     SnapshotSubscriber,
+    StateT,
 )
 from genkit._ai._agents._session_stores._file_store import FileSessionStore
 from genkit._ai._agents._session_stores._inmemory_store import InMemorySessionStore
+from genkit._ai._agents._session_stores._util import (
+    TERMINAL_STATUSES,
+    SaveFn,
+    apply_save,
+    iterate_statuses,
+    require_one_selector,
+    session_id_of,
+)
 from genkit._ai._agents._transports._http import HttpAgentTransport, remote_agent
 from genkit._ai._agents._types import (
     ChunkTransform,
@@ -58,6 +67,7 @@ from genkit._ai._agents._types import (
     TurnContext,
     TurnResult,
 )
+from genkit._ai._json_patch import apply_json_patch, diff_json
 from genkit._core._model import (
     AgentInit,
     AgentInput,
@@ -70,6 +80,8 @@ from genkit._core._model import (
 )
 from genkit._core._typing import (
     AgentFinishReason,
+    JsonPatchOp,
+    JsonPatchOperation,
     SnapshotStatus,
     TurnEnd,
 )
@@ -82,7 +94,6 @@ __all__ = [
     'AgentChat',
     'AgentTurn',
     'AgentChunk',
-    'AgentError',
     'AgentInitError',
     'AgentInterrupt',
     'AgentResponse',
@@ -92,6 +103,7 @@ __all__ = [
     'remote_agent',
     # Agent function protocol
     'AgentFn',
+    'AgentContext',
     'SessionRunner',
     'TurnContext',
     'TurnResult',
@@ -100,8 +112,21 @@ __all__ = [
     'SessionStore',
     'SnapshotStatusStream',
     'SnapshotSubscriber',
+    'StateT',
     'InMemorySessionStore',
     'FileSessionStore',
+    # Session-store building blocks
+    'TERMINAL_STATUSES',
+    'SaveFn',
+    'apply_save',
+    'iterate_statuses',
+    'require_one_selector',
+    'session_id_of',
+    # JSON Patch helpers
+    'apply_json_patch',
+    'diff_json',
+    'JsonPatchOp',
+    'JsonPatchOperation',
     # Callbacks and transforms
     'StateTransform',
     'ChunkTransform',

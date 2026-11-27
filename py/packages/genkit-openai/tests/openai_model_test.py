@@ -22,29 +22,27 @@ from collections.abc import AsyncIterator, Callable
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, PropertyMock
 
+import httpx
 import pytest
-from genkit_openai.models import OpenAIModel
-from genkit_openai.models.model import _usage_from_completion
-from genkit_openai.models.utils import strip_markdown_fences
-from genkit_openai.typing import OpenAIConfig, ReasoningEffort
+from genkit_openai._models._model import OpenAIModel, _usage_from_completion
+from genkit_openai._models._model_info import GPT_4_MODEL_SUPPORTS, SUPPORTED_OPENAI_MODELS
+from genkit_openai._models._utils import strip_markdown_fences
+from genkit_openai._typing import OpenAIConfig, ReasoningEffort
+from openai import APIError, AsyncOpenAI
 from openai.types import CompletionUsage
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from pydantic import BaseModel
 
-from genkit import (
-    FinishReason,
-    GenkitError,
-    Message,
+from genkit import FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Operation, Part, Role
+from genkit.model import (
+    GenerationUsage,
+    ModelConfig,
+    ModelContext,
     ModelRequest,
-    ModelResponse,
-    ModelResponseChunk,
-    Part,
-    Role,
+    ModelSupports,
+    OutputConfig,
     ToolRequest,
 )
-from genkit._core._model import OutputConfig
-from genkit._core._typing import GenerationUsage, Operation
-from genkit.plugin_api import ActionRunContext, ModelConfig
 
 
 def test_unknown_chat_id_json_mode_uses_json_object() -> None:
@@ -59,12 +57,37 @@ def test_unknown_chat_id_json_mode_uses_json_object() -> None:
 
 def test_gpt_6_astra_json_mode_uses_json_object() -> None:
     """A schema-less JSON request to gpt-6-astra sends json_object, as the catalog advertises."""
-    model = OpenAIModel(model='gpt-6-astra', client=MagicMock())
+    info = SUPPORTED_OPENAI_MODELS['gpt-6-astra']
+    model = OpenAIModel(model='gpt-6-astra', client=MagicMock(), supports=info.supports)
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('Hi')])],
         output=OutputConfig(format='json'),
     )
     assert model._get_response_format(request) == {'type': 'json_object'}
+
+
+def test_gpt_4_json_request_uses_text() -> None:
+    """gpt-4 does not list json output, so a schema-less JSON request sends text."""
+    model = OpenAIModel(model='gpt-4', client=MagicMock(), supports=GPT_4_MODEL_SUPPORTS)
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part.from_text('Hi')])],
+        output=OutputConfig(format='json'),
+    )
+    assert model._get_response_format(request) == {'type': 'text'}
+
+
+def test_openai_model_text_only_supports_json_request_sends_text() -> None:
+    """An OpenAI-compatible model built with supports.output=['text'] sends text for a schema-less JSON request."""
+    model = OpenAIModel(
+        model='some-text-only-compat',
+        client=MagicMock(),
+        supports=ModelSupports(output=['text']),
+    )
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part.from_text('give me json')])],
+        output=OutputConfig(format='json'),
+    )
+    assert model._get_response_format(request) == {'type': 'text'}
 
 
 def test_get_messages(sample_request: ModelRequest) -> None:
@@ -106,7 +129,7 @@ async def test_get_openai_config(sample_request: ModelRequest) -> None:
 
 @pytest.mark.asyncio
 async def test_get_openai_config_peels_genkit_keys_and_passes_the_rest() -> None:
-    """Genkit-only keys stay off create(); declared OpenAI fields and extras go out."""
+    """Genkit-only keys stay off create(); max_output_tokens is the cap; extra goes out as extra_body."""
     model = OpenAIModel(model='gpt-4o', client=MagicMock())
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
@@ -114,19 +137,20 @@ async def test_get_openai_config_peels_genkit_keys_and_passes_the_rest() -> None
             'temperature': 0.5,
             'max_output_tokens': 128,
             'stop_sequences': ['END'],
-            'api_key': 'secret',
             'top_k': 8,
             'version': 'gpt-4o-2024-08-06',
             'prompt_cache_key': 'abc',
-            'some_new_openai_knob': 1,
+            'extra': {'some_new_openai_knob': 1},
         }),
     )
     body = await model._get_openai_request_config(request)
     assert body['temperature'] == 0.5
     assert body['stop'] == ['END']
     assert body['prompt_cache_key'] == 'abc'
-    assert body['some_new_openai_knob'] == 1
+    assert body['extra_body'] == {'some_new_openai_knob': 1}
+    assert 'extra' not in body
     assert body['model'] == 'gpt-4o-2024-08-06'
+    assert body['max_tokens'] == 128
     assert 'max_output_tokens' not in body
     assert 'stop_sequences' not in body
     assert 'api_key' not in body
@@ -151,43 +175,32 @@ async def test_get_openai_config_uses_max_completion_tokens_for_reasoning_models
     model = OpenAIModel(model=model_name, client=MagicMock())
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
-        config=OpenAIConfig(max_tokens=32, reasoning_effort=reasoning_effort),
+        config=OpenAIConfig(max_output_tokens=32, reasoning_effort=reasoning_effort),
     )
 
     body = await model._get_openai_request_config(request)
 
     assert body['max_completion_tokens'] == 32
     assert 'max_tokens' not in body
+    assert 'max_output_tokens' not in body
 
 
 @pytest.mark.asyncio
 async def test_get_openai_config_keeps_max_tokens_for_legacy_models() -> None:
-    """Legacy OpenAI-compatible models continue to receive max_tokens."""
+    """Legacy OpenAI-compatible models receive max_output_tokens as max_tokens."""
     model = OpenAIModel(model='gpt-4o', client=MagicMock())
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
-        config=OpenAIConfig(max_tokens=32),
+        config=OpenAIConfig(max_output_tokens=32, stop_sequences=['###']),
     )
 
     body = await model._get_openai_request_config(request)
 
     assert body['max_tokens'] == 32
+    assert body['stop'] == ['###']
     assert 'max_completion_tokens' not in body
-
-
-@pytest.mark.asyncio
-async def test_get_openai_config_prefers_explicit_max_completion_tokens() -> None:
-    """An explicit modern token limit wins when both fields are configured."""
-    model = OpenAIModel(model='gpt-4o', client=MagicMock())
-    request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
-        config=OpenAIConfig(max_tokens=32, max_completion_tokens=64),
-    )
-
-    body = await model._get_openai_request_config(request)
-
-    assert body['max_completion_tokens'] == 64
-    assert 'max_tokens' not in body
+    assert 'max_output_tokens' not in body
+    assert 'stop_sequences' not in body
 
 
 @pytest.mark.asyncio
@@ -204,21 +217,9 @@ async def test_get_openai_config_model_field_overrides_version() -> None:
 
 
 @pytest.mark.asyncio
-async def test__generate(sample_request: ModelRequest) -> None:
+async def test__generate(sample_request: ModelRequest, make_completion: Callable[..., ChatCompletion]) -> None:
     """Test generate method calls OpenAI API and returns ModelResponse."""
-    mock_message = MagicMock()
-    mock_message.content = 'Hello, user!'
-    mock_message.role = 'model'
-    mock_message.tool_calls = None
-    mock_message.reasoning_content = None
-    mock_message.refusal = None
-
-    mock_response = MagicMock()
-    mock_response.choices = [MagicMock(message=mock_message)]
-    mock_response.usage = None
-
-    mock_client = MagicMock()
-    mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+    mock_client = _mock_completion(make_completion())
 
     model = OpenAIModel(model='gpt-4', client=mock_client)
     response = await model._generate(sample_request)
@@ -434,21 +435,11 @@ def _mock_stream(chunks: list[ChatCompletionChunk]) -> AsyncMock:
 
 
 @pytest.mark.asyncio
-async def test__generate_reports_usage(sample_request: ModelRequest) -> None:
+async def test__generate_reports_usage(
+    sample_request: ModelRequest, make_completion: Callable[..., ChatCompletion]
+) -> None:
     """A non-streaming response's token usage reaches the ModelResponse."""
-    mock_message = MagicMock()
-    mock_message.content = 'Hello, user!'
-    mock_message.role = 'model'
-    mock_message.tool_calls = None
-    mock_message.reasoning_content = None
-    mock_message.refusal = None
-
-    mock_response = MagicMock()
-    mock_response.choices = [MagicMock(message=mock_message)]
-    mock_response.usage = CompletionUsage.model_validate(_USAGE_PAYLOAD)
-
-    mock_client = MagicMock()
-    mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+    mock_client = _mock_completion(make_completion(usage=_USAGE_PAYLOAD))
 
     model = OpenAIModel(model='gpt-4', client=mock_client)
     sample_request.config = OpenAIConfig(stream_options={'include_usage': False})
@@ -460,35 +451,26 @@ async def test__generate_reports_usage(sample_request: ModelRequest) -> None:
 
 
 @pytest.mark.asyncio
-async def test__generate_reports_extra_token_counts() -> None:
+async def test__generate_reports_extra_token_counts(make_completion: Callable[..., ChatCompletion]) -> None:
     """Counts Genkit has no field for land in usage.custom; zeroes are dropped."""
-    mock_message = MagicMock()
-    mock_message.content = 'hi'
-    mock_message.role = 'model'
-    mock_message.tool_calls = None
-    mock_message.reasoning_content = None
-    mock_message.refusal = None
-
-    mock_response = MagicMock()
-    mock_response.choices = [MagicMock(message=mock_message)]
-    mock_response.usage = CompletionUsage.model_validate({
-        'prompt_tokens': 3,
-        'completion_tokens': 2,
-        'total_tokens': 5,
-        'prompt_tokens_details': {'cached_tokens': 0, 'image_tokens': 9},
-        'completion_tokens_details': {
-            'audio_tokens': 4,
-            'accepted_prediction_tokens': 0,
-            'rejected_prediction_tokens': 2,
-            'reasoning_tokens': 0,
+    completion = make_completion(
+        content='hi',
+        usage={
+            'prompt_tokens': 3,
+            'completion_tokens': 2,
+            'total_tokens': 5,
+            'prompt_tokens_details': {'cached_tokens': 0, 'image_tokens': 9},
+            'completion_tokens_details': {
+                'audio_tokens': 4,
+                'accepted_prediction_tokens': 0,
+                'rejected_prediction_tokens': 2,
+                'reasoning_tokens': 0,
+            },
+            'num_sources_used': 8,
         },
-        'num_sources_used': 8,
-    })
+    )
 
-    mock_client = MagicMock()
-    mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
-
-    model = OpenAIModel(model='gpt-4', client=mock_client)
+    model = OpenAIModel(model='gpt-4', client=_mock_completion(completion))
     request = ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('hi')])])
     response = await model._generate(request)
 
@@ -881,7 +863,7 @@ async def test__generate_stream_refusal_wins_over_a_failure_message(sample_reque
 @pytest.mark.asyncio
 async def test_generate_classifies_an_unreadable_message(sample_request: ModelRequest) -> None:
     """A message with nothing to read at all is still INTERNAL, so retry runs."""
-    ctx_mock = MagicMock(spec=ActionRunContext)
+    ctx_mock = MagicMock(spec=ModelContext)
     type(ctx_mock).is_streaming = PropertyMock(return_value=False)
     model = OpenAIModel(model='gpt-4', client=_mock_completion(_completion(content=None)))
 
@@ -900,7 +882,7 @@ async def test_generate_classifies_an_unreadable_message(sample_request: ModelRe
 @pytest.mark.asyncio
 async def test_generate(stream: bool, sample_request: ModelRequest) -> None:
     """Tests for generate."""
-    ctx_mock = MagicMock(spec=ActionRunContext)
+    ctx_mock = MagicMock(spec=ModelContext)
     type(ctx_mock).is_streaming = PropertyMock(return_value=stream)
 
     mock_response = ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('mocked')]))
@@ -910,7 +892,7 @@ async def test_generate(stream: bool, sample_request: ModelRequest) -> None:
     model_any = cast(Any, model)
     model_any._generate_stream = AsyncMock(return_value=mock_response)
     model_any._generate = AsyncMock(return_value=mock_response)
-    model_any.normalize_config = MagicMock(return_value={})
+    model_any._normalize_config = MagicMock(return_value={})
     response = await model.generate(sample_request, ctx_mock)
 
     assert response == mock_response
@@ -923,7 +905,7 @@ async def test_generate(stream: bool, sample_request: ModelRequest) -> None:
 @pytest.mark.asyncio
 async def test_generate_classifies_bad_config_type() -> None:
     """A config type we cannot send is INVALID_ARGUMENT so retry skips it."""
-    ctx_mock = MagicMock(spec=ActionRunContext)
+    ctx_mock = MagicMock(spec=ModelContext)
     type(ctx_mock).is_streaming = PropertyMock(return_value=False)
     model = OpenAIModel(model='gpt-4', client=MagicMock())
 
@@ -943,7 +925,7 @@ async def test_generate_classifies_bad_config_type() -> None:
 @pytest.mark.asyncio
 async def test_generate_no_choices_reaches_the_caller(sample_request: ModelRequest) -> None:
     """generate()'s error handling lets the no-choices error through unchanged."""
-    ctx_mock = MagicMock(spec=ActionRunContext)
+    ctx_mock = MagicMock(spec=ModelContext)
     type(ctx_mock).is_streaming = PropertyMock(return_value=False)
 
     mock_response = MagicMock()
@@ -983,9 +965,9 @@ def test_normalize_config(config: object, expected: object) -> None:
     """Tests for _normalize_config."""
     if isinstance(expected, Exception):
         with pytest.raises(ValueError, match=r'Expected request.config to be a dict or OpenAIConfig, got .*'):
-            OpenAIModel.normalize_config(config)
+            OpenAIModel._normalize_config(config)
     else:
-        response = OpenAIModel.normalize_config(config)
+        response = OpenAIModel._normalize_config(config)
         assert response == expected
 
 
@@ -1620,17 +1602,15 @@ class TestResponseMetadata:
     async def test_generate_reports_ids_and_fingerprint(
         self, sample_request: ModelRequest, make_completion: Callable[..., ChatCompletion]
     ) -> None:
-        """The fingerprint, model and id reach both custom and raw."""
+        """The fingerprint, model and id reach custom."""
         model = OpenAIModel(model='gpt-4o', client=_client(make_completion(system_fingerprint='fp_44709d6fcb')))
         response = await model._generate(sample_request)
 
-        expected = {
+        assert response.custom == {
             'systemFingerprint': 'fp_44709d6fcb',
             'model': 'gpt-4o-2024-08-06',
             'id': 'chatcmpl-abc',
         }
-        assert response.custom == expected
-        assert response.raw == expected
 
     @pytest.mark.asyncio
     async def test_generate_reports_citations_without_a_fingerprint(
@@ -1641,10 +1621,10 @@ class TestResponseMetadata:
         model = OpenAIModel(model='grok-4', client=_client(make_completion(citations=citations)))
         response = await model._generate(sample_request)
 
-        assert response.raw is not None
-        assert response.raw['citations'] == citations
-        assert response.raw['id'] == 'chatcmpl-abc'
-        assert 'systemFingerprint' not in response.raw
+        assert response.custom is not None
+        assert response.custom['citations'] == citations
+        assert response.custom['id'] == 'chatcmpl-abc'
+        assert 'systemFingerprint' not in response.custom
 
     @pytest.mark.asyncio
     async def test_generate_reports_the_choice_error_object(
@@ -1656,8 +1636,8 @@ class TestResponseMetadata:
         model = OpenAIModel(model='gpt-4o', client=_client(completion))
         response = await model._generate(sample_request)
 
-        assert response.raw is not None
-        assert response.raw['error'] == failure
+        assert response.custom is not None
+        assert response.custom['error'] == failure
 
     @pytest.mark.asyncio
     async def test_generate_omits_absent_fields(
@@ -1667,7 +1647,39 @@ class TestResponseMetadata:
         model = OpenAIModel(model='gpt-4o', client=_client(make_completion()))
         response = await model._generate(sample_request)
 
-        assert response.raw == {'model': 'gpt-4o-2024-08-06', 'id': 'chatcmpl-abc'}
+        assert response.custom == {'model': 'gpt-4o-2024-08-06', 'id': 'chatcmpl-abc'}
+
+    @pytest.mark.asyncio
+    async def test_generate_reports_the_whole_completion_as_raw(self, sample_request: ModelRequest) -> None:
+        """Raw holds the completion as sent, unmodeled and null fields included."""
+        payload: dict[str, Any] = {
+            'id': 'chatcmpl-abc',
+            'created': 1700000000,
+            'model': 'grok-4',
+            'object': 'chat.completion',
+            'system_fingerprint': None,
+            'citations': ['https://a.example'],
+            'choices': [
+                {
+                    'index': 0,
+                    'finish_reason': 'error',
+                    'error': {'message': 'upstream gave up'},
+                    'logprobs': None,
+                    'message': {'role': 'assistant', 'content': 'Hello', 'reasoning_content': 'Thinking'},
+                }
+            ],
+            'usage': {'prompt_tokens': 3, 'completion_tokens': 2, 'total_tokens': 5, 'cost': 0.0004},
+        }
+        model = OpenAIModel(model='grok-4', client=_client(ChatCompletion.construct(**payload)))
+        response = await model._generate(sample_request)
+
+        assert response.raw == payload
+        assert response.custom == {
+            'model': 'grok-4',
+            'id': 'chatcmpl-abc',
+            'citations': ['https://a.example'],
+            'error': {'message': 'upstream gave up'},
+        }
 
     @pytest.mark.asyncio
     async def test_generate_stream_reports_chunk_metadata(
@@ -1703,20 +1715,138 @@ class TestResponseMetadata:
 
     @pytest.mark.asyncio
     async def test_cleaned_json_response_keeps_metadata(self, make_completion: Callable[..., ChatCompletion]) -> None:
-        """Stripping markdown fences does not drop the metadata."""
+        """Stripping markdown fences cleans the message and keeps the metadata and raw completion."""
         request = ModelRequest(
             messages=[Message(role=Role.USER, content=[Part.from_text('Generate')])],
             output=OutputConfig(format='json'),
         )
-        completion = make_completion(
-            content='```json\n{"name": "John", "level": 5}\n```',
-            system_fingerprint='fp_deepseek',
-        )
+        fenced = '```json\n{"name": "John", "level": 5}\n```'
+        completion = make_completion(content=fenced, system_fingerprint='fp_deepseek')
         model = OpenAIModel(model='deepseek-chat', client=_client(completion))
         response = await model._generate(request)
 
         assert response.message is not None
         assert response.message.content[0].text == '{"name": "John", "level": 5}'
+        assert response.custom is not None
+        assert response.custom['systemFingerprint'] == 'fp_deepseek'
         assert response.raw is not None
-        assert response.raw['systemFingerprint'] == 'fp_deepseek'
-        assert response.custom == response.raw
+        assert response.raw['choices'][0]['message']['content'] == fenced
+
+
+async def _stream_through_sdk(sse_body: str, sample_request: ModelRequest) -> tuple[list[str], BaseException]:
+    """Stream through the real OpenAI SDK against a canned SSE body; return chunks and the error."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={'content-type': 'text/event-stream'}, content=sse_body.encode())
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = AsyncOpenAI(api_key='test-key', http_client=http_client, max_retries=0)
+    model = OpenAIModel(model='gpt-4o', client=client)
+    chunks: list[str] = []
+    ctx = MagicMock(spec=ModelContext)
+    type(ctx).is_streaming = PropertyMock(return_value=True)
+    ctx.send_chunk.side_effect = lambda chunk: chunks.append(chunk.text)
+
+    with pytest.raises(Exception) as exc_info:
+        await model.generate(sample_request, ctx)
+    await http_client.aclose()
+    return chunks, exc_info.value
+
+
+def _stream_failing_after_first_token(error: dict[str, Any]) -> str:
+    """A 200 stream that emits one token, then a chunk carrying an `error` object."""
+    first = {
+        'id': 'chatcmpl-1',
+        'object': 'chat.completion.chunk',
+        'created': 1700000000,
+        'model': 'gpt-4o',
+        'choices': [{'index': 0, 'delta': {'role': 'assistant', 'content': 'Grilled'}, 'finish_reason': None}],
+    }
+    return f'data: {json.dumps(first)}\n\ndata: {json.dumps({"error": error})}\n\n'
+
+
+@pytest.mark.asyncio
+async def test_generate_classifies_known_mid_stream_error(sample_request: ModelRequest) -> None:
+    """A rate limit reported mid-stream after a 200 is RESOURCE_EXHAUSTED, so retry backs off."""
+    chunks, error = await _stream_through_sdk(
+        _stream_failing_after_first_token({
+            'message': 'Rate limit reached for gpt-4o',
+            'type': 'requests',
+            'code': 'rate_limit_exceeded',
+        }),
+        sample_request,
+    )
+
+    assert chunks == ['Grilled']
+    assert isinstance(error, GenkitError)
+    assert error.status == 'RESOURCE_EXHAUSTED'
+    assert error.message == 'Rate limit reached for gpt-4o'
+    assert type(error.__cause__) is APIError
+
+
+@pytest.mark.asyncio
+async def test_generate_unknown_mid_stream_error_is_unknown_genkit_error(sample_request: ModelRequest) -> None:
+    """A mid-stream error the plugin does not know reaches the caller as an UNKNOWN GenkitError with its message."""
+    chunks, error = await _stream_through_sdk(
+        _stream_failing_after_first_token({'message': 'Upstream reset', 'type': 'brand_new_error'}),
+        sample_request,
+    )
+
+    assert chunks == ['Grilled']
+    assert isinstance(error, GenkitError)
+    assert error.status == 'UNKNOWN'
+    assert error.message == 'Upstream reset'
+    assert type(error.__cause__) is APIError
+
+
+class _DroppingStream(httpx.AsyncByteStream):
+    """A response body that sends ``first`` and then fails, like a connection cut mid-stream."""
+
+    def __init__(self, first: bytes, error: Exception) -> None:
+        self._first = first
+        self._error = error
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        if self._first:
+            yield self._first
+        raise self._error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('drop', 'status'),
+    [
+        (httpx.RemoteProtocolError('peer closed connection without sending complete message body'), 'UNAVAILABLE'),
+        (httpx.ReadTimeout('timed out'), 'DEADLINE_EXCEEDED'),
+    ],
+)
+async def test_generate_classifies_a_stream_cut_mid_read(
+    sample_request: ModelRequest, drop: Exception, status: str
+) -> None:
+    """The SDK wraps httpx errors only while sending; a stream cut after the 200 still maps for Fallback."""
+    first = {
+        'id': 'chatcmpl-1',
+        'object': 'chat.completion.chunk',
+        'created': 1700000000,
+        'model': 'gpt-4o',
+        'choices': [{'index': 0, 'delta': {'role': 'assistant', 'content': 'Grilled'}, 'finish_reason': None}],
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = f'data: {json.dumps(first)}\n\n'.encode()
+        return httpx.Response(200, headers={'content-type': 'text/event-stream'}, stream=_DroppingStream(body, drop))
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    model = OpenAIModel(model='gpt-4o', client=AsyncOpenAI(api_key='test-key', http_client=http_client, max_retries=0))
+    chunks: list[str] = []
+    ctx = MagicMock(spec=ModelContext)
+    type(ctx).is_streaming = PropertyMock(return_value=True)
+    ctx.send_chunk.side_effect = lambda chunk: chunks.append(chunk.text)
+
+    with pytest.raises(GenkitError) as exc_info:
+        await model.generate(sample_request, ctx)
+    await http_client.aclose()
+
+    assert chunks == ['Grilled']
+    assert exc_info.value.status == status
+    assert exc_info.value.__cause__ is drop

@@ -36,6 +36,11 @@ import "github.com/firebase/genkit/go/ai"
 // in the registry (e.g. one defined via [ai.DefinePrompt] or loaded from a
 // .prompt file), use [DefinePromptAgent] instead, which takes no InlinePrompt.
 //
+// The options are registered as a prompt whose definition is visible as JSON
+// (to the Dev UI and other runtimes). [ai.WithUse] accepts any middleware,
+// including an [ai.MiddlewareFunc] closure, which runs on this process's
+// turns but cannot be replayed from that JSON; see [ai.MiddlewareFunc].
+//
 // The session's conversation is handed to the prompt on every turn, under the
 // usual placement rules: a prompt that sets [ai.WithMessages],
 // [ai.WithMessagesTemplate], or [ai.WithMessagesFn] must place it with

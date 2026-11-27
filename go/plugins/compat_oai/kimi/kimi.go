@@ -138,7 +138,9 @@ func (c ChatConfig) ApplyToChatCompletion(params *openai.ChatCompletionNewParams
 // Capability sets shared by the entries below: text and images in, text or
 // JSON out, and tools. Moonshot's chat API takes response_format json_schema,
 // so structured output is generated natively rather than coaxed through
-// prompt instructions. See https://platform.kimi.ai/docs/api/chat.
+// prompt instructions. See https://platform.kimi.ai/docs/api/chat. Under a
+// response format the model answers in JSON at once and never calls a tool,
+// so the constraint is claimed only for requests without tools.
 var (
 	// multimodal is the Kimi K3 set, with free tool choice.
 	multimodal = ai.ModelSupports{
@@ -147,8 +149,8 @@ var (
 		SystemRole:  true,
 		Media:       true,
 		ToolChoice:  true,
-		Output:      []string{"text", "json"},
-		Constrained: ai.ConstrainedSupportAll,
+		Output:      []string{"text", "json", "array", "enum"},
+		Constrained: ai.ConstrainedSupportNoTools,
 	}
 	// multimodalNoToolChoice is multimodal minus tool-choice steering: the K2
 	// generation rejects tool_choice required as incompatible with thinking,
@@ -162,10 +164,14 @@ var (
 		SystemRole:  true,
 		Media:       true,
 		ToolChoice:  false,
-		Output:      []string{"text", "json"},
-		Constrained: ai.ConstrainedSupportAll,
+		Output:      []string{"text", "json", "array", "enum"},
+		Constrained: ai.ConstrainedSupportNoTools,
 	}
 )
+
+// mediaTypes are the media Moonshot's chat completions read that the plugin
+// sends. Its content parts are text, image_url and video_url only.
+var mediaTypes = []string{"image/*"}
 
 // supportedModels curates capabilities for well-known Kimi models. It is not
 // the set of usable models: any Kimi model resolves on demand and takes
@@ -258,6 +264,7 @@ func (k *Kimi) Init(ctx context.Context) []api.Action {
 	opts = append(opts, k.Opts...)
 
 	k.openAICompatible.Provider = provider
+	k.openAICompatible.MediaTypes = mediaTypes
 	k.openAICompatible.Opts = opts
 	actions := k.openAICompatible.Init(ctx)
 

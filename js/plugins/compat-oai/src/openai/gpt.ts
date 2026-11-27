@@ -37,6 +37,7 @@ const MULTIMODAL_MODEL_INFO: ModelInfo = {
 export const OpenAIChatCompletionConfigSchema =
   ChatCompletionCommonConfigSchema.extend({
     store: z.boolean().optional(),
+    strict: z.boolean().optional(),
   });
 
 /** OpenAI ModelRef helper, with OpenAI specific config. */
@@ -227,6 +228,7 @@ const GPT_5_MODEL_INFO: ModelInfo = {
     media: true,
     systemRole: true,
     output: ['text', 'json'],
+    constrained: 'all',
   },
 };
 const gpt5 = openAIModelRef({
@@ -248,6 +250,7 @@ const gpt5ChatLatest = openAIModelRef({
       ...GPT_5_MODEL_INFO.supports,
       tools: false,
       output: ['text'],
+      constrained: undefined,
     },
   },
 });
@@ -273,6 +276,18 @@ const gpt5_4Nano = openAIModelRef({
 });
 const gpt5_5 = openAIModelRef({
   name: 'gpt-5.5',
+  info: GPT_5_MODEL_INFO,
+});
+const gpt5_6Luna = openAIModelRef({
+  name: 'gpt-5.6-luna',
+  info: GPT_5_MODEL_INFO,
+});
+const gpt5_6Terra = openAIModelRef({
+  name: 'gpt-5.6-terra',
+  info: GPT_5_MODEL_INFO,
+});
+const gpt5_6Sol = openAIModelRef({
+  name: 'gpt-5.6-sol',
   info: GPT_5_MODEL_INFO,
 });
 // Chat Completions rejects function tools for this model.
@@ -322,5 +337,8 @@ export const SUPPORTED_GPT_MODELS = {
   'gpt-5.4-mini': gpt5_4Mini,
   'gpt-5.4-nano': gpt5_4Nano,
   'gpt-5.5': gpt5_5,
+  'gpt-5.6-luna': gpt5_6Luna,
+  'gpt-5.6-terra': gpt5_6Terra,
+  'gpt-5.6-sol': gpt5_6Sol,
   'gpt-6-astra': gpt6Astra,
 } as const;

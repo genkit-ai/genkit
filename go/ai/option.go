@@ -303,9 +303,14 @@ func WithModel(model ModelArg) CommonGenOption {
 	return &commonGenOptions{Model: model}
 }
 
-// WithModelName sets the model name to call for generation.
-// The model name will be resolved to a [Model] and may error if the reference is invalid.
-// Repeating this option, or mixing it with [WithModel], takes the last model set.
+// WithModelName sets the model name to call for generation, typically
+// formatted as "<provider>/<model-id>" (for example,
+// "googleai/gemini-flash-latest").
+//
+// The name is resolved to a [Model] at request time; the provider prefix is
+// what lets a dynamic plugin resolve arbitrary model IDs served by the
+// provider on demand without pre-registration. Repeating this option, or
+// mixing it with [WithModel], takes the last model set.
 func WithModelName(name string) CommonGenOption {
 	return WithModel(NewModelRef(name, nil))
 }
@@ -978,8 +983,13 @@ func WithEmbedder(embedder EmbedderArg) EmbedderOption {
 	return &embedderOptions{Embedder: embedder}
 }
 
-// WithEmbedderName sets the embedder name to call for document embedding.
-// The embedder name will be resolved to a [Embedder] and may error if the reference is invalid.
+// WithEmbedderName sets the embedder name to call for document embedding,
+// typically formatted as "<provider>/<embedder-id>" (for example,
+// "googleai/gemini-embedding-001").
+//
+// The name is resolved to an [Embedder] at request time; the provider prefix
+// is what lets a dynamic plugin resolve arbitrary embedder IDs served by the
+// provider on demand without pre-registration.
 func WithEmbedderName(name string) EmbedderOption {
 	return WithEmbedder(NewEmbedderRef(name, nil))
 }
@@ -1028,6 +1038,8 @@ type generateOptions struct {
 	RespondParts []*Part // Tool responses to return from interrupted tool calls.
 	RestartParts []*Part // Tool requests to restart interrupted tools with.
 	StepName     string  // Custom name for the generation step in traces.
+	resume       bool    // Set by WithResume, even with no parts.
+	pausedParts  []*Part // Still-interrupted parts given to WithResume; Generate rejects them.
 }
 
 // GenerateOption is an option for generating a model response. It applies only to Generate().
@@ -1044,22 +1056,61 @@ func (o *generateOptions) applyGenerate(genOpts *generateOptions) {
 
 	genOpts.RespondParts = append(genOpts.RespondParts, o.RespondParts...)
 	genOpts.RestartParts = append(genOpts.RestartParts, o.RestartParts...)
+	genOpts.pausedParts = append(genOpts.pausedParts, o.pausedParts...)
+	genOpts.resume = genOpts.resume || o.resume
 	if o.StepName != "" {
 		genOpts.StepName = o.StepName
 	}
 }
 
+// WithResume resumes generation after an interrupt with the parts that
+// resolve it: a restart part re-executes the tool and a response part answers
+// the call outright. Both kinds go in one list, in any order; each part
+// records which it is. Build them from the tool, with
+// [InterruptedCall.Restart] and [InterruptedCall.Respond], or from the part,
+// with [Part.ToToolRestart] and [Part.ToToolResponse]. Repeating this option
+// appends.
+//
+// A part that is still paused, such as one from [ModelResponse.Interrupts]
+// passed as is, fails the call with INVALID_ARGUMENT: resolve it first. With
+// no parts, the call still resumes when the conversation ends on the model's
+// tool requests, so an interrupt left unanswered fails it the same way a
+// partial resume does, rather than reaching the model.
+//
+//	resp, err = genkit.Generate(ctx, g,
+//		ai.WithMessages(resp.History()...),
+//		ai.WithTools(transferMoney),
+//		ai.WithResume(parts...),
+//	)
+func WithResume(parts ...*Part) GenerateOption {
+	o := &generateOptions{resume: true}
+	for _, p := range parts {
+		switch {
+		case p.IsToolResponse():
+			o.RespondParts = append(o.RespondParts, p)
+		case p.IsInterrupt() && !p.IsRestart():
+			o.pausedParts = append(o.pausedParts, p)
+		default:
+			o.RestartParts = append(o.RestartParts, p)
+		}
+	}
+	return o
+}
+
 // WithToolResponses provides resolved responses for interrupted tool calls.
-// Use this when you already have the result and want to skip re-executing the
-// tool. Repeating this option appends.
+// Repeating this option appends.
+//
+// Deprecated: Use [WithResume], which takes response and restart parts
+// in one list.
 func WithToolResponses(parts ...*Part) GenerateOption {
 	return &generateOptions{RespondParts: parts}
 }
 
 // WithToolRestarts re-executes interrupted tool calls with additional metadata.
-// Use this when the original call lacked required context (e.g., auth, user
-// confirmation) that should now allow the tool to complete successfully.
 // Repeating this option appends.
+//
+// Deprecated: Use [WithResume], which takes restart and response parts
+// in one list.
 func WithToolRestarts(parts ...*Part) GenerateOption {
 	return &generateOptions{RestartParts: parts}
 }
@@ -1071,7 +1122,18 @@ type toolOptions struct {
 	StrictSchema *bool
 }
 
-// ToolOption is an option for defining a tool.
+// ToolOption is an option for defining a tool, accepted by every tool
+// constructor ([NewTool], [NewResumableTool], and their genkit
+// counterparts). An explicit schema stands in for a type parameter, so the
+// input options require In to be any and the output options require Out to
+// be any; any other type panics at definition.
+//
+//   - [WithInputSchema]: Provide a JSON schema for the input
+//   - [WithInputSchemaName]: Reference a pre-registered input schema by name
+//   - [WithInputType]: Derive the input schema from a Go value (prefer the In type parameter)
+//   - [WithOutputSchema]: Provide a JSON schema for the output
+//   - [WithOutputSchemaName]: Reference a pre-registered output schema by name
+//   - [WithStrictSchema]: Have the provider enforce the input schema strictly, where supported
 type ToolOption interface {
 	applyTool(*toolOptions)
 }

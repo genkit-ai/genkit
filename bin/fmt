@@ -30,11 +30,6 @@ TOP_DIR=$(git rev-parse --show-toplevel)
 # Add license header to all files that don't already have it.
 "${TOP_DIR}/bin/add_license"
 
-# Format all TOML files.
-if ! "${TOP_DIR}/bin/format_toml_files"; then
-  exit 1
-fi
-
 # Format all Python code while organizing imports.
 uv run --directory "${TOP_DIR}/py" ruff check --select I --fix --preview --unsafe-fixes .
 if ! uv run --directory "${TOP_DIR}/py" ruff format --preview .; then
@@ -45,15 +40,3 @@ fi
 if ! go fmt -C "${TOP_DIR}/go" ./...; then
   exit 1
 fi
-
-# Format all TypeScript code.
-#
-# TODO: Re-enable once we have biome configured and enabled because that is
-# several times faster and compatible.
-#
-#pushd ${TOP_DIR}
-#pnpm run format
-#if [[ $? -ne 0 ]]; then
-#  exit 1
-#fi
-#popd

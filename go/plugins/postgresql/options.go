@@ -43,14 +43,16 @@ func WithCloudSQLInstance(projectID, region, instance string) Option {
 	}
 }
 
-// WithPool sets the Port field.
+// WithPool gives the engine an existing connection pool, used as is: the engine
+// dials nothing, needs no [WithDatabase], and leaves the pool open on Close.
 func WithPool(pool *pgxpool.Pool) Option {
 	return func(p *engineConfig) {
 		p.connPool = pool
 	}
 }
 
-// WithDatabase sets the Database field.
+// WithDatabase sets the database to connect to. Required unless the engine
+// uses a pool given with [WithPool].
 func WithDatabase(database string) Option {
 	return func(p *engineConfig) {
 		p.database = database

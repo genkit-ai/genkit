@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -34,6 +35,9 @@ import (
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/tracing"
+	"github.com/firebase/genkit/go/internal/tracingtest"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace/noop"
 )
 
 func inc(_ context.Context, x int) (int, error) {
@@ -44,12 +48,50 @@ func dec(_ context.Context, x int) (int, error) {
 	return x - 1, nil
 }
 
+// isolateReflectionEnv clears reflection settings a developer may have
+// exported, so tests that call Init get the server (or no server) they expect
+// regardless of the shell. Empty counts as unset.
+func isolateReflectionEnv(t *testing.T) {
+	t.Helper()
+	for _, k := range []string{
+		"GENKIT_ENV",
+		"GENKIT_REFLECTION_ENABLED",
+		"GENKIT_REFLECTION_PORT",
+		"GENKIT_REFLECTION_HOST",
+		"GENKIT_REFLECTION_V2_SERVER",
+		"GENKIT_REFLECTION_SECRET_TOKEN",
+	} {
+		t.Setenv(k, "")
+	}
+}
+
+// devEnvWithoutInitServer sets GENKIT_ENV=dev, which the runtime file needs,
+// while keeping Init from starting its own server: these tests start one
+// directly, and one started by Init (with its own context) would outlive the
+// test and leave a stale runtime file behind.
+func devEnvWithoutInitServer(t *testing.T) {
+	t.Helper()
+	isolateReflectionEnv(t)
+	t.Setenv("GENKIT_ENV", "dev")
+	t.Setenv("GENKIT_REFLECTION_ENABLED", "false")
+}
+
+// TestMain routes every test's spans through a Direct instrumentation over an
+// in-memory client, so runs carry real trace ids without an OpenTelemetry SDK.
+// Configured package-wide (rather than per test) because the instrumentation
+// registry is a global and TestServeMux runs parallel; per-test reset would
+// race it. TestRunActionWithoutProviderIDs swaps it out temporarily; it is not
+// parallel.
+func TestMain(m *testing.M) {
+	tracingtest.InstallDefault()
+	os.Exit(m.Run())
+}
+
 func TestReflectionServer(t *testing.T) {
 	t.Run("server startup and shutdown", func(t *testing.T) {
+		// The runtime file is dev-only now, and this case asserts on it.
+		devEnvWithoutInitServer(t)
 		g := Init(context.Background())
-
-		tc := tracing.NewTestOnlyTelemetryClient()
-		tracing.WriteTelemetryImmediate(tc)
 
 		errCh := make(chan error, 1)
 		serverStartCh := make(chan struct{})
@@ -57,7 +99,11 @@ func TestReflectionServer(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
-		srv := startReflectionServer(ctx, g, errCh, serverStartCh)
+		srv := startReflectionServer(ctx, g, reflectionConfig{
+			mode: reflectionV1,
+			host: defaultReflectionHost,
+			port: defaultReflectionPort,
+		}, errCh, serverStartCh)
 		if srv == nil {
 			t.Fatal("failed to start reflection server")
 		}
@@ -82,13 +128,117 @@ func TestReflectionServer(t *testing.T) {
 			t.Error("runtime file was not cleaned up")
 		}
 	})
+
+	t.Run("OS-assigned port is written to the runtime file", func(t *testing.T) {
+		devEnvWithoutInitServer(t)
+		g := Init(context.Background())
+
+		errCh := make(chan error, 1)
+		serverStartCh := make(chan struct{})
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		srv := startReflectionServer(ctx, g, reflectionConfig{
+			mode:   reflectionV1,
+			host:   defaultReflectionHost,
+			port:   0,
+			pinned: true,
+		}, errCh, serverStartCh)
+		if srv == nil {
+			t.Fatalf("failed to start reflection server: %v", <-errCh)
+		}
+		<-serverStartCh
+
+		data, err := os.ReadFile(srv.RuntimeFilePath)
+		if err != nil {
+			t.Fatalf("reading runtime file: %v", err)
+		}
+		var rf runtimeFileData
+		if err := json.Unmarshal(data, &rf); err != nil {
+			t.Fatal(err)
+		}
+		if strings.HasSuffix(rf.ReflectionServerURL, ":0") {
+			t.Fatalf("runtime file advertises port 0: %s", rf.ReflectionServerURL)
+		}
+		res, err := http.Get(rf.ReflectionServerURL + "/api/__health")
+		if err != nil {
+			t.Fatalf("advertised URL %s is not reachable: %v", rf.ReflectionServerURL, err)
+		}
+		res.Body.Close()
+	})
+
+	t.Run("a taken pinned port fails instead of shifting", func(t *testing.T) {
+		taken, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer taken.Close()
+		port := taken.Addr().(*net.TCPAddr).Port
+
+		isolateReflectionEnv(t)
+		g := Init(context.Background())
+		errCh := make(chan error, 1)
+		srv := startReflectionServer(context.Background(), g, reflectionConfig{
+			mode:   reflectionV1,
+			host:   defaultReflectionHost,
+			port:   port,
+			pinned: true,
+		}, errCh, make(chan struct{}))
+		if srv != nil {
+			t.Fatal("expected startup to fail on a taken pinned port")
+		}
+		if err := <-errCh; err == nil {
+			t.Fatal("expected an error")
+		}
+	})
+}
+
+func TestWithReflectionPort(t *testing.T) {
+	t.Run("rejects being set twice", func(t *testing.T) {
+		opts := &genkitOptions{}
+		if err := WithReflectionPort(3200).apply(opts); err != nil {
+			t.Fatal(err)
+		}
+		if err := WithReflectionPort(3300).apply(opts); err == nil {
+			t.Fatal("expected an error when set twice")
+		}
+	})
+
+	t.Run("Init binds the chosen port exactly", func(t *testing.T) {
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		port := l.Addr().(*net.TCPAddr).Port
+		l.Close()
+
+		isolateReflectionEnv(t)
+		t.Setenv("GENKIT_ENV", "dev")
+		// Cancelling the Init context shuts the server down and removes its
+		// runtime file, so nothing outlives the test.
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+		Init(ctx, WithReflectionPort(port))
+
+		res, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/api/__health", port))
+		if err != nil {
+			t.Fatalf("reflection server not on port %d: %v", port, err)
+		}
+		res.Body.Close()
+	})
+
+	t.Run("Init panics on an invalid port", func(t *testing.T) {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("expected Init to panic")
+			}
+		}()
+		Init(context.Background(), WithReflectionPort(-1))
+	})
 }
 
 func TestServeMux(t *testing.T) {
 	g := Init(context.Background())
-
-	tc := tracing.NewTestOnlyTelemetryClient()
-	tracing.WriteTelemetryImmediate(tc)
 
 	defineTestAction(g.reg, "test/inc", api.ActionTypeCustom, nil, nil, inc)
 	defineTestAction(g.reg, "test/dec", api.ActionTypeCustom, nil, nil, dec)
@@ -348,8 +498,6 @@ func TestServeMux(t *testing.T) {
 // This allows clients to get the trace ID immediately for cancellation or logging.
 func TestEarlyTraceIDTransmission(t *testing.T) {
 	g := Init(context.Background())
-	tc := tracing.NewTestOnlyTelemetryClient()
-	tracing.WriteTelemetryImmediate(tc)
 
 	s := &reflectionServer{Server: &http.Server{}, activeActions: newActiveActionsMap()}
 	ts := httptest.NewServer(serveMux(g, s))
@@ -490,8 +638,6 @@ func TestEarlyTraceIDTransmission(t *testing.T) {
 //  3. Verify: cancel endpoint returns 200, action's ctx.Done() fires, response has error code 1 (gRPC CANCELLED)
 func TestActionCancellation(t *testing.T) {
 	g := Init(context.Background())
-	tc := tracing.NewTestOnlyTelemetryClient()
-	tracing.WriteTelemetryImmediate(tc)
 
 	gotTraceID := make(chan string, 1)
 	gotCancelled := make(chan struct{})
@@ -567,6 +713,80 @@ func TestActionCancellation(t *testing.T) {
 	}
 	if !strings.Contains(responseBody, "Action was cancelled") {
 		t.Errorf("Expected 'Action was cancelled' message in response, got: %s", responseBody)
+	}
+}
+
+// TestRunActionWithoutProviderIDs covers a chain where no provider supplies
+// ids: the default OTel instrumentation over OTel's no-op provider (e.g. under
+// `genkit start --experimental-use-otel` with no OTel SDK configured). The trace headers
+// and cancellation must still work, on the ids the dispatcher mints.
+func TestRunActionWithoutProviderIDs(t *testing.T) {
+	prevTP := otel.GetTracerProvider()
+	otel.SetTracerProvider(noop.NewTracerProvider())
+	tracing.SetInstrumentation()
+	t.Cleanup(func() {
+		otel.SetTracerProvider(prevTP)
+		tracingtest.InstallDefault()
+	})
+
+	g := Init(context.Background())
+	gotTraceID := make(chan string, 1)
+	defineTestAction(g.reg, "test/blocking", api.ActionTypeCustom, nil, nil,
+		func(ctx context.Context, _ any) (any, error) {
+			gotTraceID <- tracing.SpanTraceInfo(ctx).TraceID
+			<-ctx.Done()
+			return nil, ctx.Err()
+		})
+
+	s := &reflectionServer{Server: &http.Server{}, activeActions: newActiveActionsMap()}
+	ts := httptest.NewServer(serveMux(g, s))
+	defer ts.Close()
+
+	type result struct {
+		traceID string
+		body    string
+	}
+	done := make(chan result, 1)
+	go func() {
+		req, _ := http.NewRequest("POST", ts.URL+"/api/runAction",
+			strings.NewReader(`{"key":"/custom/test/blocking","input":null}`))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			done <- result{}
+			return
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		done <- result{resp.Header.Get("X-Genkit-Trace-Id"), string(body)}
+	}()
+	traceID := <-gotTraceID
+	if traceID == "" {
+		t.Fatal("span has no trace id")
+	}
+	if _, ok := s.activeActions.Get(traceID); !ok {
+		t.Fatal("running action is not registered for cancellation")
+	}
+	cancelResp, err := http.Post(ts.URL+"/api/cancelAction", "application/json",
+		strings.NewReader(fmt.Sprintf(`{"traceId":%q}`, traceID)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelResp.Body.Close()
+	if cancelResp.StatusCode != http.StatusOK {
+		t.Fatalf("cancel status = %d, want 200", cancelResp.StatusCode)
+	}
+
+	select {
+	case r := <-done:
+		if r.traceID != traceID {
+			t.Errorf("X-Genkit-Trace-Id = %q, want %q", r.traceID, traceID)
+		}
+		if !strings.Contains(r.body, "Action was cancelled") {
+			t.Errorf("response body = %s, want a cancellation error", r.body)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("action did not finish after cancel")
 	}
 }
 
@@ -671,9 +891,6 @@ func TestCancelActionEndpoint(t *testing.T) {
 // init on an action without init support fails loudly.
 func TestRunActionWithInit(t *testing.T) {
 	g := Init(context.Background())
-
-	tc := tracing.NewTestOnlyTelemetryClient()
-	tracing.WriteTelemetryImmediate(tc)
 
 	type initConfig struct {
 		Prefix string `json:"prefix"`
@@ -878,8 +1095,6 @@ func TestReflectionErrorCodeYieldsValidHTTPStatus(t *testing.T) {
 // server mid-response. That is every unclassified failure, which is the common
 // one: a provider SDK rejecting a request reaches here as its own error type.
 func TestRunActionPlainErrorResponse(t *testing.T) {
-	tc := tracing.NewTestOnlyTelemetryClient()
-	tracing.WriteTelemetryImmediate(tc)
 
 	g := Init(context.Background())
 	defineTestAction(g.reg, "test/boom", api.ActionTypeCustom, nil, nil,

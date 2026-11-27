@@ -15,32 +15,25 @@
 package kimi_test
 
 import (
-	"context"
-	"os"
 	"testing"
 
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/compat_oai/internal/livetest"
 	"github.com/firebase/genkit/go/plugins/compat_oai/kimi"
+	"github.com/firebase/genkit/go/plugins/internal/livetest"
+	"github.com/firebase/genkit/go/plugins/internal/oailive"
 )
 
 func TestPluginLive(t *testing.T) {
-	if os.Getenv("KIMI_API_KEY") == "" && os.Getenv("MOONSHOT_API_KEY") == "" {
-		t.Skip("KIMI_API_KEY and MOONSHOT_API_KEY are not set")
-	}
+	livetest.Env(t, "KIMI_API_KEY", "MOONSHOT_API_KEY")
+	g := livetest.Init(t, &kimi.Kimi{})
 
-	ctx := context.Background()
-	g := genkit.Init(ctx,
-		genkit.WithPlugins(&kimi.Kimi{}),
-		genkit.WithDefaultModel("kimi/kimi-k3"),
-	)
-
-	livetest.Run(t, g, livetest.Suite{
-		Model:            kimi.ModelRef("kimi-k3", nil),
-		ReasoningModel:   kimi.ModelRef("kimi-k2.6", nil),
-		ReasoningContent: true,
-		VisionModel:      kimi.ModelRef("kimi-k3", nil),
-		ToolChoice:       true,
+	oailive.Run(t, g, oailive.Suite{
+		Suite: livetest.Suite{
+			Model:            kimi.ModelRef("kimi-k3", nil),
+			ReasoningModel:   kimi.ModelRef("kimi-k2.6", nil),
+			ReasoningContent: true,
+			LimitConfig:      &kimi.ChatConfig{MaxOutputTokens: 16},
+			BadKeyPlugin:     &kimi.Kimi{APIKey: "invalid"},
+		},
 		ExtraConfig: map[string]any{
 			"extra": map[string]any{"thinking": map[string]any{"type": "disabled"}},
 		},

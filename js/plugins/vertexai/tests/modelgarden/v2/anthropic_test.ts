@@ -89,6 +89,38 @@ describe('toAnthropicRequest', () => {
       },
     },
     {
+      should:
+        'should transform empty genkit reasoning part with signature back to anthropic thinking block',
+      input: {
+        messages: [
+          {
+            role: 'model',
+            content: [
+              { reasoning: '', metadata: { thoughtSignature: 'sig_empty' } },
+              { text: 'Hello!' },
+            ],
+          },
+        ],
+      },
+      expectedOutput: {
+        max_tokens: 4096,
+        model: MODEL_ID,
+        messages: [
+          {
+            role: 'assistant',
+            content: [
+              {
+                type: 'thinking',
+                thinking: '',
+                signature: 'sig_empty',
+              } as any,
+              { type: 'text', text: 'Hello!' },
+            ],
+          },
+        ],
+      },
+    },
+    {
       should: 'should transform system message',
       input: {
         messages: [

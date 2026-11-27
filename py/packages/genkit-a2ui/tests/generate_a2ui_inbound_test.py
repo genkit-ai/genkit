@@ -37,8 +37,7 @@ from helpers import (
     weather_fence,
 )
 
-from genkit import Message, Part
-from genkit._core._typing import Role
+from genkit import Message, Part, Role
 
 
 @pytest.mark.asyncio
@@ -48,7 +47,7 @@ async def test_generate_a2ui_sends_click_to_model_as_text() -> None:
     pm.responses = [model_ok()]
 
     await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         messages=[
             Message(
                 role=Role.USER,
@@ -87,7 +86,7 @@ async def test_generate_a2ui_replays_prior_surface_as_fence() -> None:
     pm.responses = [model_ok()]
 
     await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         messages=[
             Message(
                 role=Role.MODEL,
@@ -134,7 +133,7 @@ async def test_generate_a2ui_splits_replayed_surfaces_around_a_click() -> None:
     pm.responses = [model_ok()]
 
     await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         messages=[
             Message(
                 role=Role.USER,
@@ -185,7 +184,7 @@ async def test_generate_a2ui_empty_ui_message_keeps_placeholder_before_model() -
     pm.responses = [model_ok()]
 
     await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         messages=[
             Message(role=Role.MODEL, content=[a2ui_data_part([])]),
             Message(role=Role.USER, content=[text_part('hi')]),
@@ -208,7 +207,7 @@ async def test_generate_a2ui_keeps_neighbor_text_when_rewriting_ui() -> None:
     pm.responses = [model_ok()]
 
     await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         messages=[
             Message(
                 role=Role.MODEL,
@@ -239,7 +238,7 @@ async def test_generate_a2ui_new_surface_does_not_reuse_history_id() -> None:
     pm.responses = [model_ok(weather_fence())]
 
     response = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         messages=[
             Message(
                 role=Role.MODEL,
@@ -271,7 +270,7 @@ async def test_generate_a2ui_drops_bare_a2ui_mime_part() -> None:
     pm.responses = [model_ok()]
 
     await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         messages=[
             Message(
                 role=Role.USER,

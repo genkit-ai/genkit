@@ -74,9 +74,9 @@ export function attachPluginActionToCommand(
 }
 
 function pluginToCommander(p: ToolPlugin): Command {
-  const cmd = new Command(p.keyword).description(
-    p.name + ' ' + clc.italic('(plugin)')
-  );
+  const cmd = new Command(p.keyword)
+    .allowExcessArguments(true)
+    .description(p.name + ' ' + clc.italic('(plugin)'));
   for (const a of p.actions) {
     const subcmd = cmd.command(a.action).description(a.helpText);
     attachPluginActionToCommand(subcmd, a);
@@ -85,6 +85,7 @@ function pluginToCommander(p: ToolPlugin): Command {
   // Default action to catch unknown commands.
   cmd.action((_, { args }: { args: string[] }) => {
     logger.error(`"${clc.bold(args[0])}" is not a known ${p.name} command.`);
+    process.exitCode = 1;
   });
   return cmd;
 }

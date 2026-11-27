@@ -4,6 +4,16 @@ A [Genkit](https://github.com/genkit-ai/genkit) plugin that provides a
 [Vercel AI SDK](https://sdk.vercel.ai/) `ChatTransport` for connecting
 `useChat` to Genkit Agents.
 
+> **Building with a coding agent? Install the Genkit JS skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-js
+> ```
+>
+> It teaches your agent the current Genkit JS APIs and common gotchas.
+> Source, manual install and skills for other languages:
+> [genkit-ai/skills](https://github.com/genkit-ai/skills).
+
 Use this plugin to build rich chat UIs in React (Next.js, Vite, etc.) that
 stream responses from Genkit agents — including multi-turn conversations,
 tool calls, and interrupt-based human-in-the-loop flows — with zero

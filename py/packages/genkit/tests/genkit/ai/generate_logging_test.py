@@ -9,14 +9,13 @@ import pytest
 import structlog
 from structlog.testing import capture_logs
 
-from genkit import Genkit, Message, ModelResponse, ModelResponseChunk, Part
-from genkit._ai._generate import generate_action
+from genkit import ErrorReason, Genkit, Message, ModelResponse, ModelResponseChunk, Part, PublicError
+from genkit._ai._generate import CallScope, generate_action
 from genkit._ai._model import resolve_model_arg
-from genkit._ai._testing import define_programmable_model
-from genkit._ai._tools import Interrupt, respond_to_interrupt, restart_tool
+from genkit._ai._tools import Interrupt
 from genkit._core._environment import GENKIT_ENV
 from genkit._core._logger import GENKIT_LOG, get_logger
-from genkit._core._model import GenerateActionOptions, Resume
+from genkit._core._model import GenerateActionOptions, ModelRequest, Resume
 from genkit._core._registry import Registry
 from genkit._core._typing import (
     FinishReason,
@@ -24,6 +23,8 @@ from genkit._core._typing import (
     Role,
     ToolRequest,
 )
+from genkit.model import ModelContext
+from genkit.testing import define_scripted_model
 
 BLOB = 'A' * 1_000_000
 
@@ -48,8 +49,8 @@ def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 async def _generate_once() -> None:
     """Run one generate call against a model returning a blob in raw and custom."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     pm.responses = [
         ModelResponse(
             message=Message(role=Role.MODEL, content=[Part.from_text('hello there')]),
@@ -98,8 +99,8 @@ async def test_blocked_finish_still_logs_model_responded(monkeypatch: pytest.Mon
     structlog.reset_defaults()
     monkeypatch.setenv(GENKIT_LOG, 'debug')
 
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     pm.responses = [
         ModelResponse(
             finish_reason=FinishReason.BLOCKED,
@@ -125,8 +126,8 @@ async def test_invalid_output_logs_model_finish_reason(monkeypatch: pytest.Monke
     structlog.reset_defaults()
     monkeypatch.setenv(GENKIT_LOG, 'debug')
 
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     pm.responses = [
         ModelResponse(
             finish_reason=FinishReason.STOP,
@@ -183,7 +184,7 @@ async def test_abnormal_finish_skips_output_parsing(monkeypatch: pytest.MonkeyPa
     structlog.reset_defaults()
     monkeypatch.setenv(GENKIT_LOG, 'debug')
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     pm.responses = [
         ModelResponse(
             message=Message(role=Role.MODEL, content=[Part.from_text('nope')]),
@@ -194,9 +195,9 @@ async def test_abnormal_finish_skips_output_parsing(monkeypatch: pytest.MonkeyPa
 
     with capture_logs() as entries:
         response = await generate_action(
-            ai.registry,
+            CallScope(ai),
             GenerateActionOptions(
-                model='programmableModel',
+                model='scriptedModel',
                 messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
                 output=GenerateActionOutputConfig(format='json'),
             ),
@@ -222,7 +223,7 @@ async def test_other_finish_skips_parsing_even_when_text_is_valid(monkeypatch: p
     structlog.reset_defaults()
     monkeypatch.setenv(GENKIT_LOG, 'info')
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     pm.responses = [
         ModelResponse(
             message=Message(role=Role.MODEL, content=[Part.from_text('{"ok": true}')]),
@@ -232,9 +233,9 @@ async def test_other_finish_skips_parsing_even_when_text_is_valid(monkeypatch: p
 
     with capture_logs() as entries:
         response = await generate_action(
-            ai.registry,
+            CallScope(ai),
             GenerateActionOptions(
-                model='programmableModel',
+                model='scriptedModel',
                 messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
                 output=GenerateActionOutputConfig(
                     format='json',
@@ -265,7 +266,7 @@ async def test_schema_mismatch_logs_when_debug_enabled(monkeypatch: pytest.Monke
     structlog.reset_defaults()
     monkeypatch.setenv(GENKIT_LOG, 'debug')
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     pm.responses = [
         ModelResponse(
             message=Message(role=Role.MODEL, content=[Part.from_text('not json')]),
@@ -275,9 +276,9 @@ async def test_schema_mismatch_logs_when_debug_enabled(monkeypatch: pytest.Monke
 
     with capture_logs() as entries:
         response = await generate_action(
-            ai.registry,
+            CallScope(ai),
             GenerateActionOptions(
-                model='programmableModel',
+                model='scriptedModel',
                 messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
                 output=GenerateActionOutputConfig(format='json'),
             ),
@@ -286,7 +287,7 @@ async def test_schema_mismatch_logs_when_debug_enabled(monkeypatch: pytest.Monke
     assert response.message is not None
     mismatched = [e for e in entries if e['event'] == 'model output does not match the expected schema']
     assert len(mismatched) == 1
-    assert mismatched[0]['model'] == 'programmableModel'
+    assert mismatched[0]['model'] == 'scriptedModel'
 
 
 @pytest.mark.asyncio
@@ -295,7 +296,7 @@ async def test_tool_interrupt_logs(monkeypatch: pytest.MonkeyPatch) -> None:
     structlog.reset_defaults()
     monkeypatch.setenv(GENKIT_LOG, 'debug')
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='hold')
     async def hold(_: dict) -> str:  # noqa: ARG001
@@ -313,9 +314,9 @@ async def test_tool_interrupt_logs(monkeypatch: pytest.MonkeyPatch) -> None:
 
     with capture_logs() as entries:
         response = await generate_action(
-            ai.registry,
+            CallScope(ai),
             GenerateActionOptions(
-                model='programmableModel',
+                model='scriptedModel',
                 messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
                 tools=['hold'],
             ),
@@ -337,7 +338,7 @@ async def test_restarted_tool_interrupt_logs(monkeypatch: pytest.MonkeyPatch) ->
     structlog.reset_defaults()
     monkeypatch.setenv(GENKIT_LOG, 'debug')
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='hold')
     async def hold(_: dict) -> str:  # noqa: ARG001
@@ -353,9 +354,9 @@ async def test_restarted_tool_interrupt_logs(monkeypatch: pytest.MonkeyPatch) ->
         )
     ]
     first = await generate_action(
-        ai.registry,
+        CallScope(ai),
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
             tools=['hold'],
         ),
@@ -363,12 +364,12 @@ async def test_restarted_tool_interrupt_logs(monkeypatch: pytest.MonkeyPatch) ->
 
     with capture_logs() as entries:
         response = await generate_action(
-            ai.registry,
+            CallScope(ai),
             GenerateActionOptions(
-                model='programmableModel',
+                model='scriptedModel',
                 messages=list(first.messages),
                 tools=['hold'],
-                resume=Resume(restart=[restart_tool(interrupt=first.interrupts[0])]),
+                resume=Resume(restart=[first.interrupts[0].restart()]),
             ),
         )
 
@@ -384,7 +385,7 @@ async def test_tool_stream_callback_failure_fails_generate(monkeypatch: pytest.M
     structlog.reset_defaults()
     monkeypatch.setenv(GENKIT_LOG, 'debug')
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='echo')
     async def echo(_: dict) -> str:  # noqa: ARG001
@@ -409,9 +410,9 @@ async def test_tool_stream_callback_failure_fails_generate(monkeypatch: pytest.M
             raise RuntimeError('sink closed')
 
     response = await generate_action(
-        ai.registry,
+        CallScope(ai),
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
             tools=['echo'],
         ),
@@ -422,7 +423,7 @@ async def test_tool_stream_callback_failure_fails_generate(monkeypatch: pytest.M
     assert response.message is None
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
-    assert response.error.reason is None
+    assert response.error.reason is ErrorReason.STREAM_CALLBACK_FAILED
     assert response.error.message == response.finish_message
     assert [message.role for message in response.messages] == [Role.USER, Role.MODEL, Role.TOOL]
 
@@ -431,7 +432,7 @@ async def test_tool_stream_callback_failure_fails_generate(monkeypatch: pytest.M
 async def test_model_stream_callback_failure_returns_closed_history() -> None:
     """A model chunk pipe failure returns the conversation entering that turn."""
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     pm.responses = [
         ModelResponse(
             message=Message(role=Role.MODEL, content=[Part.from_text('done')]),
@@ -444,9 +445,9 @@ async def test_model_stream_callback_failure_returns_closed_history() -> None:
         raise RuntimeError('model sink closed')
 
     response = await generate_action(
-        ai.registry,
+        CallScope(ai),
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
         ),
         on_chunk=on_chunk,
@@ -456,7 +457,7 @@ async def test_model_stream_callback_failure_returns_closed_history() -> None:
     assert response.message is None
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
-    assert response.error.reason is None
+    assert response.error.reason is ErrorReason.STREAM_CALLBACK_FAILED
     assert response.error.message == response.finish_message
     assert [message.role for message in response.messages] == [Role.USER]
 
@@ -465,7 +466,7 @@ async def test_model_stream_callback_failure_returns_closed_history() -> None:
 async def test_resumed_tool_stream_callback_failure_returns_closed_history() -> None:
     """A resumed tool chunk pipe failure keeps the conversation that already closed."""
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='hold')
     async def hold(_: dict) -> str:  # noqa: ARG001
@@ -485,9 +486,9 @@ async def test_resumed_tool_stream_callback_failure_returns_closed_history() -> 
         ),
     ]
     first = await generate_action(
-        ai.registry,
+        CallScope(ai),
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
             tools=['hold'],
         ),
@@ -497,11 +498,11 @@ async def test_resumed_tool_stream_callback_failure_returns_closed_history() -> 
         if getattr(chunk, 'role', None) == Role.TOOL:
             raise RuntimeError('resume sink closed')
 
-    reply = respond_to_interrupt({'approved': True}, interrupt=first.interrupts[0])
+    reply = first.interrupts[0].respond({'approved': True})
     response = await generate_action(
-        ai.registry,
+        CallScope(ai),
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=list(first.messages),
             tools=['hold'],
             resume=Resume(respond=[reply]),
@@ -513,6 +514,155 @@ async def test_resumed_tool_stream_callback_failure_returns_closed_history() -> 
     assert response.message is None
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
-    assert response.error.reason is None
+    assert response.error.reason is ErrorReason.STREAM_CALLBACK_FAILED
     assert response.error.message == response.finish_message
     assert [message.role for message in response.messages] == [Role.USER, Role.MODEL, Role.TOOL]
+
+
+def _errors(entries: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [e for e in entries if e['log_level'] == 'error']
+
+
+def _tool_turn(name: str) -> ModelResponse:
+    return ModelResponse(
+        message=Message(role=Role.MODEL, content=[Part(tool_request=ToolRequest(name=name, input={}, ref='1'))]),
+        finish_reason=FinishReason.STOP,
+    )
+
+
+@pytest.mark.asyncio
+async def test_crashing_model_logs_the_hidden_cause_once() -> None:
+    """A model that raises returns 'internal error'; the cause is logged once at ERROR."""
+    structlog.reset_defaults()
+    ai = Genkit()
+
+    async def crashing(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
+        raise RuntimeError('model backend exploded')
+
+    ai.define_model(name='crash', fn=crashing)
+
+    with capture_logs() as entries:
+        response = await ai.generate(model='crash', prompt='hi')
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.error is not None
+    assert response.error.message == 'internal error'
+    errors = _errors(entries)
+    assert len(errors) == 1
+    assert errors[0]['event'] == "model 'crash' raised, returning finish_reason=failed"
+    assert errors[0]['model'] == 'crash'
+    assert isinstance(errors[0]['exc_info'], RuntimeError)
+    assert str(errors[0]['exc_info']) == 'model backend exploded'
+
+
+@pytest.mark.asyncio
+async def test_crashing_tool_is_named_and_logged_once() -> None:
+    """The tool site names the tool; the generate-level box does not log it again."""
+    structlog.reset_defaults()
+    ai = Genkit()
+    pm, _ = define_scripted_model(ai)
+
+    @ai.tool(name='check_allergens')
+    async def check_allergens(_: dict) -> str:  # noqa: ARG001
+        raise RuntimeError('allergen db down')
+
+    pm.responses = [_tool_turn('check_allergens')]
+
+    with capture_logs() as entries:
+        response = await ai.generate(model='scriptedModel', prompt='hi', tools=['check_allergens'])
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.error is not None
+    assert response.error.message == 'internal error'
+    errors = _errors(entries)
+    assert len(errors) == 1
+    assert errors[0]['tool'] == 'check_allergens'
+    assert str(errors[0]['exc_info']) == 'allergen db down'
+
+
+@pytest.mark.asyncio
+async def test_crashing_restarted_tool_is_logged_once() -> None:
+    """A tool that raises on restart is named once, not again by the outer box."""
+    structlog.reset_defaults()
+    ai = Genkit()
+    pm, _ = define_scripted_model(ai)
+    calls: list[int] = []
+
+    @ai.tool(name='hold')
+    async def hold(_: dict) -> str:  # noqa: ARG001
+        calls.append(1)
+        if len(calls) == 1:
+            raise Interrupt({'hold': True})
+        raise RuntimeError('kitchen printer jammed')
+
+    pm.responses = [_tool_turn('hold')]
+    first = await ai.generate(model='scriptedModel', prompt='hi', tools=['hold'])
+
+    with capture_logs() as entries:
+        response = await generate_action(
+            CallScope(ai),
+            GenerateActionOptions(
+                model='scriptedModel',
+                messages=list(first.messages),
+                tools=['hold'],
+                resume=Resume(restart=[first.interrupts[0].restart()]),
+            ),
+        )
+
+    assert response.finish_reason == FinishReason.FAILED
+    errors = _errors(entries)
+    assert len(errors) == 1
+    assert errors[0]['tool'] == 'hold'
+    assert str(errors[0]['exc_info']) == 'kitchen printer jammed'
+
+
+@pytest.mark.asyncio
+async def test_published_tool_error_is_not_logged() -> None:
+    """A PublicError message is already on response.error, so nothing is logged."""
+    structlog.reset_defaults()
+    ai = Genkit()
+    pm, _ = define_scripted_model(ai)
+
+    @ai.tool(name='check_allergens')
+    async def check_allergens(_: dict) -> str:  # noqa: ARG001
+        raise PublicError('INVALID_ARGUMENT', 'we do not serve peanuts')
+
+    pm.responses = [_tool_turn('check_allergens')]
+
+    with capture_logs() as entries:
+        response = await ai.generate(model='scriptedModel', prompt='hi', tools=['check_allergens'])
+
+    assert response.error is not None
+    assert response.error.message == 'we do not serve peanuts'
+    assert _errors(entries) == []
+
+
+@pytest.mark.asyncio
+async def test_readonly_exception_still_boxes_and_logs() -> None:
+    """An exception whose __setattr__ raises AttributeError still boxes and logs cleanly."""
+    structlog.reset_defaults()
+    ai = Genkit()
+
+    class ReadOnlyError(RuntimeError):
+        def __setattr__(self, name: str, value: object) -> None:
+            if hasattr(BaseException, name):
+                super().__setattr__(name, value)
+                return
+            raise AttributeError(name)
+
+    async def crashing(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
+        raise ReadOnlyError('immutable provider failure')
+
+    ai.define_model(name='crash', fn=crashing)
+
+    with capture_logs() as entries:
+        response = await ai.generate(model='crash', prompt='hi')
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.error is not None
+    assert response.error.message == 'internal error'
+    errors = _errors(entries)
+    assert len(errors) == 1
+    assert isinstance(errors[0]['exc_info'], ReadOnlyError)
+    assert str(errors[0]['exc_info']) == 'immutable provider failure'
+    assert not hasattr(errors[0]['exc_info'], '_genkit_failure_logged')

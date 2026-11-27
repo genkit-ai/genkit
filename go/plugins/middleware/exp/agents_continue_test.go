@@ -413,7 +413,7 @@ func TestAgentsContinueExpiredRecoversCommittedProgress(t *testing.T) {
 		return toolReqResp(req, &ai.ToolRequest{Name: "continue_task",
 			Input: map[string]any{"taskId": deadTask, "instructions": "continue"}}), nil
 	})
-	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"),
+	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithMessages(launchMessages(deadTask)...), ai.WithPrompt("go"),
 		ai.WithUse(&Agents{Agents: []aix.AgentRef{{Name: "keeper"}}}))
 	if err != nil {
 		t.Fatal(err)
@@ -471,7 +471,7 @@ func TestAgentsContinueExpiredWithNothingSavedRefused(t *testing.T) {
 		}
 		return toolReqResp(req, &ai.ToolRequest{Name: "continue_task", Input: map[string]any{"taskId": deadTask}}), nil
 	})
-	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"),
+	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithMessages(launchMessages(deadTask)...), ai.WithPrompt("go"),
 		ai.WithUse(&Agents{Agents: []aix.AgentRef{{Name: "keeper"}}}))
 	if err != nil {
 		t.Fatal(err)
@@ -518,7 +518,7 @@ func TestAgentsContinueExpiredFinishedParentRequiresInstructions(t *testing.T) {
 		}
 		return toolReqResp(req, &ai.ToolRequest{Name: "continue_task", Input: map[string]any{"taskId": deadTask}}), nil
 	})
-	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"),
+	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithMessages(launchMessages(deadTask)...), ai.WithPrompt("go"),
 		ai.WithUse(&Agents{Agents: []aix.AgentRef{{Name: "keeper"}}}))
 	if err != nil {
 		t.Fatal(err)
@@ -608,7 +608,7 @@ func TestAgentsContinueExpiredFenceFailureRefusesAndRefunds(t *testing.T) {
 			return textResp(req, "done"), nil
 		}
 	})
-	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"),
+	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithMessages(launchMessages(deadTask)...), ai.WithPrompt("go"),
 		ai.WithUse(&Agents{Agents: []aix.AgentRef{{Name: "keeper"}}, MaxDelegations: 1}))
 	if err != nil {
 		t.Fatal(err)
@@ -665,7 +665,7 @@ func TestAgentsContinueExpiredDeadEndsKeepTheSlot(t *testing.T) {
 				}
 				return textResp(req, "done"), nil
 			})
-			resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"),
+			resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithMessages(launchMessages(deadTask)...), ai.WithPrompt("go"),
 				ai.WithUse(&Agents{Agents: []aix.AgentRef{{Name: "keeper"}}, MaxDelegations: 1}))
 			if err != nil {
 				t.Fatal(err)
@@ -711,7 +711,7 @@ func TestAgentsContinueParentReadBlipRefundsSlot(t *testing.T) {
 			return textResp(req, "done"), nil
 		}
 	})
-	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"),
+	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithMessages(launchMessages(deadTask)...), ai.WithPrompt("go"),
 		ai.WithUse(&Agents{Agents: []aix.AgentRef{{Name: "keeper"}}, MaxDelegations: 1}))
 	if err != nil {
 		t.Fatal(err)
@@ -765,7 +765,7 @@ func TestAgentsContinueExpiredWindingDownRefusesAndRefunds(t *testing.T) {
 			return textResp(req, "done"), nil
 		}
 	})
-	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"),
+	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithMessages(launchMessages(deadTask)...), ai.WithPrompt("go"),
 		ai.WithUse(&Agents{Agents: []aix.AgentRef{{Name: "keeper"}}, MaxDelegations: 1}))
 	if err != nil {
 		t.Fatal(err)
@@ -812,7 +812,7 @@ func TestAgentsContinueExpiredCompletedFinalizeGetsInstructionsGate(t *testing.T
 		}
 		return textResp(req, "done"), nil
 	})
-	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"),
+	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithMessages(launchMessages(deadTask)...), ai.WithPrompt("go"),
 		ai.WithUse(&Agents{Agents: []aix.AgentRef{{Name: "keeper"}}}))
 	if err != nil {
 		t.Fatal(err)
@@ -861,14 +861,14 @@ func TestAgentsAbortingTaskReportsAndRefusesContinue(t *testing.T) {
 		case len(continues) == 0:
 			return toolReqResp(req, &ai.ToolRequest{Name: "continue_task",
 				Input: map[string]any{"taskId": task, "instructions": "go on"}}), nil
-		case len(delegations) == 0:
+		case len(delegations) < 2: // the seeded launch, then this call's own
 			return toolReqResp(req, &ai.ToolRequest{Name: "delegate_to_keeper",
 				Input: map[string]any{"task": "more"}}), nil
 		default:
 			return textResp(req, "done"), nil
 		}
 	})
-	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"),
+	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithMessages(launchMessages(task)...), ai.WithPrompt("go"),
 		ai.WithUse(&Agents{Agents: []aix.AgentRef{{Name: "keeper"}}, Async: true, MaxDelegations: 1}))
 	if err != nil {
 		t.Fatal(err)
@@ -888,7 +888,7 @@ func TestAgentsAbortingTaskReportsAndRefusesContinue(t *testing.T) {
 	// The refusal returned its slot: under a cap of one, a delegation still
 	// runs afterwards.
 	delegations := delegationResponses(t, resp.History(), "delegate_to_keeper")
-	if len(delegations) != 1 || delegations[0].Response != "kept going" {
+	if len(delegations) != 2 || delegations[1].Response != "kept going" {
 		t.Errorf("expected the refused continuation to refund its slot, got %+v", delegations)
 	}
 }

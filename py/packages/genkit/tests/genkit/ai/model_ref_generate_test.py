@@ -11,16 +11,16 @@ import pytest
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
-from genkit import Genkit
+from genkit import Genkit, Message, Part
 from genkit._ai._model import ModelConfig
 from genkit._ai._prompt import GenerateCall, to_generate_options
-from genkit._ai._testing import EchoModel, define_echo_model
-from genkit._core._action import ActionRunContext
-from genkit._core._error import GenkitError, RuntimeErrorReason
+from genkit._core._error import ErrorReason, GenkitError
 from genkit._core._model import ModelRequest, ModelResponse
-from genkit._core._typing import Operation
+from genkit._core._operation import Operation
+from genkit._core._typing import Role
 from genkit.exp import Genkit as ExpGenkit
-from genkit.model import model, model_ref
+from genkit.model import Model, ModelContext, ModelRef
+from genkit.testing import EchoModel, define_echo_model
 
 
 class CustomConfig(BaseModel):
@@ -31,10 +31,16 @@ class CustomConfig(BaseModel):
     safety_settings: dict[str, str] | None = None
 
 
-class ExcludedKeyConfig(ModelConfig):
-    """ModelConfig whose api_key is omitted from model_dump."""
+class ExcludedFieldConfig(ModelConfig):
+    """ModelConfig with a client-only setting omitted from model_dump."""
 
-    api_key: str | None = Field(default=None, exclude=True)
+    http_options: dict[str, str] | None = Field(default=None, exclude=True)
+
+
+class AllowExtraConfig(ModelConfig):
+    """A plugin class that still lets unknown keys through, so overlay pins see them."""
+
+    model_config = ConfigDict(extra='allow')
 
 
 class OtherFamilyConfig(BaseModel):
@@ -79,7 +85,7 @@ def ai_with_echo() -> tuple[Genkit, EchoModel]:
 async def test_generate_with_model_ref(ai_with_echo: tuple[Genkit, EchoModel]) -> None:
     """generate accepts a ModelRef and resolves its wire name."""
     ai, echo = ai_with_echo
-    ref = model_ref('testEcho', config_schema=ModelConfig)
+    ref = ModelRef(name='testEcho', config_schema=ModelConfig)
 
     response = await ai.generate(model=ref, prompt='Hello')
 
@@ -91,7 +97,7 @@ async def test_generate_with_model_ref(ai_with_echo: tuple[Genkit, EchoModel]) -
 async def test_generate_model_ref_default_config(ai_with_echo: tuple[Genkit, EchoModel]) -> None:
     """Default config on the ref is used when the call omits config."""
     ai, echo = ai_with_echo
-    ref = model_ref('testEcho', config_schema=ModelConfig, config=ModelConfig(temperature=0.1))
+    ref = ModelRef(name='testEcho', config_schema=ModelConfig, config=ModelConfig(temperature=0.1))
 
     await ai.generate(model=ref, prompt='Hello')
 
@@ -106,8 +112,8 @@ async def test_generate_model_ref_merges_call_time_dict(
 ) -> None:
     """Call-time dict config merges over ModelRef defaults."""
     ai, echo = ai_with_echo
-    ref = model_ref(
-        'testEcho',
+    ref = ModelRef(
+        name='testEcho',
         config_schema=ModelConfig,
         config=ModelConfig(temperature=0.2),
     )
@@ -126,8 +132,8 @@ async def test_generate_model_ref_same_key_override(
 ) -> None:
     """Call-time config wins when the same key exists on the ModelRef default."""
     ai, echo = ai_with_echo
-    ref = model_ref(
-        'testEcho',
+    ref = ModelRef(
+        name='testEcho',
         config_schema=ModelConfig,
         config=ModelConfig(temperature=0.2),
     )
@@ -157,8 +163,8 @@ async def test_generate_string_model_config_dict_unchanged(
 async def test_generate_stream_with_model_ref(ai_with_echo: tuple[Genkit, EchoModel]) -> None:
     """generate_stream applies the ref's version and config, not just the name."""
     ai, echo = ai_with_echo
-    ref = model_ref(
-        'testEcho',
+    ref = ModelRef(
+        name='testEcho',
         config_schema=ModelConfig,
         version='001',
         config=ModelConfig(temperature=0.4),
@@ -177,7 +183,7 @@ async def test_generate_stream_with_model_ref(ai_with_echo: tuple[Genkit, EchoMo
 async def test_define_prompt_with_model_ref(ai_with_echo: tuple[Genkit, EchoModel]) -> None:
     """define_prompt stores a ModelRef and unwraps it at execution time."""
     ai, echo = ai_with_echo
-    ref = model_ref('testEcho', config_schema=ModelConfig, config=ModelConfig(temperature=0.2))
+    ref = ModelRef(name='testEcho', config_schema=ModelConfig, config=ModelConfig(temperature=0.2))
 
     prompt = ai.define_prompt(
         name='echoPrompt',
@@ -197,7 +203,7 @@ async def test_define_prompt_dict_none_clear_and_extra(
 ) -> None:
     """define_prompt dicts accept None-clears and extra keys the same as generate()."""
     ai, echo = ai_with_echo
-    ref = model_ref('testEcho', config_schema=ModelConfig, config=ModelConfig(temperature=0.7))
+    ref = ModelRef(name='testEcho', config_schema=AllowExtraConfig, config=AllowExtraConfig(temperature=0.7))
 
     prompt = ai.define_prompt(
         name='echoPrompt',
@@ -217,16 +223,16 @@ async def test_generate_operation_with_model_ref(ai: Genkit) -> None:
     """generate_operation applies the ref's version and config, not just the name."""
     seen: list[ModelRequest] = []
 
-    async def start(request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(request: ModelRequest, _ctx: ModelContext) -> Operation:
         seen.append(request)
         return Operation(id='ref-op-123', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     ai.define_background_model(name='lro-model', start=start, check=check)
-    ref = model_ref(
-        'lro-model',
+    ref = ModelRef(
+        name='lro-model',
         config_schema=ModelConfig,
         version='001',
         config=ModelConfig(temperature=0.4),
@@ -246,7 +252,7 @@ async def test_generate_operation_model_ref_rejects_non_lro(
 ) -> None:
     """generate_operation still rejects ModelRefs whose model lacks LRO support."""
     ai, _ = ai_with_echo
-    ref = model_ref('testEcho', config_schema=ModelConfig)
+    ref = ModelRef(name='testEcho', config_schema=ModelConfig)
 
     with pytest.raises(GenkitError) as exc_info:
         await ai.generate_operation(model=ref, prompt='Hi')
@@ -259,8 +265,8 @@ async def test_define_agent_with_model_ref() -> None:
     """define_agent accepts a ModelRef and uses resolved name/config on turns."""
     ai = ExpGenkit()
     echo, _ = define_echo_model(ai, name='testEcho')
-    ref = model_ref(
-        'testEcho',
+    ref = ModelRef(
+        name='testEcho',
         config_schema=ModelConfig,
         config=ModelConfig(temperature=0.3),
     )
@@ -279,7 +285,7 @@ async def test_define_agent_with_model_ref() -> None:
 async def test_model_ref_version_seeds_config(ai_with_echo: tuple[Genkit, EchoModel]) -> None:
     """ref.version flows into config at lowest precedence."""
     ai, echo = ai_with_echo
-    ref = model_ref('testEcho', config_schema=ModelConfig, version='001')
+    ref = ModelRef(name='testEcho', config_schema=ModelConfig, version='001')
 
     await ai.generate(model=ref, prompt='Hello')
 
@@ -293,7 +299,7 @@ async def test_model_ref_version_overridden_by_call_config(
 ) -> None:
     """Call-time config version beats ref.version."""
     ai, echo = ai_with_echo
-    ref = model_ref('testEcho', config_schema=ModelConfig, version='001')
+    ref = ModelRef(name='testEcho', config_schema=ModelConfig, version='001')
 
     await ai.generate(model=ref, config={'version': '002'}, prompt='Hello')
 
@@ -307,7 +313,7 @@ async def test_unknown_config_keys_pass_through_to_plugin(
 ) -> None:
     """Escape hatch: keys outside the ref schema reach the plugin untouched."""
     ai, echo = ai_with_echo
-    ref = model_ref('testEcho', config_schema=CustomConfig, config=CustomConfig(temperature=0.7))
+    ref = ModelRef(name='testEcho', config_schema=CustomConfig, config=CustomConfig(temperature=0.7))
 
     await ai.generate(model=ref, config={'thinking_config': {'budget': 8192}}, prompt='Hello')
 
@@ -322,7 +328,7 @@ async def test_explicit_none_clears_ref_default_via_generate(
 ) -> None:
     """Explicitly-set None clears the ref default; plugin sees absence."""
     ai, echo = ai_with_echo
-    ref = model_ref('testEcho', config_schema=CustomConfig, config=CustomConfig(temperature=0.7))
+    ref = ModelRef(name='testEcho', config_schema=CustomConfig, config=CustomConfig(temperature=0.7))
 
     await ai.generate(model=ref, config=CustomConfig(temperature=None), prompt='Hello')
 
@@ -336,7 +342,7 @@ async def test_explicit_none_clears_default_via_prompt(
 ) -> None:
     """The prompt path honors the same clearing rule as generate."""
     ai, echo = ai_with_echo
-    ref = model_ref('testEcho', config_schema=CustomConfig)
+    ref = ModelRef(name='testEcho', config_schema=CustomConfig)
 
     prompt = ai.define_prompt(
         name='clearingPrompt',
@@ -356,7 +362,7 @@ async def test_unset_fields_do_not_clobber_ref_defaults(
 ) -> None:
     """Unset != None: untouched fields on a typed config cannot clear defaults."""
     ai, echo = ai_with_echo
-    ref = model_ref('testEcho', config_schema=CustomConfig, config=CustomConfig(temperature=0.7))
+    ref = ModelRef(name='testEcho', config_schema=CustomConfig, config=CustomConfig(temperature=0.7))
 
     await ai.generate(model=ref, config=CustomConfig(top_k=40), prompt='Hello')
 
@@ -371,7 +377,7 @@ async def test_model_config_none_clears_ref_default_via_generate(
 ) -> None:
     """ModelConfig(temperature=None) clears a ref default on the generate path."""
     ai, echo = ai_with_echo
-    ref = model_ref('testEcho', config_schema=ModelConfig, config=ModelConfig(temperature=0.7))
+    ref = ModelRef(name='testEcho', config_schema=ModelConfig, config=ModelConfig(temperature=0.7))
 
     await ai.generate(model=ref, config=ModelConfig(temperature=None), prompt='Hello')
 
@@ -385,8 +391,8 @@ async def test_model_config_aliased_field_same_key_override(
 ) -> None:
     """Call-time max_output_tokens replaces the ref default instead of adding maxOutputTokens."""
     ai, echo = ai_with_echo
-    ref = model_ref(
-        'testEcho',
+    ref = ModelRef(
+        name='testEcho',
         config_schema=ModelConfig,
         config=ModelConfig(max_output_tokens=100),
     )
@@ -399,17 +405,17 @@ async def test_model_config_aliased_field_same_key_override(
 
 
 @pytest.mark.asyncio
-async def test_excluded_api_key_reaches_plugin(
+async def test_excluded_field_reaches_plugin(
     ai_with_echo: tuple[Genkit, EchoModel],
 ) -> None:
-    """Per-request api_key still lands on the plugin request after veneer dump."""
+    """A setting marked exclude=True still lands on the plugin request after veneer dump."""
     ai, echo = ai_with_echo
-    ref = model_ref('testEcho', config_schema=ExcludedKeyConfig)
+    ref = ModelRef(name='testEcho', config_schema=ExcludedFieldConfig)
 
-    await ai.generate(model=ref, config=ExcludedKeyConfig(api_key='secret'), prompt='Hello')
+    await ai.generate(model=ref, config=ExcludedFieldConfig(http_options={'timeout': '5'}), prompt='Hello')
 
     assert echo.last_request is not None
-    assert _config_value(echo.last_request.config, 'api_key') == 'secret'
+    assert _config_value(echo.last_request.config, 'http_options') == {'timeout': '5'}
 
 
 @pytest.mark.asyncio
@@ -418,7 +424,7 @@ async def test_dict_none_clears_ref_default_via_generate(
 ) -> None:
     """A dict ``None`` is the same clear as a typed ``temperature=None``."""
     ai, echo = ai_with_echo
-    ref = model_ref('testEcho', config_schema=CustomConfig, config=CustomConfig(temperature=0.7))
+    ref = ModelRef(name='testEcho', config_schema=CustomConfig, config=CustomConfig(temperature=0.7))
 
     await ai.generate(model=ref, config={'temperature': None}, prompt='Hello')
 
@@ -427,10 +433,10 @@ async def test_dict_none_clears_ref_default_via_generate(
 
 
 @pytest.mark.asyncio
-async def test_string_model_none_omits_key(
+async def test_string_model_none_is_a_value(
     ai_with_echo: tuple[Genkit, EchoModel],
 ) -> None:
-    """None means omit on a name too, same as on a ref."""
+    """An explicit None is a value on a name too, same as on a ref."""
     ai, echo = ai_with_echo
 
     await ai.generate(model='testEcho', config={'temperature': None}, prompt='Hello')
@@ -438,10 +444,10 @@ async def test_string_model_none_omits_key(
     assert echo.last_request is not None
     cfg = echo.last_request.config
     if isinstance(cfg, dict):
-        assert 'temperature' not in cfg
+        assert cfg['temperature'] is None
     else:
         assert cfg is not None
-        assert 'temperature' not in cfg.model_dump(exclude_unset=True)
+        assert cfg.model_dump(exclude_unset=True)['temperature'] is None
 
 
 @pytest.mark.asyncio
@@ -450,10 +456,10 @@ async def test_empty_values_stay_on_generate(
 ) -> None:
     """``0``, ``''``, ``[]``, ``{}``, and ``False`` are values the caller set."""
     ai, echo = ai_with_echo
-    ref = model_ref(
-        'testEcho',
-        config_schema=ModelConfig,
-        config=ModelConfig(temperature=0.7, stop_sequences=['STOP'], version='001'),
+    ref = ModelRef(
+        name='testEcho',
+        config_schema=AllowExtraConfig,
+        config=AllowExtraConfig(temperature=0.7, stop_sequences=['STOP'], version='001'),
     )
 
     await ai.generate(
@@ -484,8 +490,8 @@ async def test_nested_bag_replaces_whole_on_generate(
 ) -> None:
     """Call-time ``thinking={'budget': 256}`` drops the ref's ``level``."""
     ai, echo = ai_with_echo
-    ref = model_ref(
-        'testEcho',
+    ref = ModelRef(
+        name='testEcho',
         config_schema=NestedConfig,
         config=NestedConfig(thinking={'budget': 1024, 'level': 'low'}),
     )
@@ -501,8 +507,8 @@ async def test_generate_family_hop_keeps_leftover_keys() -> None:
     """Call-time keys the new schema does not know still reach the plugin."""
     ai = Genkit()
     gpt_echo, _ = define_echo_model(ai, name='gpt')
-    gpt = model_ref(
-        'gpt',
+    gpt = ModelRef(
+        name='gpt',
         config_schema=OtherFamilyConfig,
         config=OtherFamilyConfig(frequency_penalty=0.5),
     )
@@ -525,9 +531,9 @@ async def test_prompt_family_hop_keeps_leftover_keys() -> None:
     ai = Genkit()
     _, _ = define_echo_model(ai, name='flash')
     gpt_echo, _ = define_echo_model(ai, name='gpt')
-    flash = model_ref('flash', config_schema=CustomConfig)
-    gpt = model_ref(
-        'gpt',
+    flash = ModelRef(name='flash', config_schema=CustomConfig)
+    gpt = ModelRef(
+        name='gpt',
         config_schema=OtherFamilyConfig,
         config=OtherFamilyConfig(frequency_penalty=0.5),
     )
@@ -552,9 +558,9 @@ async def test_prompt_lookup_family_hop_keeps_leftover_keys() -> None:
     ai = Genkit()
     _, _ = define_echo_model(ai, name='flash')
     gpt_echo, _ = define_echo_model(ai, name='gpt')
-    flash = model_ref('flash', config_schema=CustomConfig)
-    gpt = model_ref(
-        'gpt',
+    flash = ModelRef(name='flash', config_schema=CustomConfig)
+    gpt = ModelRef(
+        name='gpt',
         config_schema=OtherFamilyConfig,
         config=OtherFamilyConfig(frequency_penalty=0.5),
     )
@@ -576,8 +582,8 @@ async def test_prompt_lookup_family_hop_keeps_leftover_keys() -> None:
 @pytest.mark.asyncio
 async def test_explicit_string_does_not_leak_constructor_ref() -> None:
     """An explicit name is a different model; constructor knobs stay off it."""
-    flash = model_ref(
-        'flash',
+    flash = ModelRef(
+        name='flash',
         config_schema=ModelConfig,
         version='001',
         config=ModelConfig(temperature=0.7),
@@ -596,8 +602,8 @@ async def test_explicit_string_does_not_leak_constructor_ref() -> None:
 @pytest.mark.asyncio
 async def test_empty_string_model_uses_constructor_ref() -> None:
     """``model=''`` is omitted, same as an unset ``MODEL=`` env var."""
-    flash = model_ref(
-        'flash',
+    flash = ModelRef(
+        name='flash',
         config_schema=ModelConfig,
         version='001',
         config=ModelConfig(temperature=0.7),
@@ -615,16 +621,16 @@ async def test_empty_string_model_uses_constructor_ref() -> None:
 @pytest.mark.asyncio
 async def test_non_name_model_is_hard_error_not_default() -> None:
     """A leftover int must not silently run the constructor default."""
-    flash = model_ref('flash', config_schema=ModelConfig, config=ModelConfig(temperature=0.7))
+    flash = ModelRef(name='flash', config_schema=ModelConfig, config=ModelConfig(temperature=0.7))
     ai = Genkit(model=flash)
     echo, _ = define_echo_model(ai, name='flash')
 
     with pytest.raises(GenkitError) as exc_info:
         await ai.generate(model=123, prompt='hi')  # type: ignore[arg-type]
 
-    assert 'model is int, expected str or ModelRef' in str(exc_info.value)
-    assert exc_info.value.reason is RuntimeErrorReason.INVALID_INPUT
-    assert 'INVALID_INPUT' not in exc_info.value.original_message
+    assert 'model is int, expected str, ModelRef, or a model action' in str(exc_info.value)
+    assert exc_info.value.reason is ErrorReason.INVALID_INPUT
+    assert 'INVALID_INPUT' not in exc_info.value.message
     assert echo.last_request is None
 
 
@@ -638,8 +644,8 @@ async def test_non_name_config_is_hard_error() -> None:
         await ai.generate(model='echo', prompt='hi', config=123)  # type: ignore[arg-type]
 
     assert 'config is int, expected Mapping or BaseModel' in str(exc_info.value)
-    assert exc_info.value.reason is RuntimeErrorReason.INVALID_INPUT
-    assert 'INVALID_INPUT' not in exc_info.value.original_message
+    assert exc_info.value.reason is ErrorReason.INVALID_INPUT
+    assert 'INVALID_INPUT' not in exc_info.value.message
     assert echo.last_request is None
 
 
@@ -649,8 +655,8 @@ async def test_version_survives_temperature_overlay(
 ) -> None:
     """Overlaying temperature does not drop ``ref.version``."""
     ai, echo = ai_with_echo
-    ref = model_ref(
-        'testEcho',
+    ref = ModelRef(
+        name='testEcho',
         config_schema=ModelConfig,
         version='001',
         config=ModelConfig(temperature=0.7),
@@ -669,8 +675,8 @@ async def test_ref_config_version_beats_constructor_version(
 ) -> None:
     """``ref.config.version`` overlays the constructor ``version=`` field."""
     ai, echo = ai_with_echo
-    ref = model_ref(
-        'testEcho',
+    ref = ModelRef(
+        name='testEcho',
         config_schema=ModelConfig,
         version='001',
         config=ModelConfig(version='002'),
@@ -685,8 +691,8 @@ async def test_ref_config_version_beats_constructor_version(
 @pytest.mark.asyncio
 async def test_generate_uses_constructor_model_ref() -> None:
     """Genkit(model=ref) then generate() with no model= applies name, version, and config."""
-    flash = model_ref(
-        'flash',
+    flash = ModelRef(
+        name='flash',
         config_schema=ModelConfig,
         version='001',
         config=ModelConfig(temperature=0.7),
@@ -705,8 +711,8 @@ async def test_generate_uses_constructor_model_ref() -> None:
 @pytest.mark.asyncio
 async def test_generate_constructor_model_ref_call_time_config_wins() -> None:
     """Call-time config overlays the constructor ref per key."""
-    flash = model_ref(
-        'flash',
+    flash = ModelRef(
+        name='flash',
         config_schema=ModelConfig,
         config=ModelConfig(temperature=0.7),
     )
@@ -722,8 +728,8 @@ async def test_generate_constructor_model_ref_call_time_config_wins() -> None:
 @pytest.mark.asyncio
 async def test_prompt_uses_constructor_model_ref_config() -> None:
     """A prompt with no model= still picks up the constructor ref's config."""
-    flash = model_ref(
-        'flash',
+    flash = ModelRef(
+        name='flash',
         config_schema=ModelConfig,
         config=ModelConfig(temperature=0.7),
     )
@@ -740,8 +746,8 @@ async def test_prompt_uses_constructor_model_ref_config() -> None:
 @pytest.mark.asyncio
 async def test_to_generate_options_uses_constructor_ref() -> None:
     """A stored ModelRef default still resolves when GenerateCall.model is omitted."""
-    flash = model_ref(
-        'flash',
+    flash = ModelRef(
+        name='flash',
         config_schema=ModelConfig,
         version='001',
         config=ModelConfig(temperature=0.7),
@@ -749,7 +755,10 @@ async def test_to_generate_options_uses_constructor_ref() -> None:
     ai = Genkit(model=flash)
     define_echo_model(ai, name='flash')
 
-    options = await to_generate_options(registry=ai.registry, call=GenerateCall(prompt='hi'))
+    options = await to_generate_options(
+        registry=ai._registry,
+        call=GenerateCall(messages=[Message(role=Role.USER, content=[Part.from_text('hi')])]),
+    )
 
     assert options.model == 'flash'
     assert _config_value(options.config, 'temperature') == 0.7
@@ -772,8 +781,8 @@ async def test_generate_alias_dict_overrides_ref_field(
 ) -> None:
     """Call-time maxOutputTokens replaces the ref's max_output_tokens."""
     ai, echo = ai_with_echo
-    ref = model_ref(
-        'testEcho',
+    ref = ModelRef(
+        name='testEcho',
         config_schema=ModelConfig,
         config=ModelConfig(max_output_tokens=100),
     )
@@ -791,8 +800,8 @@ async def test_generate_alias_none_clears_ref_field(
 ) -> None:
     """Call-time maxOutputTokens=None clears the ref cap."""
     ai, echo = ai_with_echo
-    ref = model_ref(
-        'testEcho',
+    ref = ModelRef(
+        name='testEcho',
         config_schema=ModelConfig,
         config=ModelConfig(max_output_tokens=100),
     )
@@ -814,8 +823,8 @@ async def test_generate_alias_replaces_nested_bag(
     keys stay as written.
     """
     ai, echo = ai_with_echo
-    ref = model_ref(
-        'testEcho',
+    ref = ModelRef(
+        name='testEcho',
         config_schema=AliasedNestedConfig,
         config=AliasedNestedConfig(
             thinking_config={
@@ -843,8 +852,8 @@ async def test_generate_alias_none_clears_nested_bag(
 ) -> None:
     """thinkingConfig=None clears the whole thinking_config slot."""
     ai, echo = ai_with_echo
-    ref = model_ref(
-        'testEcho',
+    ref = ModelRef(
+        name='testEcho',
         config_schema=AliasedNestedConfig,
         config=AliasedNestedConfig(thinking_config={'thinking_budget': 1024, 'thinking_level': 'low'}),
     )
@@ -862,7 +871,7 @@ async def test_generate_does_not_fold_inner_keys(
 ) -> None:
     """Both spellings inside a nested bag stay. Only the outer key folds."""
     ai, echo = ai_with_echo
-    ref = model_ref('testEcho', config_schema=AliasedNestedConfig)
+    ref = ModelRef(name='testEcho', config_schema=AliasedNestedConfig)
 
     await ai.generate(
         model=ref,
@@ -883,42 +892,61 @@ async def test_generate_does_not_fold_inner_keys(
 
 
 @pytest.mark.asyncio
-async def test_generate_both_spellings_last_write_wins(
+@pytest.mark.parametrize(
+    'config',
+    [{'max_output_tokens': 1, 'maxOutputTokens': 5}, {'maxOutputTokens': 5, 'max_output_tokens': 1}],
+)
+async def test_generate_both_spellings_in_one_dict_raises(
     ai_with_echo: tuple[Genkit, EchoModel],
+    config: dict[str, int],
 ) -> None:
-    """Both keys in one call dict fold onto one field; later key wins."""
+    """Both spellings in one call dict raise even when the class allows extra keys, whatever the dict order."""
     ai, echo = ai_with_echo
-    ref = model_ref(
-        'testEcho',
-        config_schema=ModelConfig,
-        config=ModelConfig(max_output_tokens=100),
+    ref = ModelRef(
+        name='testEcho',
+        config_schema=AllowExtraConfig,
+        config=AllowExtraConfig(max_output_tokens=100),
     )
 
-    await ai.generate(
-        model=ref,
-        config={'max_output_tokens': 1, 'maxOutputTokens': 5},
-        prompt='Hello',
-    )
+    with pytest.raises(GenkitError) as err:
+        await ai.generate(model=ref, config=config, prompt='Hello')
+
+    assert err.value.status == 'INVALID_ARGUMENT'
+    assert 'max_output_tokens and maxOutputTokens are the same setting; pass one' in err.value.message
+    assert echo.last_request is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('ref_config', 'call_config', 'expected'),
+    [
+        ({'maxOutputTokens': 100}, {'max_output_tokens': 5}, 5),
+        ({'max_output_tokens': 100}, {'maxOutputTokens': 5}, 5),
+        ({'maxOutputTokens': 100}, {'max_output_tokens': None}, None),
+    ],
+)
+async def test_generate_spellings_across_ref_and_call_fold_last_wins(
+    ai_with_echo: tuple[Genkit, EchoModel],
+    ref_config: dict[str, int],
+    call_config: dict[str, int | None],
+    expected: int | None,
+) -> None:
+    """One spelling on the ModelRef and the other on the call is two layers, not a repeat: the call wins."""
+    ai, echo = ai_with_echo
+    ref = ModelRef(name='testEcho', config_schema=AllowExtraConfig, config=AllowExtraConfig.model_validate(ref_config))
+
+    await ai.generate(model=ref, config=call_config, prompt='Hello')
 
     assert echo.last_request is not None
-    assert _config_value(echo.last_request.config, 'max_output_tokens') == 5
-    _leftover_alias(echo.last_request.config, 'max_output_tokens', 'maxOutputTokens')
-
-    await ai.generate(
-        model=ref,
-        config={'maxOutputTokens': 5, 'max_output_tokens': 1},
-        prompt='Hello',
-    )
-
-    assert _config_value(echo.last_request.config, 'max_output_tokens') == 1
+    assert _config_value(echo.last_request.config, 'max_output_tokens') == expected
     _leftover_alias(echo.last_request.config, 'max_output_tokens', 'maxOutputTokens')
 
 
 @pytest.mark.asyncio
 async def test_constructor_ref_alias_dict_overrides() -> None:
     """Constructor ModelRef + camel call dict is the same overlay."""
-    flash = model_ref(
-        'flash',
+    flash = ModelRef(
+        name='flash',
         config_schema=ModelConfig,
         config=ModelConfig(max_output_tokens=100),
     )
@@ -938,8 +966,8 @@ async def test_prompt_alias_dict_overrides_ref_field(
 ) -> None:
     """Prompt call-time maxOutputTokens replaces the ref default."""
     ai, echo = ai_with_echo
-    ref = model_ref(
-        'testEcho',
+    ref = ModelRef(
+        name='testEcho',
         config_schema=ModelConfig,
         config=ModelConfig(max_output_tokens=100),
     )
@@ -958,8 +986,8 @@ async def test_prompt_alias_none_clears_ref_field(
 ) -> None:
     """Prompt call-time maxOutputTokens=None is the same clear as generate."""
     ai, echo = ai_with_echo
-    ref = model_ref(
-        'testEcho',
+    ref = ModelRef(
+        name='testEcho',
         config_schema=ModelConfig,
         config=ModelConfig(max_output_tokens=100),
     )
@@ -975,8 +1003,8 @@ async def test_prompt_alias_none_clears_ref_field(
 @pytest.mark.asyncio
 async def test_same_name_string_does_not_use_constructor_ref_bag() -> None:
     """``model='flash'`` is a name, even when the constructor ref is also flash."""
-    flash = model_ref(
-        'flash',
+    flash = ModelRef(
+        name='flash',
         config_schema=ModelConfig,
         version='001',
         config=ModelConfig(temperature=0.7),
@@ -1009,14 +1037,14 @@ async def test_generate_rejects_wrong_config_class_on_ref() -> None:
     """A Pydantic instance must match the ModelRef schema."""
     ai = Genkit()
     define_echo_model(ai, name='flash', config_schema=CustomConfig)
-    ref = model_ref('flash', config_schema=CustomConfig)
+    ref = ModelRef(name='flash', config_schema=CustomConfig)
 
     with pytest.raises(
         GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'
     ) as exc_info:
         await ai.generate(model=ref, prompt='hi', config=OtherFamilyConfig(frequency_penalty=0.2))
-    assert exc_info.value.reason is RuntimeErrorReason.INVALID_INPUT
-    assert 'INVALID_INPUT' not in exc_info.value.original_message
+    assert exc_info.value.reason is ErrorReason.INVALID_INPUT
+    assert 'INVALID_INPUT' not in exc_info.value.message
 
 
 @pytest.mark.asyncio
@@ -1034,7 +1062,7 @@ async def test_generate_stream_rejects_wrong_config_class() -> None:
     """await stream.response raises the same class check as generate."""
     ai = Genkit()
     define_echo_model(ai, name='flash', config_schema=CustomConfig)
-    ref = model_ref('flash', config_schema=CustomConfig)
+    ref = ModelRef(name='flash', config_schema=CustomConfig)
     stream = ai.generate_stream(model=ref, prompt='hi', config=OtherFamilyConfig(frequency_penalty=0.2))
 
     with pytest.raises(GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'):
@@ -1046,7 +1074,7 @@ async def test_generate_stream_wrong_class_raises_on_async_for() -> None:
     """async for chunk in generate_stream(...) raises the same class check."""
     ai = Genkit()
     define_echo_model(ai, name='flash', config_schema=CustomConfig)
-    ref = model_ref('flash', config_schema=CustomConfig)
+    ref = ModelRef(name='flash', config_schema=CustomConfig)
     stream = ai.generate_stream(model=ref, prompt='hi', config=OtherFamilyConfig(frequency_penalty=0.2))
 
     with pytest.raises(GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'):
@@ -1059,10 +1087,10 @@ async def test_generate_operation_rejects_wrong_config_class() -> None:
     """generate_operation checks the class before it re-enters generate with a dict."""
     ai = Genkit()
 
-    async def start(request: ModelRequest, ctx: ActionRunContext) -> Operation:
+    async def start(request: ModelRequest, ctx: ModelContext) -> Operation:
         return Operation(id='op-1', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     ai.define_background_model(
@@ -1071,7 +1099,7 @@ async def test_generate_operation_rejects_wrong_config_class() -> None:
         check=check,
         config_schema=CustomConfig,
     )
-    ref = model_ref('lro', config_schema=CustomConfig)
+    ref = ModelRef(name='lro', config_schema=CustomConfig)
     wrong = OtherFamilyConfig(frequency_penalty=0.2)
 
     with pytest.raises(GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'):
@@ -1082,19 +1110,20 @@ async def test_generate_operation_rejects_wrong_config_class() -> None:
 
 @pytest.mark.asyncio
 async def test_model_factory_stashes_class_without_registering() -> None:
-    """Plugin resolve builds via model(); the registry is what registers."""
+    """Plugin resolve builds via Model(); the registry is what registers."""
     ai = Genkit()
     echo = EchoModel()
 
-    async def model_fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def model_fn(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         return await echo.model_fn(request, ctx)
 
-    action = model('flash-plugin-style', model_fn, config_schema=CustomConfig)
+    action = Model('flash-plugin-style', model_fn, config_schema=CustomConfig)
 
+    assert isinstance(action, Model)
     assert action._config_schema is CustomConfig
-    assert await ai.registry.resolve_action(action.kind, action.name) is None
+    assert await ai._registry.resolve_action(action.kind, action.name) is None
 
-    ai.registry.register_action_from_instance(action)
+    ai._registry.register_action_from_instance(action)
     with pytest.raises(GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'):
         await ai.generate(
             model='flash-plugin-style',
@@ -1132,7 +1161,7 @@ async def test_prompt_rejects_wrong_config_class() -> None:
     """joke(config=WrongClass) uses the same check as generate."""
     ai = Genkit()
     define_echo_model(ai, name='flash', config_schema=CustomConfig)
-    ref = model_ref('flash', config_schema=CustomConfig)
+    ref = ModelRef(name='flash', config_schema=CustomConfig)
     joke = ai.define_prompt(name='joke', prompt='hi', model=ref)
 
     with pytest.raises(GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'):
@@ -1143,7 +1172,7 @@ def test_define_prompt_rejects_wrong_config_class() -> None:
     """A typed config on define_prompt is checked before the prompt exists."""
     ai = Genkit()
     define_echo_model(ai, name='flash', config_schema=CustomConfig)
-    ref = model_ref('flash', config_schema=CustomConfig)
+    ref = ModelRef(name='flash', config_schema=CustomConfig)
 
     with pytest.raises(GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'):
         ai.define_prompt(
@@ -1171,7 +1200,7 @@ def test_define_prompt_rejects_wrong_config_class_on_string_model() -> None:
 def test_define_prompt_accepts_matching_class() -> None:
     ai = Genkit()
     define_echo_model(ai, name='flash', config_schema=CustomConfig)
-    ref = model_ref('flash', config_schema=CustomConfig)
+    ref = ModelRef(name='flash', config_schema=CustomConfig)
 
     joke = ai.define_prompt(name='joke', prompt='hi', model=ref, config=CustomConfig(temperature=0.4))
     assert joke is not None
@@ -1191,7 +1220,7 @@ def test_define_prompt_string_without_registered_model_skips_class_check() -> No
 
 def test_define_prompt_rejects_wrong_class_on_constructor_ref() -> None:
     """A prompt with no model= still checks against the constructor ModelRef."""
-    flash = model_ref('flash', config_schema=CustomConfig)
+    flash = ModelRef(name='flash', config_schema=CustomConfig)
     ai = Genkit(model=flash)
 
     with pytest.raises(GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'):
@@ -1202,7 +1231,7 @@ def test_define_agent_rejects_wrong_config_class() -> None:
     """define_agent uses the same define-time check as define_prompt."""
     ai = ExpGenkit()
     define_echo_model(ai, name='flash', config_schema=CustomConfig)
-    ref = model_ref('flash', config_schema=CustomConfig)
+    ref = ModelRef(name='flash', config_schema=CustomConfig)
 
     with pytest.raises(GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'):
         ai.define_agent(
@@ -1216,7 +1245,7 @@ def test_define_agent_rejects_wrong_config_class() -> None:
 def test_define_agent_accepts_matching_class() -> None:
     ai = ExpGenkit()
     define_echo_model(ai, name='flash', config_schema=CustomConfig)
-    ref = model_ref('flash', config_schema=CustomConfig)
+    ref = ModelRef(name='flash', config_schema=CustomConfig)
 
     agent = ai.define_agent(
         name='echoAgent',
@@ -1232,7 +1261,7 @@ async def test_define_prompt_matching_class_reaches_plugin() -> None:
     """A matching class stored on the prompt still dumps and reaches the model."""
     ai = Genkit()
     echo, _ = define_echo_model(ai, name='flash', config_schema=CustomConfig)
-    ref = model_ref('flash', config_schema=CustomConfig)
+    ref = ModelRef(name='flash', config_schema=CustomConfig)
     joke = ai.define_prompt(name='joke', prompt='hi', model=ref, config=CustomConfig(temperature=0.4))
 
     await joke()
@@ -1291,7 +1320,7 @@ async def test_define_prompt_stored_wrong_class_not_a_hop_after_later_default() 
     joke = ai.define_prompt(name='joke', prompt='hi', config=OtherFamilyConfig(frequency_penalty=0.2))
     define_echo_model(ai, name='flash', config_schema=CustomConfig)
     define_echo_model(ai, name='gpt', config_schema=OtherFamilyConfig)
-    ai.registry.register_value('defaultModel', 'defaultModel', 'gpt')
+    ai._registry.register_value('defaultModel', 'defaultModel', 'gpt')
 
     with pytest.raises(GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'):
         await joke(model='flash')
@@ -1304,7 +1333,7 @@ async def test_prompt_lookup_stored_wrong_class_not_a_hop_after_later_default() 
     ai.define_prompt(name='joke', prompt='hi', config=OtherFamilyConfig(frequency_penalty=0.2))
     define_echo_model(ai, name='flash', config_schema=CustomConfig)
     define_echo_model(ai, name='gpt', config_schema=OtherFamilyConfig)
-    ai.registry.register_value('defaultModel', 'defaultModel', 'gpt')
+    ai._registry.register_value('defaultModel', 'defaultModel', 'gpt')
 
     with pytest.raises(GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'):
         await ai.prompt('joke')(model='flash')
@@ -1313,7 +1342,7 @@ async def test_prompt_lookup_stored_wrong_class_not_a_hop_after_later_default() 
 @pytest.mark.asyncio
 async def test_generate_rejects_wrong_class_on_constructor_ref() -> None:
     """Omitting model= still checks against the constructor ModelRef."""
-    flash = model_ref('flash', config_schema=CustomConfig)
+    flash = ModelRef(name='flash', config_schema=CustomConfig)
     ai = Genkit(model=flash)
     define_echo_model(ai, name='flash')
 
@@ -1327,7 +1356,7 @@ async def test_same_name_string_ignores_constructor_schema_when_action_has_none(
 
     Constructor flash has CustomConfig; the registered model does not.
     """
-    flash = model_ref('flash', config_schema=CustomConfig)
+    flash = ModelRef(name='flash', config_schema=CustomConfig)
     ai = Genkit(model=flash)
     echo, _ = define_echo_model(ai, name='flash')
 
@@ -1340,13 +1369,13 @@ async def test_same_name_string_ignores_constructor_schema_when_action_has_none(
 @pytest.mark.asyncio
 async def test_prompt_model_beats_constructor_and_rejects_wrong_class() -> None:
     """A prompt that named a model does not inherit the constructor ref."""
-    flash = model_ref(
-        'flash',
+    flash = ModelRef(
+        name='flash',
         config_schema=CustomConfig,
         config=CustomConfig(temperature=0.7),
     )
-    gpt = model_ref(
-        'gpt',
+    gpt = ModelRef(
+        name='gpt',
         config_schema=OtherFamilyConfig,
         config=OtherFamilyConfig(frequency_penalty=0.5),
     )
@@ -1368,10 +1397,139 @@ async def test_prompt_model_beats_constructor_and_rejects_wrong_class() -> None:
 @pytest.mark.asyncio
 async def test_prompt_without_model_rejects_wrong_class_on_constructor_ref() -> None:
     """A prompt with no model= still checks against the constructor ModelRef."""
-    flash = model_ref('flash', config_schema=CustomConfig)
+    flash = ModelRef(name='flash', config_schema=CustomConfig)
     ai = Genkit(model=flash)
     define_echo_model(ai, name='flash')
     joke = ai.define_prompt(name='joke', prompt='hi')
 
     with pytest.raises(GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'):
         await joke(config=OtherFamilyConfig(frequency_penalty=0.2))
+
+
+# The action define_model returns. resolve_model_arg turns it into its name
+# (model_resolution_test.py), so these only cover that each entry point
+# accepts it.
+
+
+async def _chunk_texts(stream: Any) -> list[str]:
+    return [chunk.text async for chunk in stream.stream]
+
+
+@pytest.mark.asyncio
+async def test_generate_with_define_model_action_returns_the_same_reply_as_its_name() -> None:
+    """generate(model=the define_model action) matches model=the name."""
+    ai = Genkit()
+    _, action = define_echo_model(ai, name='local/echo')
+
+    by_action = await ai.generate(model=action, prompt='hi')
+    by_name = await ai.generate(model='local/echo', prompt='hi')
+
+    assert by_action.message == by_name.message
+
+
+@pytest.mark.asyncio
+async def test_generate_with_another_instances_action_raises_and_does_not_run_this_model() -> None:
+    """ai.generate(model=other_ai's action) raises; ai's same-named model is not called."""
+    other = Genkit()
+    _, foreign = define_echo_model(other, name='local/echo')
+    ai = Genkit()
+    echo, _ = define_echo_model(ai, name='local/echo')
+
+    with pytest.raises(GenkitError, match="model action 'local/echo' is not the one registered") as exc_info:
+        await ai.generate(model=foreign, prompt='hi')
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert echo.last_request is None
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_with_define_model_action_yields_the_same_chunks_as_its_name() -> None:
+    """generate_stream(model=action) yields the same chunks and reply as the name."""
+    ai = Genkit()
+    _, action = define_echo_model(ai, name='local/echo', stream_countdown=True)
+
+    action_stream = ai.generate_stream(model=action, prompt='hi')
+    action_chunks = await _chunk_texts(action_stream)
+    name_stream = ai.generate_stream(model='local/echo', prompt='hi')
+    name_chunks = await _chunk_texts(name_stream)
+
+    assert action_chunks == name_chunks == ['3', '2', '1']
+    assert (await action_stream.response).text == (await name_stream.response).text
+
+
+@pytest.mark.asyncio
+async def test_prompt_call_and_stream_with_define_model_action_match_its_name() -> None:
+    """prompt(model=action) and prompt.stream(model=action) override the stored model like the name."""
+    ai = Genkit()
+    _, action = define_echo_model(ai, name='local/echo', stream_countdown=True)
+    prompt = ai.define_prompt(name='p', prompt='hi', model='other/model')
+
+    assert (await prompt(model=action)).text == (await prompt(model='local/echo')).text
+    assert await _chunk_texts(prompt.stream(model=action)) == ['3', '2', '1']
+
+
+@pytest.mark.asyncio
+async def test_define_prompt_with_define_model_action_matches_its_name() -> None:
+    """define_prompt(model=action) runs the same model as define_prompt(model=the name)."""
+    ai = Genkit()
+    _, action = define_echo_model(ai, name='local/echo')
+
+    by_action = await ai.define_prompt(name='p-action', prompt='hi', model=action)()
+    by_name = await ai.define_prompt(name='p-name', prompt='hi', model='local/echo')()
+
+    assert by_action.text == by_name.text
+
+
+@pytest.mark.asyncio
+async def test_define_agent_with_define_model_action_runs_that_model() -> None:
+    """define_agent(model=action) runs the model the action names on each turn."""
+    ai = ExpGenkit()
+    echo, action = define_echo_model(ai, name='local/echo')
+
+    agent = ai.define_agent(name='echoAgent', model=action, system='Reply briefly.')
+    out = await agent.chat().send('Hello')
+
+    assert '[ECHO]' in out.text
+    assert echo.last_request is not None
+
+
+@pytest.mark.asyncio
+async def test_generate_operation_with_define_background_model_result_starts_the_operation() -> None:
+    """generate_operation(model=the define_background_model result) starts it, same as the name."""
+
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
+        return Operation(id='bg-op', done=False)
+
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
+        return op
+
+    ai = Genkit()
+    background = ai.define_background_model(name='bg', start=start, check=check)
+
+    operation = await ai.generate_operation(model=background, prompt='Generate video')
+
+    assert operation.id == 'bg-op'
+
+
+@pytest.mark.asyncio
+async def test_generate_operation_with_another_instances_background_model_raises() -> None:
+    """generate_operation(model=other_ai's background model) raises INVALID_ARGUMENT before starting."""
+    started: list[str] = []
+
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
+        started.append('called')
+        return Operation(id='bg-op', done=False)
+
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
+        return op
+
+    other = Genkit()
+    foreign = other.define_background_model(name='bg', start=start, check=check)
+    ai = Genkit()
+    ai.define_background_model(name='bg', start=start, check=check)
+
+    with pytest.raises(GenkitError, match="model action 'bg' is not the one registered") as exc_info:
+        await ai.generate_operation(model=foreign, prompt='Generate video')
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert started == []

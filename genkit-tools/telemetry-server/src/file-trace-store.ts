@@ -14,19 +14,19 @@
  * limitations under the License.
  */
 
-import {
+import type {
   SpanData,
-  TraceDataSchema,
-  type TraceData,
-  type TraceQueryFilter,
+  TraceData,
+  TraceQueryFilter,
 } from '@genkit-ai/tools-common';
+import { TraceDataSchema } from '@genkit-ai/tools-common';
 import { logger } from '@genkit-ai/tools-common/utils';
 import { Mutex } from 'async-mutex';
 import fs from 'fs';
 import lockfile from 'lockfile';
 import path from 'path';
-import type { TraceQuery, TraceQueryResponse, TraceStore } from './types';
-import { version as currentVersion } from './utils/version';
+import type { TraceQuery, TraceQueryResponse, TraceStore } from './types.js';
+import { version as currentVersion } from './utils/version.js';
 
 const MAX_TRACES = 1000;
 const MAX_INDEX_FILES = 10;
@@ -274,15 +274,6 @@ export class LocalFileTraceStore implements TraceStore {
         }
       });
     });
-    // Delete the root wrapper if it's the only span left
-    if (Object.keys(trace.spans).length === 1) {
-      Object.keys(trace.spans).forEach((spanId) => {
-        const span = trace.spans[spanId];
-        if (span.attributes['genkit:name'] === 'dev-run-action-wrapper') {
-          delete trace.spans[spanId];
-        }
-      });
-    }
     return trace;
   }
 }
@@ -368,7 +359,7 @@ export class Index {
       return JSON.parse(
         fs.readFileSync(this.metadataFileName(), { encoding: 'utf8' })
       );
-    } catch (e) {
+    } catch {
       return undefined;
     }
   }
@@ -402,6 +393,12 @@ export class Index {
     }
     if (rootSpan?.displayName) {
       indexData['status'] = rootSpan.status?.code ?? 'UNKNOWN';
+    }
+    const sessionId =
+      rootSpan?.attributes?.['genkit:metadata:agent:sessionId'] ||
+      rootSpan?.attributes?.['session.id'];
+    if (sessionId) {
+      indexData['sessionId'] = `${sessionId}`;
     }
 
     Object.keys(rootSpan?.attributes ?? {})

@@ -97,11 +97,11 @@ var gccOverrides = internal.SchemaOverrides{
 	},
 	Hidden: []string{
 		// Managed by Genkit primitives; the plugin rejects these when set.
-		"systemInstruction",            // ai.WithSystemPrompt
-		"cachedContent",                // ai.WithCacheTTL
+		"systemInstruction",            // ai.WithSystem
+		"cachedContent",                // (*ai.Message).WithCacheTTL / WithCacheName
 		"responseSchema",               // ai.WithOutputType / ai.WithOutputSchema
-		"responseMimeType",             // ai.WithOutputType / ai.WithOutputSchema
-		"responseJsonSchema",           // ai.WithOutputSchema
+		"responseMimeType",             // ai.WithOutputFormat / ai.WithOutputType / ai.WithOutputSchema / ai.WithOutputSchemaName
+		"responseJsonSchema",           // ai.WithOutputType / ai.WithOutputSchema
 		"tools[].functionDeclarations", // ai.WithTools (built-in API tools on Tool stay visible)
 		// Pinned to 1 by the plugin; the API only supports a single candidate.
 		"candidateCount",

@@ -29,7 +29,7 @@ Example:
 
     # 1. Initialize Flask app and Genkit with GoogleAI
     app = Flask(__name__)
-    ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
+    ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
 
 
     # 2. Stack Flask route + Genkit handler + flow on one function
@@ -53,18 +53,8 @@ See Also:
     - Flask documentation: https://flask.palletsprojects.com/
 """
 
-from .handler import genkit_flask_handler
-
-
-def package_name() -> str:
-    """Get the package name for the Flask plugin.
-
-    Returns:
-        The fully qualified package name as a string.
-    """
-    return 'genkit_flask'
-
+from ._handler import genkit_flask_handler
 
 # String literals so pyright can see what's public — `Cls.__name__` looks
 # right at runtime but type checkers can't trace it back to an exported symbol.
-__all__ = ['genkit_flask_handler', 'package_name']
+__all__ = ['genkit_flask_handler']

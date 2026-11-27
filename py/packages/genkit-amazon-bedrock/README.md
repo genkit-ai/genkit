@@ -3,7 +3,17 @@
 Amazon Bedrock plugin for Genkit Python. Provides text generation with
 Bedrock-hosted models (Anthropic Claude, Amazon Nova, Meta Llama, Mistral,
 Cohere, and others) through the Bedrock Converse and ConverseStream APIs, and
-embeddings, image generation, and reranking through InvokeModel.
+embeddings and image generation through InvokeModel.
+
+> **Building with a coding agent? Install the Genkit Python skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-python
+> ```
+>
+> It teaches your agent the current Genkit Python APIs and common gotchas.
+> Source, manual install and skills for other languages:
+> [genkit-ai/skills](https://github.com/genkit-ai/skills).
 
 ## Installation
 
@@ -47,8 +57,8 @@ The minimal policy covering everything this plugin does:
 
 Converse is authorized by `bedrock:InvokeModel` and ConverseStream by
 `bedrock:InvokeModelWithResponseStream`; there is no separate Converse action to
-grant. Embedding, image generation and reranking all go through InvokeModel, so
-they need only the first.
+grant. Embedding and image generation go through InvokeModel, so they need
+only the first.
 
 The inference-profile resource is the part that is easy to leave out.
 Cross-region profile IDs such as `us.anthropic.claude-sonnet-4-5-20250929-v1:0`
@@ -71,22 +81,56 @@ Anything the chain does not cover goes through `session=`, which takes a
 pre-configured `boto3.session.Session`. Region resolution is separate from
 credentials and is described under [Usage](#usage).
 
+Every call runs on these credentials. A per-request key in
+`context={'secrets': {'api_key': ...}}` is ignored, so a flow that carries
+another provider's key can still call Bedrock models. Reading that key as a
+per-request Bedrock API key is tracked in
+[#6976](https://github.com/genkit-ai/genkit/issues/6976).
+
 ## Usage
 
 ```python
 from genkit import Genkit
-from genkit_amazon_bedrock import Bedrock, ModelDefinition
+from genkit_amazon_bedrock import Bedrock
 
 ai = Genkit(
     plugins=[
         Bedrock(
             region='us-east-1',
-            models=[ModelDefinition(name='us.anthropic.claude-sonnet-4-5-20250929-v1:0')],
+            models=['us.anthropic.claude-sonnet-4-5-20250929-v1:0'],
         )
     ],
     model='bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0',
 )
 ```
+
+To pick a model per call, use a typed ref. Each constructor binds the config
+class that model's action validates, so the IDE completes the fields and a
+config for the wrong family is caught:
+
+```python
+from genkit_amazon_bedrock import Bedrock, BedrockConfig
+
+# 1. Text model (Converse) with a default config
+claude = Bedrock.text('us.anthropic.claude-sonnet-4-5-20250929-v1:0', config=BedrockConfig(max_output_tokens=512))
+
+# 2. Generate
+response = await ai.generate(model=claude, prompt='Pair a wine with mushroom risotto.')
+print(response.text)
+# => A dry white such as a Pinot Grigio ...
+```
+
+The constructors follow Bedrock's output modalities: `Bedrock.text` (TEXT,
+served over Converse, including models that take image or document input),
+`Bedrock.stability` (IMAGE, the Stability text-to-image models), and
+`Bedrock.embedder` (EMBEDDING, an `EmbedderRef` for `ai.embed()`). Each takes a bare ID or a `bedrock/`-prefixed one, and
+returns `bedrock/<id>`. They route the ID the same way the plugin does at runtime,
+inference-profile prefixes (`us.`, `eu.`, ...) and model ARNs included, and an
+ID from another family raises `INVALID_ARGUMENT` naming the right constructor
+(`Bedrock.text('stability.sd3-5-large-v1:0')` points at `Bedrock.stability()`).
+An application inference profile ARN carries no model ID, so it routes to
+Converse and only `Bedrock.text` takes it. Plain `'bedrock/<id>'` strings still
+work everywhere.
 
 Credentials resolve through the standard AWS SDK chain (environment,
 `~/.aws/credentials`, instance metadata). Pass a pre-configured
@@ -107,7 +151,7 @@ Every `Bedrock()` parameter, with its default:
 | `max_pool_connections` | unset    | HTTP connection pool size. Falls back to `50`, raised off botocore's default of 10.                                         |
 | `total_timeout`        | `3600.0` | Whole-call deadline in seconds for a non-streaming generation, retries included. `None` removes it.                         |
 | `session`              | unset    | Pre-configured `boto3.session.Session` for custom credentials or SDK wiring.                                                |
-| `models`               | `[]`     | `ModelDefinition` entries to register. Unlisted IDs still resolve on demand.                                                |
+| `models`               | `[]`     | Model IDs to register. The route is inferred from the ID. Unlisted IDs still resolve on demand, except rerank models.       |
 | `embedders`            | `[]`     | Embedding model IDs to register. Unlisted IDs still resolve on demand.                                                      |
 
 `max_retries`, `read_timeout`, `connect_timeout` and `max_pool_connections` are
@@ -136,8 +180,8 @@ generation end to end, retries included, and is on by default at 3600s; pass
 `None` to remove it and leave only the socket timeouts. When the deadline fires
 the caller gets a `DEADLINE_EXCEEDED` error, though the boto3 call itself cannot
 be aborted and its worker thread runs until the socket timeouts end it.
-Streaming generations, embeddings, image generation and reranking are bounded
-by the socket timeouts alone.
+Streaming generations, embeddings and image generation are bounded by the
+socket timeouts alone.
 
 `max_pool_connections` falls back to 50 rather than botocore's 10 so the pool is
 never the bottleneck; concurrency is bounded first by the event loop's default
@@ -154,10 +198,10 @@ any model ID resolves on demand either way.
 `BedrockConfig` inherits the core `ModelConfig` fields, so the Dev UI offers
 `topK` and `version`. Converse has no equivalent parameters and both values
 are dropped. Models that support a top-k knob take it
-through `additionalModelRequestFields` instead:
+through `extra` instead, which is sent as Converse `additionalModelRequestFields`:
 
 ```python
-BedrockConfig(additional_model_request_fields={'top_k': 40})
+BedrockConfig(extra={'top_k': 40})
 ```
 
 ### Inference profiles
@@ -167,7 +211,7 @@ Model IDs carrying one of the prefixes `global.`, `us-gov.`, `us.`, `eu.`,
 to whichever region in the geography has capacity:
 
 ```python
-ModelDefinition(name='us.anthropic.claude-sonnet-4-5-20250929-v1:0')
+Bedrock(models=['us.anthropic.claude-sonnet-4-5-20250929-v1:0'])
 ```
 
 The full ID is always sent to Bedrock verbatim. The prefix is stripped only for
@@ -237,9 +281,11 @@ from genkit_amazon_bedrock import Bedrock
 ai = Genkit(plugins=[Bedrock(embedders=['amazon.titan-embed-text-v2:0'])])
 
 embeddings = await ai.embed(
-    embedder='bedrock/amazon.titan-embed-text-v2:0',
-    content='Bedrock hosts models from several providers.',
+    embedder=Bedrock.embedder('amazon.titan-embed-text-v2:0'),
+    content='Smoked salmon tartine',
 )
+print(len(embeddings[0].embedding))
+# => 1024
 ```
 
 Listing an embedder is optional: any routable ID resolves on demand,
@@ -260,35 +306,35 @@ Notes:
 
 Image models go through InvokeModel rather than Converse, but they are ordinary
 Genkit model actions: `ai.generate` returns the result as media parts carrying
-data URLs. Declare one with `type='image'`:
+data URLs. List one by ID like any other model:
 
 ```python
 from genkit import Genkit
-from genkit_amazon_bedrock import Bedrock, ModelDefinition
+from genkit_amazon_bedrock import Bedrock
 
 ai = Genkit(
     plugins=[
         Bedrock(
             # us-west-2: the active text-to-image models are offered there only.
             region='us-west-2',
-            models=[ModelDefinition(name='stability.sd3-5-large-v1:0', type='image')],
+            models=['stability.sd3-5-large-v1:0'],
         )
     ]
 )
 
 response = await ai.generate(
-    model='bedrock/stability.sd3-5-large-v1:0',
+    model=Bedrock.stability('stability.sd3-5-large-v1:0'),
     prompt='A tabby cat asleep on a sunlit windowsill, watercolour.',
 )
 image = response.media[0].url  # data:image/png;base64,...
 ```
 
-Declaring is optional here too. An undeclared ID in one of the two families
-below is classified as an image model on the spot, so a bare
-`ai.generate(model='bedrock/<id>')` resolves and takes the InvokeModel path;
-declaring adds the model to the Dev UI and pins the routing. The prompt is the
-text of the most recent user message, concatenated across its text parts; other
-parts are ignored, as these models are text-to-image only.
+The plugin infers the route from the ID: the image IDs below take the
+InvokeModel path, and anything else goes through Converse. Listing is
+optional here too, so a bare `ai.generate(model='bedrock/<id>')` routes the same
+way; listing only adds the model to the Dev UI. The prompt is the text of the
+most recent user message, concatenated across its text parts; other parts are
+ignored, as these models are text-to-image only.
 
 Streaming callbacks are never invoked for image models. There is nothing to
 stream, so `generate_stream` yields no chunks and the images arrive on the
@@ -296,48 +342,66 @@ final response.
 
 ### Request shapes
 
-The two families take incompatible bodies, so the request is built from the
-model ID.
-
-Amazon (IDs containing `titan-image` or `nova-canvas`) nests its options under
-`imageGenerationConfig`, and that is the only config key read: any other
-top-level key is dropped. Your entries are merged key by key over these
-defaults:
-
-```python
-config={
-    'imageGenerationConfig': {
-        'numberOfImages': 1,
-        'height': 1024,
-        'width': 1024,
-        'cfgScale': 8.0,
-        'seed': 0,
-        'quality': 'standard',  # Nova Canvas only, not sent for Titan Image
-    }
-}
-```
-
-Output is always `image/png`.
-
 Stability (IDs containing `sd3-`, `stable-image-core`, or `stable-image-ultra`)
-takes flat top-level fields, and the whole config dict is merged over the
-defaults (`{'prompt': ..., 'output_format': 'png'}`), so `aspect_ratio`,
-`seed`, `negative_prompt`, `output_format` and the rest all apply:
+takes `StabilityImageConfig`. Generate validates `config` against it before the
+call, so a typo raises `INVALID_ARGUMENT` instead of being dropped, and the Dev
+UI renders the fields as a form. Dicts work too and are validated against the
+same class, in either snake_case or camelCase. The field names are Stability's
+wire names and go at the top of the body, over
+`{'prompt': ..., 'output_format': 'png'}`:
 
 ```python
-config={'aspect_ratio': '16:9', 'output_format': 'jpeg', 'seed': 42}
+from genkit_amazon_bedrock import Bedrock, StabilityImageConfig
+
+# 1. Typed ref and typed fields
+response = await ai.generate(
+    model=Bedrock.stability('stability.sd3-5-large-v1:0'),
+    prompt='A food truck at dusk, string lights.',
+    config=StabilityImageConfig(aspect_ratio='16:9', seed=42, negative_prompt='blurry', output_format='jpeg'),
+)
+# => body: {'prompt': 'A food truck at dusk, string lights.', 'output_format': 'jpeg',
+#           'aspect_ratio': '16:9', 'seed': 42, 'negative_prompt': 'blurry'}
+
+# 2. The media part's MIME type follows output_format
+print(response.media[0].content_type)
+# => image/jpeg
 ```
 
-The media part's MIME type follows `output_format`.
+`StabilityImageConfig` extends `GenkitConfig`, like the Veo config, not
+`ModelConfig`: Bedrock's image APIs take none of Genkit's generic generation
+options, so `temperature`, `topP`, `maxOutputTokens` and the rest raise
+`INVALID_ARGUMENT` as unknown keys, and the Dev UI form shows only real image
+fields.
 
-`BedrockImageConfig` is the exported config type for these calls. It declares
-no fields and rejects nothing, on purpose: the two families take disjoint keys,
-and `BedrockConfig` describes Converse parameters, so it would reject every
-family-specific key here.
+Titan Image and Nova Canvas were retired on Bedrock and aren't typed; with
+residual access, pass the raw model ID (`'bedrock/amazon.nova-canvas-v1:0'`)
+and put every body field past the prompt in `config['extra']`.
 
-Genkit's generic generation options (`temperature`, `topP`, `maxOutputTokens`,
-`apiKey`, and the rest of the common config) are not forwarded to image models,
-since Bedrock's image APIs do not accept them.
+### `extra` on image models
+
+Body fields `StabilityImageConfig` doesn't declare go in `extra`, which is
+deep-merged into the finished `InvokeModel` body using Bedrock's wire names.
+Nested objects merge key by key, and a colliding leaf takes your value:
+
+```python
+# 1. A field the class doesn't declare
+config = StabilityImageConfig(extra={'mode': 'text-to-image'})
+# => body: {'prompt': ..., 'output_format': 'png', 'mode': 'text-to-image'}
+
+# 2. A colliding leaf: extra wins
+config = StabilityImageConfig(seed=7, extra={'seed': 9})
+# => body: {'prompt': ..., 'output_format': 'png', 'seed': 9}
+```
+
+Fields Genkit builds from the prompt fail with `INVALID_ARGUMENT` instead of
+being overwritten, and nothing is sent:
+
+- Stability: `prompt`
+- Titan Image and Nova Canvas IDs: `taskType`, `textToImageParams.text`, or a
+  `textToImageParams` that isn't a mapping
+
+`extra` itself must be a mapping; anything else also fails with
+`INVALID_ARGUMENT`.
 
 Text-to-image and image-editing models are not interchangeable: a model
 offered in a region may only inpaint or upscale. Check the Bedrock
@@ -345,73 +409,9 @@ console for the region you are calling. A Legacy model that this
 account cannot use (never enabled, or disabled after idle) arrives as
 `ResourceNotFoundException`, same as a missing grant.
 
-The `titan-image` family is still recognised, since it shares its
-request shape with Nova Canvas. The legacy Stable Diffusion XL schema
-(`text_prompts`/`artifacts`) is not ported. Stability editing services
-(inpaint, erase, background removal, and the rest) are not text-to-image
-and are out of scope. Nova Canvas may return fewer images than
-`numberOfImages` asked for; content-filtered images are dropped
-silently.
-
-## Reranking
-
-Reranking scores documents against a query, so a retrieval step can return its
-hits in relevance order. It is a method on the plugin instance rather than a
-Genkit action, so keep a reference to the `Bedrock` you pass to `Genkit`:
-
-```python
-from genkit import Document, Genkit
-from genkit_amazon_bedrock import Bedrock, BedrockRerankOptions
-
-bedrock = Bedrock(region='us-east-1')
-ai = Genkit(plugins=[bedrock])
-
-response = await bedrock.rerank(
-    'cohere.rerank-v3-5:0',
-    query='How do I configure authentication for Bedrock?',
-    documents=[
-        Document.from_text('Configure AWS credentials with environment variables or AWS SSO.'),
-        Document.from_text('Nova Canvas returns generated images as base64-encoded PNG data.'),
-        Document.from_text('Model access is granted per account and region in the Bedrock console.'),
-    ],
-    options=BedrockRerankOptions(top_n=2),
-)
-
-for document in response.documents:
-    print(document.metadata.score, document.content[0].text)
-```
-
-Genkit Python has no reranker primitive: `ActionKind.RERANKER` exists as a bare
-enum member, and the request and response types are not generated, so there is
-nothing to register an action against. The types this plugin exports
-(`BedrockRerankOptions`, `RankedDocumentData`, `RankedDocumentMetadata`,
-`RerankerRequest`, `RerankerResponse`) mirror the schema types by the same
-names.
-
-Notes:
-
-- `top_n` (`topN` when the options are passed as a dict) is clamped down to the
-  number of documents sent, and `<= 0` or unset means all of them.
-- Results arrive in the service's descending-relevance order and are neither
-  re-sorted nor truncated client-side.
-- A ranked document carries the input document's content verbatim and fresh
-  `{score}` metadata. The input document's own metadata is not carried through.
-- Rerank models have no Converse path, so they never resolve as chat models.
-  Listing one in `models=` is ignored; pass the ID to `rerank()` instead.
-- Only `bedrock:InvokeModel` is required. `bedrock:Rerank` is not: that
-  permission belongs to the separate Bedrock Agent Runtime `Rerank` API, which
-  this plugin does not call.
-
-Which rerank models a region offers changes; check the Bedrock console.
-The two families take different bodies, so the request is built from the
-model ID. Both send `query`, `documents` and `top_n`; only Cohere takes
-`api_version`, whose schema requires the key, while the Amazon schema
-rejects any body carrying it. An ID matching neither family gets the
-Cohere body, that being the only shape AWS documents for InvokeModel
-reranking.
-
-Any model ID is passed to InvokeModel verbatim, so inference profiles
-and ARNs work too.
+The legacy Stable Diffusion XL schema (`text_prompts`/`artifacts`) is not
+ported. Stability editing services (inpaint, erase, background removal, and the
+rest) are not text-to-image and are out of scope.
 
 ## Troubleshooting
 
@@ -443,10 +443,9 @@ the ID.
 
 **Any other `ValidationException`.** The request or config is malformed for
 that particular model: a thinking budget outside the bounds the model allows,
-or an image config field the family does not accept (the whole config dict
-reaches Stability, and everything inside `imageGenerationConfig` reaches the
-Amazon family). Bedrock validates per model, so a config that works on one
-model can be rejected by the next.
+or an image `extra` field the model does not accept (`extra` is sent
+unchecked). Bedrock validates per model, so a config
+that works on one model can be rejected by the next.
 
 **`ThrottlingException`.** The on-demand capacity limit for that model and
 region. The plugin retries automatically with exponential backoff, up to

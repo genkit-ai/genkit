@@ -16,7 +16,6 @@
 
 import { devLocalVectorstore } from '@genkit-ai/dev-local-vectorstore';
 import { GenkitMetric, genkitEval } from '@genkit-ai/evaluator';
-import { enableFirebaseTelemetry } from '@genkit-ai/firebase';
 import { googleAI, vertexAI } from '@genkit-ai/google-genai';
 import {
   fallback,
@@ -35,20 +34,16 @@ import { logger } from 'genkit/logging';
 import { chroma } from 'genkitx-chromadb';
 import { ollama } from 'genkitx-ollama';
 import { pinecone } from 'genkitx-pinecone';
+import {
+  alwaysFail,
+  delay,
+  failFirstN,
+  failTool,
+  mockResponse,
+  randomFail,
+} from './main/middleware.js';
 
 logger.setLogLevel('debug');
-
-enableFirebaseTelemetry({
-  forceDevExport: false,
-  metricExportIntervalMillis: 5_000,
-  metricExportTimeoutMillis: 5_000,
-  autoInstrumentation: true,
-  autoInstrumentationConfig: {
-    '@opentelemetry/instrumentation-fs': { enabled: false },
-    '@opentelemetry/instrumentation-dns': { enabled: false },
-    '@opentelemetry/instrumentation-net': { enabled: false },
-  },
-});
 
 // Turn off safety checks for evaluation so that the LLM as an evaluator can
 // respond appropriately to potentially harmful content without error.
@@ -152,7 +147,7 @@ export const ai = genkit({
 
     // evaluation
     genkitEval({
-      judge: googleAI.model('gemini-2.5-flash'),
+      judge: googleAI.model('gemini-flash-latest'),
       judgeConfig: PERMISSIVE_SAFETY_SETTINGS,
       embedder: googleAI.embedder('gemini-embedding-001'),
       metrics: [
@@ -169,5 +164,13 @@ export const ai = genkit({
     retry.plugin(),
     skills.plugin(),
     toolApproval.plugin(),
+
+    // testing middleware
+    alwaysFail.plugin(),
+    delay.plugin(),
+    failFirstN.plugin(),
+    failTool.plugin(),
+    mockResponse.plugin(),
+    randomFail.plugin(),
   ],
 });

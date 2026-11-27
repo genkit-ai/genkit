@@ -17,41 +17,63 @@
 
 """Tests for the Django plugin."""
 
+import asyncio
 import json
+import logging
 import sys
 import types
-from collections.abc import Iterator, Mapping
-from typing import Any, cast
+from collections.abc import Iterator
+from typing import Any
 
 import pytest
+from django.core.exceptions import PermissionDenied
+from django.core.handlers.asgi import ASGIHandler
 from django.http import HttpRequest
 from django.test import AsyncClient
 from django.test.utils import override_settings
 from django.urls import path
 from genkit_django import genkit_django_handler
+from pydantic import BaseModel
 
-from genkit import ActionRunContext, Genkit
-from genkit.plugin_api import RequestData
+from genkit import FlowContext, Genkit, GenkitError, PublicError
+from genkit.plugin_api import provider_error
+from genkit.web import RequestData
+
+
+class Receipt(BaseModel):
+    table: int
+    note: str | None = None
 
 
 def _assert_is_error_response(parsed: dict) -> None:
-    """Assert parsed dict has HttpErrorWireFormat shape (message, status, details)."""
+    """Assert parsed dict has a callable error body (message + status)."""
     assert isinstance(parsed, dict)
-    assert all(k in parsed for k in ('message', 'status', 'details'))
+    assert all(k in parsed for k in ('message', 'status'))
+    assert 'stack' not in parsed.get('details', {})
+
+
+def _sse_error_event(chunks: list[bytes]) -> dict:
+    """Return the first SSE ``error`` payload, or fail."""
+    text = b''.join(chunks).decode()
+    for line in text.splitlines():
+        if line.startswith('data: '):
+            payload = json.loads(line[6:])
+            if 'error' in payload:
+                return payload['error']
+    raise AssertionError(f'no SSE error event in {text!r}')
 
 
 def _build_views() -> dict[str, Any]:
     """Build the Django views used by the integration tests."""
     ai = Genkit()
 
-    async def my_context_provider(request_data: RequestData[HttpRequest]) -> dict[str, Any]:
+    async def my_context_provider(request_data: RequestData) -> dict[str, Any]:
         """Provide a context for the flow."""
-        headers = cast(Mapping[str, str], request_data.request.headers)
-        return {'username': headers.get('authorization')}
+        return {'username': request_data.headers.get('authorization')}
 
     @genkit_django_handler(ai, context_provider=my_context_provider)
     @ai.flow()
-    async def say_hi(name: str, ctx: ActionRunContext) -> dict[str, str]:
+    async def say_hi(name: str, ctx: FlowContext) -> dict[str, str]:
         ctx.send_chunk(1)
         ctx.send_chunk({'username': ctx.context.get('username')})
         ctx.send_chunk({'foo': 'bar'})
@@ -62,7 +84,93 @@ def _build_views() -> dict[str, Any]:
     async def raise_error(_: str) -> None:
         raise ValueError('Intentional test error')
 
-    return {'say_hi': say_hi, 'raise_error': raise_error}
+    @genkit_django_handler(ai)
+    @ai.flow()
+    async def raise_invalid(_: str) -> None:
+        raise GenkitError(status='INVALID_ARGUMENT', message='bad id 12345')
+
+    @genkit_django_handler(ai)
+    @ai.flow()
+    async def raise_public(_: str) -> None:
+        raise PublicError('NOT_FOUND', 'no order 99')
+
+    async def echo_context(request_data: RequestData) -> dict[str, Any]:
+        return {
+            'method': request_data.method,
+            'authorization': request_data.headers['authorization'],
+            'input': request_data.input,
+        }
+
+    @genkit_django_handler(ai, context_provider=echo_context)
+    @ai.flow()
+    async def echo_request(_: str, ctx: FlowContext) -> dict[str, Any]:
+        return {
+            'method': ctx.context['method'],
+            'authorization': ctx.context['authorization'],
+            'input': ctx.context['input'],
+        }
+
+    async def deny(_request: RequestData) -> dict[str, Any]:
+        raise PublicError('UNAUTHENTICATED', 'not signed in')
+
+    @genkit_django_handler(ai, context_provider=deny)
+    @ai.flow()
+    async def gated(_: str) -> str:
+        return 'ok'
+
+    async def deny_permission(_request: RequestData) -> dict[str, Any]:
+        raise PermissionDenied()
+
+    @genkit_django_handler(ai, context_provider=deny_permission)
+    @ai.flow()
+    async def forbidden(_: str) -> str:
+        return 'ok'
+
+    async def from_django_request(request_data: RequestData) -> dict[str, Any]:
+        # The raw HttpRequest carries what the shared fields don't, e.g. cookies.
+        django_request = request_data.request
+        assert isinstance(django_request, HttpRequest)
+        return {'table': django_request.COOKIES.get('table')}
+
+    @genkit_django_handler(ai, context_provider=from_django_request)
+    @ai.flow()
+    async def table_from_cookie(_: str, ctx: FlowContext) -> str:
+        return f'table {ctx.context["table"]}'
+
+    @genkit_django_handler(ai)
+    @ai.flow()
+    async def greet(name: str = 'world') -> str:
+        return f'hello {name}'
+
+    @genkit_django_handler(ai)
+    @ai.flow()
+    async def void_flow() -> dict[str, str]:
+        return {'ok': 'true'}
+
+    @genkit_django_handler(ai)
+    @ai.flow()
+    async def close_tab(table: int) -> Receipt:
+        return {'table': table, 'note': None}  # type: ignore[return-value]
+
+    @genkit_django_handler(ai)
+    @ai.flow()
+    async def raise_provider(_: str) -> None:
+        raise provider_error(RuntimeError('API key not valid'), http_status=401)
+
+    return {
+        'greet': greet,
+        'void_flow': void_flow,
+        'close_tab': close_tab,
+        'say_hi': say_hi,
+        'raise_error': raise_error,
+        'raise_invalid': raise_invalid,
+        'raise_public': raise_public,
+        'echo_request': echo_request,
+        'gated': gated,
+        'forbidden': forbidden,
+        'raise_provider': raise_provider,
+        'table_from_cookie': table_from_cookie,
+    }
 
 
 @pytest.fixture
@@ -76,6 +184,16 @@ def urlconf(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     module.urlpatterns = [  # type: ignore[attr-defined]  # pyrefly: ignore[missing-attribute]
         path('chat', views['say_hi']),
         path('error_flow', views['raise_error']),
+        path('invalid_flow', views['raise_invalid']),
+        path('public_flow', views['raise_public']),
+        path('echo_request', views['echo_request']),
+        path('gated', views['gated']),
+        path('greet', views['greet']),
+        path('void_flow', views['void_flow']),
+        path('close_tab', views['close_tab']),
+        path('forbidden', views['forbidden']),
+        path('provider_flow', views['raise_provider']),
+        path('table_from_cookie', views['table_from_cookie']),
     ]
     monkeypatch.setitem(sys.modules, 'genkit_django_tests_urls', module)
 
@@ -126,16 +244,41 @@ async def test_streaming(urlconf: None) -> None:  # noqa: ARG001
 
 
 @pytest.mark.asyncio
-async def test_400_missing_data_returns_valid_json(urlconf: None) -> None:  # noqa: ARG001
-    """400 (missing data) must return valid JSON."""
+async def test_empty_body_runs_no_input_flow_on_every_adapter(urlconf: None) -> None:  # noqa: ARG001
+    """POST {} to a served flow that takes no input returns its result."""
+    client = AsyncClient()
+    response = await client.post('/void_flow', data=json.dumps({}), content_type='application/json')
+
+    assert response.status_code == 200
+    assert json.loads(response.content) == {'result': {'ok': 'true'}}
+
+
+@pytest.mark.asyncio
+async def test_input_key_body_is_400_on_every_adapter(urlconf: None) -> None:  # noqa: ARG001
+    """POST {"input": 1} to a served flow is a 400 telling the caller to wrap in data."""
+    client = AsyncClient()
+    response = await client.post('/void_flow', data=json.dumps({'input': 1}), content_type='application/json')
+
+    assert response.status_code == 400
+    assert (
+        response.content
+        == b'{"message":"Flow request must be wrapped in {\\"data\\": ...}","status":"INVALID_ARGUMENT"}'
+    )
+
+
+@pytest.mark.asyncio
+async def test_streamed_flow_failure_ends_with_same_error_frame(urlconf: None) -> None:  # noqa: ARG001
+    """A streamed flow raising PublicError('NOT_FOUND', 'no order 99') ends with that exact error frame."""
     client = AsyncClient()
     response = await client.post(
-        '/chat',
-        data=json.dumps({}),  # no 'data' key
+        '/public_flow',
+        data=json.dumps({'data': '99'}),
         content_type='application/json',
+        headers={'accept': 'text/event-stream'},
     )
-    assert response.status_code == 400
-    _assert_is_error_response(json.loads(response.content))
+
+    chunks = [chunk async for chunk in response.streaming_content]
+    assert chunks[-1] == b'data: {"error":{"message":"no order 99","status":"NOT_FOUND"}}\n\n'
 
 
 @pytest.mark.asyncio
@@ -148,7 +291,10 @@ async def test_400_invalid_json_returns_valid_json(urlconf: None) -> None:  # no
         content_type='application/json',
     )
     assert response.status_code == 400
-    _assert_is_error_response(json.loads(response.content))
+    assert json.loads(response.content) == {
+        'message': 'request body must be valid JSON',
+        'status': 'INVALID_ARGUMENT',
+    }
 
 
 @pytest.mark.asyncio
@@ -157,12 +303,15 @@ async def test_405_non_post_returns_valid_json(urlconf: None) -> None:  # noqa: 
     client = AsyncClient()
     response = await client.get('/chat')
     assert response.status_code == 405
-    _assert_is_error_response(json.loads(response.content))
+    assert json.loads(response.content) == {
+        'message': 'only POST is supported',
+        'status': 'INVALID_ARGUMENT',
+    }
 
 
 @pytest.mark.asyncio
 async def test_500_flow_exception_returns_valid_json(urlconf: None) -> None:  # noqa: ARG001
-    """500 (flow exception) must return valid JSON in HttpErrorWireFormat shape."""
+    """500 (flow exception) must return valid JSON in the `{status, message, details}` shape."""
     client = AsyncClient()
     code_snippet = 'query = f"SELECT * FROM users WHERE id={user_input}"'
     response = await client.post(
@@ -171,4 +320,268 @@ async def test_500_flow_exception_returns_valid_json(urlconf: None) -> None:  # 
         content_type='application/json',
     )
     assert response.status_code == 500
-    _assert_is_error_response(json.loads(response.content))
+    parsed = json.loads(response.content)
+    _assert_is_error_response(parsed)
+    assert parsed == {'message': 'Internal Error', 'status': 'INTERNAL'}
+
+
+@pytest.mark.asyncio
+async def test_django_flow_raising_invalid_argument_returns_500_internal_error(
+    urlconf: None,
+) -> None:  # noqa: ARG001
+    """Django POST to a flow that raises GenkitError INVALID_ARGUMENT is 500, not 400."""
+    client = AsyncClient()
+    response = await client.post(
+        '/invalid_flow',
+        data=json.dumps({'data': 'x'}),
+        content_type='application/json',
+    )
+    assert response.status_code == 500
+    assert json.loads(response.content) == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert b'12345' not in response.content
+
+
+@pytest.mark.asyncio
+async def test_django_flow_raising_public_error_returns_its_status_and_message(
+    urlconf: None,
+) -> None:  # noqa: ARG001
+    """Django POST to a flow that raises PublicError NOT_FOUND returns 404 with that message."""
+    client = AsyncClient()
+    response = await client.post(
+        '/public_flow',
+        data=json.dumps({'data': '99'}),
+        content_type='application/json',
+    )
+    assert response.status_code == 404
+    assert response.content == b'{"message":"no order 99","status":"NOT_FOUND"}'
+
+
+@pytest.mark.asyncio
+async def test_django_flow_raising_value_error_returns_500_internal_error_without_stack(
+    urlconf: None,
+) -> None:  # noqa: ARG001
+    """Django POST to a flow that raises ValueError returns a generic 500."""
+    client = AsyncClient()
+    response = await client.post(
+        '/error_flow',
+        data=json.dumps({'data': 'secret'}),
+        content_type='application/json',
+    )
+    assert response.status_code == 500
+    body = json.loads(response.content)
+    assert body == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert b'secret' not in response.content
+    assert 'stack' not in body
+
+
+@pytest.mark.asyncio
+async def test_django_stream_flow_raising_value_error_sends_sse_internal_error_without_stack(
+    urlconf: None,
+) -> None:  # noqa: ARG001
+    """Django SSE to a flow that raises ValueError sends a generic Internal Error."""
+    client = AsyncClient()
+    response = await client.post(
+        '/error_flow',
+        data=json.dumps({'data': 'secret'}),
+        content_type='application/json',
+        headers={'accept': 'text/event-stream'},
+    )
+    chunks = [chunk async for chunk in response.streaming_content]
+    error = _sse_error_event(chunks)
+    assert error == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert b'secret' not in b''.join(chunks)
+    assert 'stack' not in error
+
+
+@pytest.mark.asyncio
+async def test_django_context_provider_sees_method_lowercase_headers_and_input(
+    urlconf: None,
+) -> None:  # noqa: ARG001
+    """Django context_provider sees method, lowercase headers, and input."""
+    client = AsyncClient()
+    response = await client.post(
+        '/echo_request',
+        data=json.dumps({'data': 'hello'}),
+        content_type='application/json',
+        headers={'Authorization': 'Bearer tok'},
+    )
+    assert response.status_code == 200
+    assert json.loads(response.content) == {
+        'result': {
+            'method': 'POST',
+            'authorization': 'Bearer tok',
+            'input': 'hello',
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_django_context_provider_public_error_returns_its_status_and_message(
+    urlconf: None,
+) -> None:  # noqa: ARG001
+    """A PublicError from Django's context_provider is mapped like a flow failure."""
+    client = AsyncClient()
+    response = await client.post(
+        '/gated',
+        data=json.dumps({'data': 'x'}),
+        content_type='application/json',
+    )
+
+    assert response.status_code == 401
+    assert json.loads(response.content) == {'message': 'not signed in', 'status': 'UNAUTHENTICATED'}
+
+
+@pytest.mark.asyncio
+async def test_django_flow_with_default_and_null_data_uses_python_default(urlconf: None) -> None:  # noqa: ARG001
+    """POST `{"data": null}` to a served `greet(name: str = 'world')` returns the default's result."""
+    client = AsyncClient()
+    response = await client.post('/greet', data=json.dumps({'data': None}), content_type='application/json')
+
+    assert response.status_code == 200
+    assert json.loads(response.content) == {'result': 'hello world'}
+
+
+@pytest.mark.asyncio
+async def test_django_flow_returning_dict_for_model_omits_none_fields(urlconf: None) -> None:  # noqa: ARG001
+    """POST to a `-> Receipt` flow that returns `{'table': 4, 'note': None}` omits `note` on the wire."""
+    client = AsyncClient()
+    response = await client.post('/close_tab', data=json.dumps({'data': 4}), content_type='application/json')
+
+    assert response.status_code == 200
+    assert json.loads(response.content) == {'result': {'table': 4}}
+
+
+@pytest.mark.asyncio
+async def test_django_context_provider_permission_denied_returns_403(
+    urlconf: None,
+) -> None:  # noqa: ARG001
+    """PermissionDenied from context_provider is Django's 403, not our 500."""
+    client = AsyncClient()
+    response = await client.post(
+        '/forbidden',
+        data=json.dumps({'data': 'x'}),
+        content_type='application/json',
+    )
+
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_django_provider_401_returns_500_internal_error(urlconf: None) -> None:  # noqa: ARG001
+    """A Django flow whose model call fails with a provider 401 is 500 Internal Error."""
+    client = AsyncClient()
+    response = await client.post(
+        '/provider_flow',
+        data=json.dumps({'data': 'hi'}),
+        content_type='application/json',
+    )
+
+    assert response.status_code == 500
+    assert json.loads(response.content) == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert b'API key not valid' not in response.content
+
+
+@pytest.mark.asyncio
+async def test_django_stream_provider_401_sends_sse_internal_error(urlconf: None) -> None:  # noqa: ARG001
+    """A streamed Django flow whose model call fails with a provider 401 ends with Internal Error."""
+    client = AsyncClient()
+    response = await client.post(
+        '/provider_flow',
+        data=json.dumps({'data': 'hi'}),
+        content_type='application/json',
+        headers={'accept': 'text/event-stream'},
+    )
+    chunks = [chunk async for chunk in response.streaming_content]
+    error = _sse_error_event(chunks)
+    assert error == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert b'API key not valid' not in b''.join(chunks)
+
+
+@pytest.mark.asyncio
+async def test_context_provider_reads_raw_django_request(urlconf: None) -> None:  # noqa: ARG001
+    """RequestData.request is the Django HttpRequest, for cookies, sessions and request.user."""
+    client = AsyncClient()
+    client.cookies['table'] = 'T7'
+    response = await client.post('/table_from_cookie', data=json.dumps({'data': 'x'}), content_type='application/json')
+
+    assert response.status_code == 200
+    assert json.loads(response.content) == {'result': 'table T7'}
+
+
+@pytest.mark.asyncio
+async def test_django_streaming_client_disconnect_cancels_flow(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A client that hangs up after the first SSE chunk of a streamed flow view cancels the flow."""
+    ai = Genkit()
+    flow_cancelled = asyncio.Event()
+
+    @genkit_django_handler(ai)
+    @ai.flow()
+    async def slow(_: str, ctx: FlowContext) -> str:
+        ctx.send_chunk(1)
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            flow_cancelled.set()
+            raise
+        return 'never'
+
+    module = types.ModuleType('genkit_django_disconnect_urls')
+    module.urlpatterns = [path('slow', slow)]  # type: ignore[attr-defined]  # pyrefly: ignore[missing-attribute]
+    monkeypatch.setitem(sys.modules, 'genkit_django_disconnect_urls', module)
+
+    first_chunk = asyncio.Event()
+    request_read = False
+    bodies: list[bytes] = []
+
+    async def receive() -> dict[str, Any]:
+        nonlocal request_read
+        if not request_read:
+            request_read = True
+            return {'type': 'http.request', 'body': json.dumps({'data': 'x'}).encode(), 'more_body': False}
+        await first_chunk.wait()
+        return {'type': 'http.disconnect'}
+
+    async def send(message: dict[str, Any]) -> None:
+        if message['type'] == 'http.response.body' and message.get('body'):
+            bodies.append(message['body'])
+            first_chunk.set()
+
+    scope = {
+        'type': 'http',
+        'asgi': {'version': '3.0'},
+        'http_version': '1.1',
+        'method': 'POST',
+        'scheme': 'http',
+        'path': '/slow',
+        'raw_path': b'/slow',
+        'root_path': '',
+        'query_string': b'',
+        'headers': [(b'content-type', b'application/json'), (b'accept', b'text/event-stream')],
+        'client': ('testclient', 50000),
+        'server': ('testserver', 80),
+    }
+    with override_settings(ROOT_URLCONF='genkit_django_disconnect_urls'):
+        await asyncio.wait_for(ASGIHandler()(scope, receive, send), timeout=5)
+
+    assert bodies == [b'data: {"message":1}\n\n']
+    assert flow_cancelled.is_set()
+
+
+@pytest.mark.asyncio
+async def test_django_failure_logs_name_the_flow(
+    urlconf: None,  # noqa: ARG001
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Failure lines say which flow failed: 5xx with traceback, 4xx without."""
+    client = AsyncClient()
+    with caplog.at_level(logging.DEBUG, logger='genkit_django._handler'):
+        await client.post('/error_flow', data=json.dumps({'data': 'x'}), content_type='application/json')
+        await client.post('/public_flow', data=json.dumps({'data': '99'}), content_type='application/json')
+
+    records = [r for r in caplog.records if r.name == 'genkit_django._handler']
+    assert [r.getMessage() for r in records] == [
+        "served action 'raise_error' run failed",
+        "served action 'raise_public' run failed: NOT_FOUND: no order 99",
+    ]
+    assert records[0].exc_info is not None
+    assert records[1].exc_info is None

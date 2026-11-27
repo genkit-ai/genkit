@@ -34,6 +34,7 @@ const shutdownTimeout = 5 * time.Second
 
 // Start starts a new HTTP server and manages its lifecycle.
 // This is a convenience function since Go does not manage interrupt signals directly.
+// It returns nil after a graceful shutdown on SIGINT or SIGTERM.
 func Start(ctx context.Context, addr string, mux *http.ServeMux) error {
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()

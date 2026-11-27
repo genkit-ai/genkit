@@ -14,10 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-- model: googleai/imagen-4.0-generate-001
-  supports:
-    - output-image
-- model: googleai/gemini-2.5-flash-preview-tts
+- model: googleai/gemini-3.8-flash-lite-tts
   tests:
     - name: TTS Test
       input:

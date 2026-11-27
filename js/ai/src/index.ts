@@ -43,6 +43,7 @@ export {
 export {
   GenerateResponse,
   GenerateResponseChunk,
+  GenerationAbortedError,
   GenerationBlockedError,
   GenerationResponseError,
   generate,

@@ -2,6 +2,16 @@
 
 Genkit is a framework for building AI-powered applications. It provides open source libraries for Node.js and Go, along with tools to help you debug and iterate quickly.
 
+> **Building with a coding agent? Install the Genkit JS skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-js
+> ```
+>
+> It teaches your agent the current Genkit JS APIs and common gotchas.
+> Source, manual install and skills for other languages:
+> [genkit-ai/skills](https://github.com/genkit-ai/skills).
+
 ## Quick Start
 
 Install the following Genkit dependencies to use Genkit in your project:
@@ -101,6 +111,27 @@ const { text } = await ai.generate({
   tools: [getWeather],
 });
 ```
+
+A failed generation throws by default: a tool's own error, the model's, or a `GenerationResponseError` when the response was blocked or the `maxTurns` limit was reached. Pass `throwOnError: false` to get the failure on the response instead. When the loop failed (`finishReason` `failed`) or was stopped (`aborted`), `res.messages` is the conversation up to the last finished tool round, so you can send it again:
+
+```ts
+const opts = {
+  model: googleAI.model('gemini-flash-latest'),
+  tools: [getWeather],
+  throwOnError: false,
+};
+let res = await ai.generate({
+  ...opts,
+  prompt: 'What should I wear in Tokyo today?',
+});
+if (res.finishReason === 'failed' || res.finishReason === 'aborted') {
+  // res.error says what broke. res.messages already includes the prompt;
+  // retry from the last completed tool round.
+  res = await ai.generate({ ...opts, messages: res.messages });
+}
+```
+
+Other failures are not for sending again as they are: a blocked response and structured output that does not match the schema keep the model's own reply beside `res.error`, and a restarted tool that interrupts again reports `interrupted`, which you answer with `resume`. An unknown model or tool, invalid options, and a middleware hook that fails before the first turn still throw with `throwOnError: false`, since there is no response to return.
 
 ### Interrupts (Human-in-the-Loop)
 
@@ -345,6 +376,21 @@ const res = await chat.send('Now say that in French');
 console.log(res.text);
 ```
 
+A turn that fails keeps the tool rounds it completed: the conversation as it stood at the last turn seam persists as a `failed` snapshot carrying the error, and the `AgentError` names it. A run you stop (aborting the signal you passed to `send`, calling `abort()` on a background task, or reaching the `maxTurns` limit you set) persists an `aborted` snapshot the same way. Both resume like any other snapshot, and an input with no payload runs the turn again on the committed messages, so tool calls that already succeeded are not repeated:
+
+```ts
+try {
+  await chat.send('Book the full itinerary.');
+} catch (err) {
+  if (err instanceof AgentError) {
+    // The chat already adopted the failed snapshot; re-attempt the turn once.
+    await chat.send({});
+  }
+}
+```
+
+Whether a failure is worth another attempt is yours to decide; the framework records the error and leaves the snapshot resumable either way. `err.status` is the model's own status for a model error, and `INTERNAL` for a failed tool whatever the tool threw. Custom agents opt in by throwing `CommittedTurnError`; a bare error rolls the turn back to the previous snapshot. A custom agent that commits failures also has to handle the input with no message or resume that re-attempts a turn, since the runner hands it over as it is.
+
 Agents can be served over HTTP and accessed from the client with `remoteAgent`, which returns the exact same chat API as the server:
 
 ```ts
@@ -356,6 +402,19 @@ const chat = agent.chat();
 const res = await chat.send('Weather in Tokyo?');
 console.log(res.text);
 ```
+
+On the server, mount the agent at `url` and its companion actions under it, so `remoteAgent` can read, wait for, and stop background tasks:
+
+```ts
+import { expressHandler } from '@genkit-ai/express';
+
+app.post('/api/weatherAgent', expressHandler(weatherAgent));
+app.post('/api/weatherAgent/getSnapshot', expressHandler(weatherAgent.getSnapshotDataAction));
+app.post('/api/weatherAgent/waitForSnapshot', expressHandler(weatherAgent.waitForSnapshotAction));
+app.post('/api/weatherAgent/abort', expressHandler(weatherAgent.abortAgentAction));
+```
+
+Without the `waitForSnapshot` route, `remoteAgent` polls `getSnapshot` instead.
 
 Learn more in the [Agents documentation](https://genkit.dev/docs/js/agents/overview/).
 

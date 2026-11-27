@@ -52,19 +52,24 @@ export class GcpLogger {
           };
 
     const transports: any[] = [];
-    transports.push(
-      this.shouldExport(env)
-        ? new LoggingWinston({
-            labels: { module: 'genkit' },
-            prefix: 'genkit',
-            logName: 'genkit_log',
-            projectId: this.config.projectId,
-            credentials: this.config.credentials,
-            autoRetry: true,
-            defaultCallback: await this.getErrorHandler(),
-          })
-        : new winston.transports.Console()
-    );
+    if (this.shouldExport(env)) {
+      transports.push(
+        new LoggingWinston({
+          labels: { module: 'genkit' },
+          prefix: 'genkit',
+          logName: 'genkit_log',
+          projectId: this.config.projectId,
+          credentials: this.config.credentials,
+          autoRetry: true,
+          defaultCallback: await this.getErrorHandler(),
+        })
+      );
+    } else if (!additionalStream) {
+      // When a test stream is registered it replaces the console. Tests write
+      // very large log lines (truncation cases) and echoing them to stdout
+      // makes CI log capture stall for minutes.
+      transports.push(new winston.transports.Console());
+    }
     if (additionalStream) {
       transports.push(
         new winston.transports.Stream({ stream: additionalStream })
@@ -113,7 +118,11 @@ export class GcpLogger {
   }
 }
 
-/** @hidden */
+/**
+ * Routes logs to `stream` instead of the console (export transport, if
+ * enabled, is unaffected).
+ * @hidden
+ */
 export function __addTransportStreamForTesting(stream: Writable) {
   additionalStream = stream;
 }

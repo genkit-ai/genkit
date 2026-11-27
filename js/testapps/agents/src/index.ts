@@ -40,6 +40,10 @@ import {
 } from './file-store-agent.js';
 
 import { Agent } from 'genkit/beta';
+import {
+  authContextAgent,
+  testAuthContextAgent,
+} from './auth-context-agent.js';
 import { backgroundAgent, testBackgroundAgent } from './background-agent.js';
 import { bankingAgent, testBankingAgent } from './banking-agent.js';
 import {
@@ -48,6 +52,7 @@ import {
   readWorkspaceFile,
   testCodingAgent,
 } from './coding-agent.js';
+import { commanderAgent, testCommanderAgent } from './commander-agent.js';
 import {
   orchestratorAgent,
   testOrchestratorAgent,
@@ -87,12 +92,16 @@ void [
   orchestratorAgent,
   testOrchestratorAgent,
   testOrchestratorAgentSimple,
+  commanderAgent,
+  testCommanderAgent,
   tripPlannerAgent,
   testTripPlannerAgent,
   codingAgent,
   testCodingAgent,
   listWorkspaceFiles,
   readWorkspaceFile,
+  authContextAgent,
+  testAuthContextAgent,
 ];
 
 export * from './background-agent.js';
@@ -110,7 +119,8 @@ app.use((_req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header(
     'Access-Control-Allow-Headers',
-    'Content-Type, Accept, X-Genkit-Stream-Id'
+    // X-Request-Id: sent by the custom transport sample (custom-transport-client.ts).
+    'Content-Type, Accept, X-Genkit-Stream-Id, X-Request-Id'
   );
   res.header('Access-Control-Expose-Headers', 'X-Genkit-Stream-Id');
   res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -122,7 +132,9 @@ app.use((_req, res, next) => {
 });
 
 // Register an agent at `/api/<name>`, optionally wiring up its companion
-// `/getSnapshot` and `/abort` sub-actions.
+// `/getSnapshot`, `/waitForSnapshot`, and `/abort` sub-actions. The wait
+// route lets a `remoteAgent` client follow a background task in one request
+// (`task.wait()`) instead of polling `/getSnapshot`.
 function exposeAgent(
   name: string,
   agent: Agent,
@@ -133,6 +145,10 @@ function exposeAgent(
     app.post(
       `/api/${name}/getSnapshot`,
       expressHandler(agent.getSnapshotDataAction)
+    );
+    app.post(
+      `/api/${name}/waitForSnapshot`,
+      expressHandler(agent.waitForSnapshotAction)
     );
   }
   if (opts.abort) {
@@ -153,6 +169,7 @@ exposeAgent('backgroundAgent', backgroundAgent, {
 exposeAgent('branchingAgent', branchingAgent, { snapshot: true });
 exposeAgent('taskAgent', taskAgent);
 exposeAgent('orchestratorAgent', orchestratorAgent);
+exposeAgent('commanderAgent', commanderAgent);
 exposeAgent('tripPlannerAgent', tripPlannerAgent, { snapshot: true });
 exposeAgent('codingAgent', codingAgent, { snapshot: true });
 

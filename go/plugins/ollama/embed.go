@@ -44,7 +44,7 @@ type ollamaEmbedResponse struct {
 	Embeddings [][]float32 `json:"embeddings"`
 }
 
-func embed(ctx context.Context, serverAddress string, req *ai.EmbedRequest) (*ai.EmbedResponse, error) {
+func embed(ctx context.Context, client *http.Client, serverAddress string, headers http.Header, req *ai.EmbedRequest) (*ai.EmbedResponse, error) {
 	options, ok := req.Options.(*EmbedOptions)
 	if !ok && req.Options != nil {
 		return nil, fmt.Errorf("invalid options type: expected *EmbedOptions")
@@ -64,7 +64,12 @@ func embed(ctx context.Context, serverAddress string, req *ai.EmbedRequest) (*ai
 		return nil, fmt.Errorf("failed to marshal embed request: %w", err)
 	}
 
-	resp, err := sendEmbedRequest(ctx, serverAddress, jsonData)
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", serverAddress+"/api/embed", bytes.NewReader(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	resp, err := send(client, httpReq, headers)
 	if err != nil {
 		return nil, err
 	}
@@ -80,16 +85,6 @@ func embed(ctx context.Context, serverAddress string, req *ai.EmbedRequest) (*ai
 	}
 
 	return newEmbedResponse(ollamaResp.Embeddings), nil
-}
-
-func sendEmbedRequest(ctx context.Context, serverAddress string, jsonData []byte) (*http.Response, error) {
-	client := &http.Client{}
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", serverAddress+"/api/embed", bytes.NewBuffer(jsonData))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	return client.Do(httpReq)
 }
 
 func newOllamaEmbedRequest(model string, documents []*ai.Document) ollamaEmbedRequest {
@@ -183,7 +178,7 @@ func (o *Ollama) DefineEmbedder(g *genkit.Genkit, model string, dimensions int, 
 			}
 		}
 
-		return embed(ctx, o.ServerAddress, &normalizedReq)
+		return embed(ctx, o.client, o.ServerAddress, o.headers, &normalizedReq)
 	})
 }
 

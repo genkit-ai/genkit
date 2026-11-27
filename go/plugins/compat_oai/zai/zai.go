@@ -17,10 +17,12 @@ package zai
 
 import (
 	"context"
+	"net/http"
 	"os"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/plugins/compat_oai"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
@@ -240,6 +242,7 @@ func (z *ZAI) Init(ctx context.Context) []api.Action {
 	opts = append(opts, z.Opts...)
 
 	z.openAICompatible.Provider = provider
+	z.openAICompatible.ClassifyError = classifyError
 	z.openAICompatible.Opts = opts
 	actions := z.openAICompatible.Init(ctx)
 
@@ -288,4 +291,14 @@ func (z *ZAI) ListActions(ctx context.Context) []api.ActionDesc {
 // described by the plugin's config schema and capabilities.
 func (z *ZAI) ResolveAction(atype api.ActionType, id string) api.Action {
 	return compat_oai.ResolveChatAction[ChatConfig](&z.openAICompatible, atype, id, z.modelOptions)
+}
+
+// classifyError reads the code of a Z.ai error. Z.ai answers an unknown
+// model with 400 and its own code 1211, so that code means NOT_FOUND. See
+// https://docs.z.ai/api-reference/api-code.
+func classifyError(err *openai.Error) status.Name {
+	if err.StatusCode == http.StatusBadRequest && err.Code == "1211" {
+		return status.NotFound
+	}
+	return ""
 }

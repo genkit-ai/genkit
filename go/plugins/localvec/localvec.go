@@ -36,6 +36,7 @@ import (
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/logger"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/genkit"
 )
 
@@ -142,7 +143,7 @@ func (ds *DocStore) retrieve(ctx context.Context, req *ai.RetrieverRequest) (*ai
 	}
 	eres, err := ds.Embedder.Embed(ctx, ereq)
 	if err != nil {
-		return nil, fmt.Errorf("localvec retrieve embedding failed: %v", err)
+		return nil, fmt.Errorf("localvec retrieve embedding failed: %w", err)
 	}
 	vals := eres.Embeddings[0].Embedding
 
@@ -230,7 +231,7 @@ func Index(ctx context.Context, docs []*ai.Document, ds *DocStore) error {
 	}
 	eres, err := ds.Embedder.Embed(ctx, ereq)
 	if err != nil {
-		return fmt.Errorf("localvec index embedding failed: %v", err)
+		return fmt.Errorf("localvec index embedding failed: %w", err)
 	}
 	for i, de := range eres.Embeddings {
 		id, err := docID(docs[i])
@@ -279,7 +280,7 @@ func Index(ctx context.Context, docs []*ai.Document, ds *DocStore) error {
 func docID(doc *ai.Document) (string, error) {
 	b, err := json.Marshal(doc)
 	if err != nil {
-		return "", fmt.Errorf("localvec: error marshaling document: %v", err)
+		return "", status.Errorf(status.ErrInvalidArgument, "localvec: error marshaling document: %w", err)
 	}
 	return fmt.Sprintf("%02x", md5.Sum(b)), nil
 }

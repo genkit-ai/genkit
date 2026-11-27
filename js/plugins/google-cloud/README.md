@@ -2,6 +2,16 @@
 
 The Google Cloud plugin provides integrations with Google Cloud Platform services for Genkit.
 
+> **Building with a coding agent? Install the Genkit JS skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-js
+> ```
+>
+> It teaches your agent the current Genkit JS APIs and common gotchas.
+> Source, manual install and skills for other languages:
+> [genkit-ai/skills](https://github.com/genkit-ai/skills).
+
 ## Features
 
 *   **Google Cloud Observability**: Exports telemetry (traces, metrics) and logs to Google Cloud's operations suite.
@@ -50,7 +60,7 @@ const ai = genkit({
 });
 
 const response = await ai.generate({
-  model: googleAI.model('gemini-2.5-flash'),
+  model: googleAI.model('gemini-flash-latest'),
   prompt: 'your prompt here',
   use: [
     modelArmor({

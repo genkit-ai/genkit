@@ -140,6 +140,55 @@ describe('Model Execution Integration Tests', () => {
     assert.strictEqual(apiRequest.messages.length, 3);
   });
 
+  test('should send back empty thinking blocks from history', async () => {
+    const mockClient = createMockAnthropicClient({
+      messageResponse: createMockAnthropicMessage({
+        text: 'Hello again!',
+      }),
+    });
+
+    const plugin = anthropic({
+      apiKey: 'test-key',
+      [__testClient]: mockClient,
+    } as PluginOptions);
+
+    const modelAction = plugin.resolve(
+      'model',
+      'claude-3-5-haiku-20241022'
+    ) as ModelAction;
+
+    // Claude can return a thinking block with an empty `thinking` string and
+    // a valid signature; it must be replayable on the next turn.
+    const request: GenerateRequest = {
+      messages: [
+        { role: 'user', content: [{ text: 'Hi' }] },
+        {
+          role: 'model',
+          content: [
+            { reasoning: '', metadata: { thoughtSignature: 'sig_empty' } },
+            { text: 'Hello!' },
+          ],
+        },
+        { role: 'user', content: [{ text: 'Hello again' }] },
+      ],
+    };
+
+    await modelAction(request, {
+      streamingRequested: false,
+      sendChunk: mock.fn(),
+      abortSignal: new AbortController().signal,
+    } as Parameters<typeof modelAction>[1]);
+
+    const createStub = mockClient.messages.create as any;
+    assert.strictEqual(createStub.mock.calls.length, 1);
+    const apiRequest = createStub.mock.calls[0].arguments[0];
+    assert.deepStrictEqual(apiRequest.messages[1].content[0], {
+      type: 'thinking',
+      thinking: '',
+      signature: 'sig_empty',
+    });
+  });
+
   test('should handle system messages', async () => {
     const mockClient = createMockAnthropicClient({
       messageResponse: createMockAnthropicMessage({

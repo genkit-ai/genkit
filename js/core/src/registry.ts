@@ -58,6 +58,7 @@ const ACTION_TYPES = [
   'resource',
   'agent',
   'agent-snapshot',
+  'agent-wait',
   'agent-abort',
 ] as const;
 export type ActionType = (typeof ACTION_TYPES)[number];
@@ -436,7 +437,7 @@ export class Registry {
       throw new Error(`Plugin ${name} already registered`);
     }
     this.allPluginsInitialized = false;
-    let cached;
+    let cached: any;
     let isInitialized = false;
     this.pluginsByName[name] = {
       name: provider.name,

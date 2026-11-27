@@ -31,16 +31,11 @@ import base64
 import botocore.session
 import pytest
 from botocore.validate import ParamValidator
-from genkit_amazon_bedrock.config import BedrockConfig
-from genkit_amazon_bedrock.converters import build_converse_request, cache_point_part
+from genkit_amazon_bedrock import BedrockConfig, cache_point_part
+from genkit_amazon_bedrock._converters import build_converse_request
 
-from genkit import (
-    Message,
-    ModelRequest,
-    Part,
-    Role,
-    ToolDefinition,
-)
+from genkit import Message, Part, Role
+from genkit.model import ModelRequest, ToolDefinition
 
 _SERVICE_MODEL = botocore.session.get_session().get_service_model('bedrock-runtime')
 CONVERSE_INPUT_SHAPES = {
@@ -153,9 +148,7 @@ def test_reasoning_replay_passes_validation() -> None:
             Message(
                 role=Role.MODEL,
                 content=[
-                    Part.from_reasoning(
-                        'step one', metadata={'bedrockReasoningSignature': 'sig-abc', 'signature': 'sig-abc'}
-                    ),
+                    Part.from_reasoning('step one', metadata={'thoughtSignature': 'sig-abc'}),
                     Part.from_text('done'),
                 ],
             ),

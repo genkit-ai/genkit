@@ -3,6 +3,16 @@
 A Genkit plugin that brings [A2UI](https://a2ui.org/) ("Agent to UI"), a
 transport-agnostic, JSON-based streaming UI protocol, to Genkit agents.
 
+> **Building with a coding agent? Install the Genkit JS skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-js
+> ```
+>
+> It teaches your agent the current Genkit JS APIs and common gotchas.
+> Source, manual install and skills for other languages:
+> [genkit-ai/skills](https://github.com/genkit-ai/skills).
+
 An A2UI-enabled agent can stream more than prose. It streams rich, interactive UI
 **surfaces** (cards, lists, forms, buttons) that a client renders incrementally
 as the model responds. The whole server-side integration is a single model
@@ -283,9 +293,10 @@ emitted a2ui parts.
 ### One representation
 
 A2UI rides on its own part channel: a Genkit `data` part carrying the mime type
-`application/a2ui+json` whose `data` is an object `{ envelopes }` wrapping an
-array of A2UI envelope messages. This maps 1:1 onto the A2A binding of the A2UI
-spec, so an A2A or MCP binding can drop in later for free.
+`application/a2ui+json` whose `data` is the spec's `{ messages }` payload
+wrapper around an array of A2UI envelope messages. This maps 1:1 onto the A2A
+binding of the A2UI spec, so an A2A or MCP binding can drop in later for free.
+Parts written by earlier versions use `{ envelopes }`; they are still read.
 
 - A **mixed** turn is a message whose content is `[textPart, a2uiPart, …]`.
 - A **pure-surface** turn is the special case with no text parts.

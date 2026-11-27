@@ -30,29 +30,16 @@ import re
 from collections.abc import Iterator
 
 import pytest
-from genkit_amazon_bedrock.config import BedrockConfig
-from genkit_amazon_bedrock.converters import (
-    REASONING_SIGNATURE_METADATA_KEY,
-    cache_point_part,
-)
-from genkit_amazon_bedrock.embedders import BedrockEmbedder
-from genkit_amazon_bedrock.image import BedrockImageModel
-from genkit_amazon_bedrock.models import BedrockModel
-from genkit_amazon_bedrock.rerank import BedrockReranker, BedrockRerankOptions, RerankerRequest
-from genkit_amazon_bedrock.transport import BedrockTransport
+from genkit_amazon_bedrock import BedrockConfig, cache_point_part
+from genkit_amazon_bedrock._converters import REASONING_SIGNATURE_METADATA_KEY
+from genkit_amazon_bedrock._embedders import BedrockEmbedder
+from genkit_amazon_bedrock._image import BedrockImageModel
+from genkit_amazon_bedrock._models import BedrockModel
+from genkit_amazon_bedrock._transport import BedrockTransport
 
-from genkit import (
-    Document,
-    FinishReason,
-    Message,
-    ModelRequest,
-    ModelResponse,
-    Part,
-    Role,
-    ToolDefinition,
-)
+from genkit import Document, FinishReason, GenkitError, Message, ModelResponse, Part, Role
 from genkit.embedder import EmbedRequest
-from genkit.plugin_api import ActionRunContext, GenkitError
+from genkit.model import ModelContext, ModelRequest, ToolDefinition
 
 pytestmark = [
     pytest.mark.asyncio,
@@ -76,9 +63,6 @@ NOVA_EMBED = 'amazon.nova-2-multimodal-embeddings-v1:0'
 NOVA_CANVAS = 'amazon.nova-canvas-v1:0'
 SD3 = 'stability.sd3-5-large-v1:0'
 
-COHERE_RERANK = 'cohere.rerank-v3-5:0'
-AMAZON_RERANK = 'amazon.rerank-v1:0'
-AMAZON_RERANK_REGIONS = ('us-west-2', 'eu-central-1', 'ap-northeast-1', 'ca-central-1')
 
 # Smallest PNG Titan accepts.
 PNG_1X1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQAABjE+ibYAAAAASUVORK5CYII='
@@ -247,9 +231,9 @@ def cacheable_prefix() -> str:
     return 'Answer only from this handbook.\n\n' + '\n\n'.join(articles)
 
 
-def streaming_ctx() -> tuple[ActionRunContext, list]:
+def streaming_ctx() -> tuple[ModelContext, list]:
     chunks: list = []
-    return ActionRunContext(streaming_callback=chunks.append), chunks
+    return ModelContext(streaming_callback=chunks.append), chunks
 
 
 def undocumented_weather_tool() -> ToolDefinition:
@@ -367,7 +351,7 @@ async def test_claude_reasoning_signature_round_trip() -> None:
     # requests reject custom temperature, so none is set.
     config = BedrockConfig(
         max_output_tokens=4096,
-        additional_model_request_fields={'thinking': {'type': 'enabled', 'budget_tokens': 1024}},
+        extra={'thinking': {'type': 'enabled', 'budget_tokens': 1024}},
     )
     request = text_request('What is 17 * 23? Think it through.', config=config)
     response = await model.generate(request)
@@ -394,7 +378,7 @@ async def test_claude_reasoning_signature_round_trip() -> None:
 async def test_claude_thinking_stream() -> None:
     config = BedrockConfig(
         max_output_tokens=4096,
-        additional_model_request_fields={'thinking': {'type': 'enabled', 'budget_tokens': 1024}},
+        extra={'thinking': {'type': 'enabled', 'budget_tokens': 1024}},
     )
     ctx, chunks = streaming_ctx()
     response = await make_model(CLAUDE).generate(text_request('What is 17 * 23? Think it through.', config=config), ctx)
@@ -553,52 +537,6 @@ async def test_embed_cohere_rejects_an_image() -> None:
     # is refused locally rather than sent and rejected as a bad request.
     with pytest.raises(GenkitError, match='text-only'):
         await embed(COHERE_EMBED, [image_doc()])
-
-
-async def test_rerank_cohere() -> None:
-    reranker = BedrockReranker(model_id=COHERE_RERANK, transport=make_transport())
-    response = await reranker.rerank(
-        RerankerRequest(
-            query=text_doc('What is the capital of France?'),
-            documents=[
-                text_doc('The capital of France is Paris.'),
-                text_doc('The tallest mountain is Everest.'),
-                text_doc('Bananas are yellow.'),
-            ],
-            options=BedrockRerankOptions(top_n=2),
-        )
-    )
-
-    assert len(response.documents) == 2
-    top = [part for part in response.documents[0].content if part.text is not None]
-    assert top and 'Paris' in (top[0].text or '')
-    assert response.documents[0].metadata.score >= response.documents[1].metadata.score
-
-
-@pytest.mark.skipif(
-    os.environ.get('AWS_REGION') not in AMAZON_RERANK_REGIONS,
-    reason='amazon.rerank-v1:0 is offered in us-west-2, eu-central-1, ap-northeast-1 and ca-central-1 only',
-)
-async def test_rerank_amazon() -> None:
-    # The Amazon family takes the same body minus api_version, which its schema
-    # rejects outright, so this is the only wire check of that difference.
-    reranker = BedrockReranker(model_id=AMAZON_RERANK, transport=make_transport())
-    response = await reranker.rerank(
-        RerankerRequest(
-            query=text_doc('What is the capital of France?'),
-            documents=[
-                text_doc('The capital of France is Paris.'),
-                text_doc('The tallest mountain is Everest.'),
-                text_doc('Bananas are yellow.'),
-            ],
-            options=BedrockRerankOptions(top_n=2),
-        )
-    )
-
-    assert len(response.documents) == 2
-    top = [part for part in response.documents[0].content if part.text is not None]
-    assert top and 'Paris' in (top[0].text or '')
-    assert response.documents[0].metadata.score >= response.documents[1].metadata.score
 
 
 @pytest.mark.skipif(

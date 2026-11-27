@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/firebase/genkit/go/internal/registry"
+	"github.com/firebase/genkit/go/internal/tracingtest"
 )
 
 var testEvalFunc = func(ctx context.Context, req *EvaluatorCallbackRequest) (*EvaluatorCallbackResponse, error) {
@@ -111,6 +112,28 @@ func TestSimpleEvaluator(t *testing.T) {
 	}
 	if got, want := (*resp)[0].Evaluation[0].Details["options"], "test-options"; got != want {
 		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+// TestEvaluatorResultTraceIDs checks that each result points at its test-case
+// span, the one the Dev UI stored, rather than an empty OTel span context.
+func TestEvaluatorResultTraceIDs(t *testing.T) {
+	spans := tracingtest.Capture(t)
+	r := registry.New()
+	evaluator := defineEvaluator(r, "test/testEvaluator", &evalOpts, testEvalFunc)
+
+	req := EvaluatorRequest{Dataset: []*Example{{TestCaseId: "case1", Input: "hello"}}}
+	resp, err := evaluator.Evaluate(context.Background(), &req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := spans.ByName("TestCase case1")
+	if len(got) != 1 {
+		t.Fatalf("got %d test-case spans, want 1", len(got))
+	}
+	res := (*resp)[0]
+	if res.TraceID != got[0].TraceID || res.SpanID != got[0].SpanID {
+		t.Errorf("result ids = %s/%s, want span %s/%s", res.TraceID, res.SpanID, got[0].TraceID, got[0].SpanID)
 	}
 }
 

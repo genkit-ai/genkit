@@ -30,10 +30,10 @@ Example:
 
 
     # Enable Google Cloud Trace and Monitoring export
-    enable_google_cloud_telemetry(project_id='my-project')
+    enable_google_cloud_telemetry(project='my-project')
 
     # All subsequent Genkit actions automatically export telemetry
-    ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
+    ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
     await ai.generate(prompt='Hello, world!')
     # => Traces exported asynchronously to Cloud Trace (latency, tokens, status)
     ```
@@ -47,20 +47,8 @@ See Also:
     - Cloud Monitoring: https://cloud.google.com/monitoring
 """
 
-from .telemetry import add_gcp_telemetry, enable_google_cloud_telemetry
-
-
-def package_name() -> str:
-    """Get the package name for the Google Cloud plugin.
-
-    Returns:
-        The fully qualified package name as a string.
-    """
-    return 'genkit_google_cloud'
-
+from genkit_google_cloud._telemetry._tracing import enable_google_cloud_telemetry
 
 __all__ = [
-    'add_gcp_telemetry',
     'enable_google_cloud_telemetry',
-    'package_name',
 ]

@@ -5,16 +5,19 @@
 
 """define_model accepts ModelRequest / ModelRequest[Cfg] and rejects the rest."""
 
-from typing import Annotated, Any, Optional
+import sys
+import typing
+from typing import Annotated, Any, Optional, cast
 
 import pytest
+import typing_extensions
 from pydantic import BaseModel
 
 from genkit import Genkit, Part
-from genkit._core._action import ActionRunContext
 from genkit._core._error import GenkitError
 from genkit._core._model import Message, ModelRequest, ModelResponse
 from genkit._core._typing import Role
+from genkit.model import ModelContext
 
 
 class Cfg(BaseModel):
@@ -37,7 +40,7 @@ def ai() -> Genkit:
 def test_typed_annotation_allowed(ai: Genkit) -> None:
     """define_model(fn with ModelRequest[Cfg]) registers."""
 
-    async def fn(request: ModelRequest[Cfg], ctx: ActionRunContext) -> ModelResponse:
+    async def fn(request: ModelRequest[Cfg], ctx: ModelContext) -> ModelResponse:
         return OK
 
     ai.define_model(name='typed', fn=fn)
@@ -46,7 +49,7 @@ def test_typed_annotation_allowed(ai: Genkit) -> None:
 def test_bare_annotation_allowed(ai: Genkit) -> None:
     """define_model(fn with ModelRequest) registers. Config stays a dict."""
 
-    async def fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def fn(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         return OK
 
     ai.define_model(name='bare', fn=fn)
@@ -55,7 +58,7 @@ def test_bare_annotation_allowed(ai: Genkit) -> None:
 def test_unannotated_allowed(ai: Genkit) -> None:
     """define_model(fn with no request annotation) still registers."""
 
-    async def fn(request, ctx: ActionRunContext) -> ModelResponse:  # noqa: ANN001
+    async def fn(request, ctx: ModelContext) -> ModelResponse:  # noqa: ANN001
         return OK
 
     ai.define_model(name='unannotated', fn=fn)
@@ -64,32 +67,100 @@ def test_unannotated_allowed(ai: Genkit) -> None:
 def test_annotated_wrapper_unwrapped_and_allowed(ai: Genkit) -> None:
     """Annotated[ModelRequest[Cfg], ...] is treated as ModelRequest[Cfg]."""
 
-    async def fn(request: Annotated[ModelRequest[Cfg], 'doc'], ctx: ActionRunContext) -> ModelResponse:
+    async def fn(request: Annotated[ModelRequest[Cfg], 'doc'], ctx: ModelContext) -> ModelResponse:
         return OK
 
     ai.define_model(name='annotated', fn=fn)
 
 
-def test_dict_and_any_parametrizations_allowed_unblessed(ai: Genkit) -> None:
-    """ModelRequest[dict] and ModelRequest[Any] still register; they do not validate a schema."""
+def test_any_parametrization_allowed(ai: Genkit) -> None:
+    """ModelRequest[Any] registers like bare ModelRequest; no config class to check."""
 
-    async def fn_d(request: ModelRequest[dict], ctx: ActionRunContext) -> ModelResponse:
+    async def fn(request: ModelRequest[Any], ctx: ModelContext) -> ModelResponse:
         return OK
 
-    async def fn_a(request: ModelRequest[Any], ctx: ActionRunContext) -> ModelResponse:
-        return OK
-
-    ai.define_model(name='param_dict', fn=fn_d)
-    ai.define_model(name='param_any', fn=fn_a)
+    ai.define_model(name='param_any', fn=fn)
 
 
 # --- rejected antipatterns ----------------------------------------------------
 
 
+class StdlibTypedDictConfig(typing.TypedDict, total=False):
+    """Pydantic itself rejects this before Python 3.12; ours fires first."""
+
+    temperature: float
+
+
+class ExtensionsTypedDictConfig(typing_extensions.TypedDict, total=False):
+    temperature: float
+
+
+@pytest.mark.parametrize(
+    'config_type',
+    [StdlibTypedDictConfig, ExtensionsTypedDictConfig, dict, dict[str, Any], Cfg | None],
+    ids=['typing.TypedDict', 'typing_extensions.TypedDict', 'dict', 'dict[str, Any]', 'union'],
+)
+def test_non_model_config_type_rejected(config_type: object) -> None:
+    """ModelRequest[X] raises where the annotation is evaluated unless X is a pydantic model."""
+    with pytest.raises(GenkitError, match='config type must be a pydantic BaseModel subclass') as exc:
+        cast(Any, ModelRequest)[config_type]
+
+    assert exc.value.status == 'INVALID_ARGUMENT'
+
+
+# A user module with a module-level TypedDict config. Under the future import
+# (and by default from Python 3.14) the annotation is read at define_model.
+_TYPED_DICT_CONFIG_MODULE = """
+from __future__ import annotations
+
+from typing import TypedDict
+
+
+class RestaurantConfig(TypedDict, total=False):
+    temperature: float
+
+
+async def menu_model(request: ModelRequest[RestaurantConfig], ctx: ModelContext) -> ModelResponse:
+    return OK
+"""
+
+
+@pytest.mark.parametrize(
+    'postponed',
+    [
+        True,
+        pytest.param(
+            False,
+            marks=pytest.mark.skipif(sys.version_info < (3, 14), reason='annotations are evaluated lazily from 3.14'),
+        ),
+    ],
+    ids=['future_import', 'lazy_3_14'],
+)
+def test_typed_dict_config_rejected_through_define_model(ai: Genkit, postponed: bool) -> None:
+    """define_model raises the config-type error for ModelRequest[RestaurantConfig] when annotations are deferred."""
+    source = _TYPED_DICT_CONFIG_MODULE
+    if not postponed:
+        source = source.replace('from __future__ import annotations\n', '')
+    module_globals: dict[str, Any] = {
+        'ModelRequest': ModelRequest,
+        'ModelResponse': ModelResponse,
+        'ModelContext': ModelContext,
+        'OK': OK,
+    }
+    exec(source, module_globals)  # noqa: S102 - builds a user module
+
+    with pytest.raises(
+        GenkitError, match=r'ModelRequest\[RestaurantConfig\]: the config type must be a pydantic'
+    ) as exc:
+        ai.define_model(name='menu', fn=module_globals['menu_model'])
+
+    assert exc.value.status == 'INVALID_ARGUMENT'
+
+
 def test_union_with_none_rejected(ai: Genkit) -> None:
     """ModelRequest[Cfg] | None is rejected — generate never passes None."""
 
-    async def fn(request: ModelRequest[Cfg] | None, ctx: ActionRunContext) -> ModelResponse:
+    async def fn(request: ModelRequest[Cfg] | None, ctx: ModelContext) -> ModelResponse:
         return OK
 
     with pytest.raises(GenkitError, match='must be annotated as ModelRequest'):
@@ -99,7 +170,7 @@ def test_union_with_none_rejected(ai: Genkit) -> None:
 def test_optional_spelling_rejected(ai: Genkit) -> None:
     """Optional[ModelRequest[Cfg]] is the same reject as ModelRequest[Cfg] | None."""
 
-    async def fn(request: Optional[ModelRequest[Cfg]], ctx: ActionRunContext) -> ModelResponse:  # noqa: UP045
+    async def fn(request: Optional[ModelRequest[Cfg]], ctx: ModelContext) -> ModelResponse:  # noqa: UP045
         return OK
 
     with pytest.raises(GenkitError, match='must be annotated as ModelRequest'):
@@ -109,7 +180,7 @@ def test_optional_spelling_rejected(ai: Genkit) -> None:
 def test_dict_annotation_rejected(ai: Genkit) -> None:
     """A handler annotated dict is rejected. The request is a ModelRequest."""
 
-    async def fn(request: dict, ctx: ActionRunContext) -> ModelResponse:
+    async def fn(request: dict, ctx: ModelContext) -> ModelResponse:
         return OK
 
     with pytest.raises(GenkitError, match='must be annotated as ModelRequest'):
@@ -122,7 +193,7 @@ def test_arbitrary_class_rejected(ai: Genkit) -> None:
     class NotARequest(BaseModel):
         pass
 
-    async def fn(request: NotARequest, ctx: ActionRunContext) -> ModelResponse:
+    async def fn(request: NotARequest, ctx: ModelContext) -> ModelResponse:
         return OK
 
     with pytest.raises(GenkitError, match='must be annotated as ModelRequest'):

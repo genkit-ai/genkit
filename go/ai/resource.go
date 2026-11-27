@@ -85,8 +85,8 @@ func extractVariables(templateStr, uri string) (map[string]string, error) {
 
 // ResourceInput represents the input to a resource function.
 type ResourceInput struct {
-	URI       string            `json:"uri"`       // The resource URI
-	Variables map[string]string `json:"variables"` // Extracted variables from URI template matching
+	URI       string            `json:"uri"`                 // The resource URI
+	Variables map[string]string `json:"variables,omitempty"` // Extracted variables from URI template matching
 }
 
 // ResourceOutput represents the output from a resource function.

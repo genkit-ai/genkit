@@ -18,17 +18,23 @@ package genkit
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/x/streaming"
+	"github.com/firebase/genkit/go/internal/wire"
 )
 
 func FakeContextProvider(ctx context.Context, req core.RequestData) (core.ActionContext, error) {
@@ -124,9 +130,15 @@ func TestHandler(t *testing.T) {
 			t.Errorf("want status code %d for INVALID_ARGUMENT, got %d", http.StatusBadRequest, resp.StatusCode)
 		}
 
-		// The generic label for the status, not the flow's own text.
-		if got, want := strings.TrimSpace(string(body)), "invalid argument"; got != want {
-			t.Errorf("body = %q, want the generic %q", got, want)
+		// A JSON body naming the status, the format JS servers send and the
+		// remote agent client reads: an HTTP 400 alone does not say which
+		// status it was. The message is the generic label for the status,
+		// not the flow's own text.
+		if ct := resp.Header.Get("Content-Type"); ct != "application/json" {
+			t.Errorf("Content-Type = %q, want application/json", ct)
+		}
+		if got, want := decodeErrorBody(t, body), (wire.Error{Status: status.InvalidArgument, Message: "invalid argument"}); got != want {
+			t.Errorf("body = %+v, want %+v", got, want)
 		}
 	})
 
@@ -167,8 +179,8 @@ func TestHandler(t *testing.T) {
 			t.Errorf("want status code %d for PERMISSION_DENIED, got %d", http.StatusForbidden, resp.StatusCode)
 		}
 
-		if got, want := strings.TrimSpace(string(body)), "permission denied"; got != want {
-			t.Errorf("body = %q, want the generic %q", got, want)
+		if got, want := decodeErrorBody(t, body).Message, "permission denied"; got != want {
+			t.Errorf("message = %q, want the generic %q", got, want)
 		}
 		if strings.Contains(string(body), "acme-prod") {
 			t.Errorf("internal detail leaked to client: %q", string(body))
@@ -439,6 +451,120 @@ data: {"result":"hello-end"}
 			t.Errorf("want error body:\n%q\n\nGot:\n%q", expected, string(body))
 		}
 	})
+}
+
+// recordingHandler is a slog.Handler that keeps every record it receives.
+type recordingHandler struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (h *recordingHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *recordingHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.records = append(h.records, r.Clone())
+	return nil
+}
+
+func (h *recordingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *recordingHandler) WithGroup(string) slog.Handler      { return h }
+
+// messages returns the messages of the records logged at level.
+func (h *recordingHandler) messages(level slog.Level) []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var msgs []string
+	for _, r := range h.records {
+		if r.Level == level {
+			msgs = append(msgs, r.Message)
+		}
+	}
+	return msgs
+}
+
+func TestHandlerClientDisconnectLogging(t *testing.T) {
+	g := Init(context.Background())
+
+	// Each flow streams one chunk (when streaming), signals it is in flight,
+	// and then either waits for the request to end or fails on its own with
+	// context.Canceled while the request is still live.
+	defineFlow := func(name string, selfCancel bool, started chan<- struct{}) api.Action {
+		return DefineStreamingFlow(g, name,
+			func(ctx context.Context, _ string, cb func(context.Context, string) error) (string, error) {
+				if cb != nil {
+					if err := cb(ctx, "chunk"); err != nil {
+						return "", err
+					}
+				}
+				close(started)
+				if selfCancel {
+					return "", context.Canceled
+				}
+				<-ctx.Done()
+				return "", ctx.Err()
+			})
+	}
+
+	tests := []struct {
+		name       string
+		stream     bool
+		selfCancel bool
+		wantError  bool
+	}{
+		{name: "streaming client disconnects", stream: true},
+		{name: "non-streaming client disconnects"},
+		{name: "streaming flow cancels itself", stream: true, selfCancel: true, wantError: true},
+	}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := &recordingHandler{}
+			prev := slog.Default()
+			slog.SetDefault(slog.New(rec))
+			t.Cleanup(func() { slog.SetDefault(prev) })
+
+			started := make(chan struct{})
+			h := Handler(defineFlow(fmt.Sprintf("disconnect%d", i), tt.selfCancel, started))
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			req := httptest.NewRequestWithContext(ctx, "POST", "/", strings.NewReader(`{"data":"x"}`))
+			req.Header.Set("Content-Type", "application/json")
+			if tt.stream {
+				req.Header.Set("Accept", "text/event-stream")
+			}
+
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				h(httptest.NewRecorder(), req)
+			}()
+			<-started
+			if !tt.selfCancel {
+				cancel()
+			}
+			<-done
+
+			errs := rec.messages(slog.LevelError)
+			if tt.wantError {
+				if len(errs) == 0 {
+					t.Fatal("no ERROR record for a cancellation the flow raised itself")
+				}
+				return
+			}
+			if len(errs) > 0 {
+				t.Errorf("ERROR records for a client disconnect: %q", errs)
+			}
+			debug := rec.messages(slog.LevelDebug)
+			if n := len(slices.DeleteFunc(slices.Clone(debug), func(m string) bool { return m != "client disconnected" })); n != 1 {
+				t.Errorf("DEBUG records = %q, want exactly one %q", debug, "client disconnected")
+			}
+			if slices.Contains(debug, "request finished") {
+				t.Errorf("DEBUG records = %q, want no %q for a disconnect", debug, "request finished")
+			}
+		})
+	}
 }
 
 func TestDurableStreamingHandlerFunc(t *testing.T) {
@@ -717,4 +843,14 @@ func TestHandlerBidiInitEnvelope(t *testing.T) {
 			t.Errorf("Content-Type = %q; response must not commit to SSE before rejecting init", ct)
 		}
 	})
+}
+
+// decodeErrorBody decodes a non-streaming error response body.
+func decodeErrorBody(t *testing.T, body []byte) wire.Error {
+	t.Helper()
+	var e wire.Error
+	if err := json.Unmarshal(body, &e); err != nil {
+		t.Fatalf("error body %q is not a JSON wire error: %v", body, err)
+	}
+	return e
 }

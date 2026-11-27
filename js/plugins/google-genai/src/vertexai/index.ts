@@ -20,7 +20,12 @@
  * @module /
  */
 
-import { EmbedderReference, ModelReference, z } from 'genkit';
+import {
+  EmbedderReference,
+  ModelReference,
+  z,
+  type ActionMetadata,
+} from 'genkit';
 import {
   genkitPluginV2,
   type GenkitPluginV2,
@@ -29,6 +34,7 @@ import {
 import { type ActionType } from 'genkit/registry';
 import { listModels } from './client.js';
 
+import * as deepResearch from './deep-research.js';
 import * as embedder from './embedder.js';
 import * as gemini from './gemini.js';
 import * as imagen from './imagen.js';
@@ -38,8 +44,14 @@ import * as veo from './veo.js';
 import { VertexPluginOptions } from './types.js';
 import { getDerivedOptions } from './utils.js';
 
+export { type DeepResearchConfig } from './deep-research.js';
 export { type EmbeddingConfig } from './embedder.js';
-export { type GeminiConfig } from './gemini.js';
+export {
+  type GeminiConfig,
+  type GeminiImageConfig,
+  type GeminiTtsConfig,
+  type GeminiVideoConfig,
+} from './gemini.js';
 export { type ImagenConfig } from './imagen.js';
 export { type LyriaConfig } from './lyria.js';
 export { type VertexPluginOptions } from './types.js';
@@ -53,6 +65,7 @@ async function initializer(pluginOptions?: VertexPluginOptions) {
     ...lyria.listKnownModels(clientOptions, pluginOptions),
     ...gemini.listKnownModels(clientOptions, pluginOptions),
     ...embedder.listKnownModels(clientOptions, pluginOptions),
+    ...deepResearch.listKnownModels(clientOptions, pluginOptions),
   ];
 }
 
@@ -68,7 +81,11 @@ async function resolver(
         return lyria.defineModel(actionName, clientOptions, pluginOptions);
       } else if (imagen.isImagenModelName(actionName)) {
         return imagen.defineModel(actionName, clientOptions, pluginOptions);
-      } else if (veo.isVeoModelName(actionName)) {
+      } else if (
+        veo.isVeoModelName(actionName) ||
+        deepResearch.isDeepResearchModelName(actionName)
+      ) {
+        // These are background models. Do not define them here.
         return undefined;
       } else {
         return gemini.defineModel(actionName, clientOptions, pluginOptions);
@@ -77,6 +94,12 @@ async function resolver(
     case 'background-model':
       if (veo.isVeoModelName(actionName)) {
         return veo.defineModel(actionName, clientOptions, pluginOptions);
+      } else if (deepResearch.isDeepResearchModelName(actionName)) {
+        return deepResearch.defineModel(
+          actionName,
+          clientOptions,
+          pluginOptions
+        );
       }
       break;
     case 'embedder':
@@ -95,6 +118,7 @@ async function listActions(options?: VertexPluginOptions) {
       ...imagen.listActions(models),
       ...lyria.listActions(models),
       ...veo.listActions(models),
+      ...deepResearch.listActions(models),
       // We don't list embedders here
     ];
   } catch (e: unknown) {
@@ -107,7 +131,7 @@ async function listActions(options?: VertexPluginOptions) {
  * Add Google Cloud Vertex AI to Genkit. Includes Gemini and Imagen models and text embedder.
  */
 function vertexAIPlugin(options?: VertexPluginOptions): GenkitPluginV2 {
-  let listActionsCache;
+  let listActionsCache: ActionMetadata[] | undefined;
   return genkitPluginV2({
     name: 'vertexai',
     init: async () => await initializer(options),
@@ -124,9 +148,17 @@ function vertexAIPlugin(options?: VertexPluginOptions): GenkitPluginV2 {
 export type VertexAIPlugin = {
   (pluginOptions?: VertexPluginOptions): GenkitPluginV2;
   model(
+    name: gemini.KnownTtsModels | (gemini.TTSModelName & {}),
+    config?: gemini.GeminiTtsConfig
+  ): ModelReference<gemini.GeminiTtsConfigSchemaType>;
+  model(
     name: gemini.KnownImageModels | (gemini.ImageModelName & {}),
     config?: gemini.GeminiImageConfig
   ): ModelReference<gemini.GeminiImageConfigSchemaType>;
+  model(
+    name: gemini.KnownVideoModels | (gemini.VideoModelName & {}),
+    config?: gemini.GeminiVideoConfig
+  ): ModelReference<gemini.GeminiVideoConfigSchemaType>;
   model(
     name: gemini.KnownGeminiModels | (gemini.GeminiModelName & {}),
     config?: gemini.GeminiConfig
@@ -143,6 +175,10 @@ export type VertexAIPlugin = {
     name: veo.KnownModels | (veo.VeoModelName & {}),
     config: veo.VeoConfig
   ): ModelReference<veo.VeoConfigSchemaType>;
+  model(
+    name: deepResearch.KnownModels | (deepResearch.DeepResearchModelName & {}),
+    config?: deepResearch.DeepResearchConfig
+  ): ModelReference<deepResearch.DeepResearchConfigSchemaType>;
   model(name: string, config?: any): ModelReference<z.ZodTypeAny>;
 
   embedder(
@@ -170,7 +206,10 @@ export const vertexAI = vertexAIPlugin as VertexAIPlugin;
   if (veo.isVeoModelName(name)) {
     return veo.model(name, config);
   }
-  // gemini, image and unknown model families
+  if (deepResearch.isDeepResearchModelName(name)) {
+    return deepResearch.model(name, config);
+  }
+  // gemini, image, TTS and unknown model families
   return gemini.model(name, config);
 };
 vertexAI.embedder = (

@@ -17,21 +17,20 @@
 import * as clc from 'colorette';
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
-import { getDatasetStore, getEvalStore } from '.';
-import type { BaseRuntimeManager } from '../manager/manager';
-import {
+import type { BaseRuntimeManager } from '../manager/manager.js';
+import type {
+  Action,
+  CandidateData,
+  Dataset,
+  EvalInput,
+  EvalKeyAugments,
+  EvalRun,
+  EvalRunKey,
   GenerateActionOptions,
   GenerateResponseData,
-  type Action,
-  type CandidateData,
-  type Dataset,
-  type EvalInput,
-  type EvalKeyAugments,
-  type EvalRun,
-  type EvalRunKey,
-  type RunNewEvaluationRequest,
-  type SpanData,
-} from '../types';
+  RunNewEvaluationRequest,
+  SpanData,
+} from '../types/index.js';
 import {
   evaluatorName,
   generateTestCaseId,
@@ -41,12 +40,13 @@ import {
   isEvaluator,
   logger,
   stackTraceSpans,
-} from '../utils';
+} from '../utils/index.js';
+import { getDatasetStore, getEvalStore } from './index.js';
 import {
   enrichResultsWithScoring,
   extractMetricSummaries,
   extractMetricsMetadata,
-} from './parser';
+} from './parser.js';
 
 interface InferenceRunState {
   testCaseId: string;
@@ -89,7 +89,7 @@ export async function runNewEvaluation(
   let metadata = {};
 
   if (datasetId) {
-    const datasetStore = await getDatasetStore();
+    const datasetStore = getDatasetStore();
     logger.debug(`Fetching dataset ${datasetId}...`);
     const dataset = await datasetStore.getDataset(datasetId);
     if (dataset.length === 0) {
@@ -243,7 +243,7 @@ export async function getMatchingEvaluatorActions(
     evaluators.includes(action.key)
   );
   if (filteredEvaluatorActions.length === 0) {
-    if (allEvaluatorActions.length == 0) {
+    if (allEvaluatorActions.length === 0) {
       throw new Error('No evaluators installed');
     }
   }
@@ -408,7 +408,7 @@ async function runPromptAction(params: {
     });
 
     renderedPrompt = {
-      traceId: runActionResponse.telemetry?.traceId!,
+      traceId: runActionResponse.telemetry?.traceId ?? '',
       result: runActionResponse.result as GenerateActionOptions,
     };
   } catch (e: any) {

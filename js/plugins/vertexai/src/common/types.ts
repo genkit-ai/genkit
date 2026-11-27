@@ -33,7 +33,6 @@ export interface CommonPluginOptions {
 /** Combined plugin options, extending common options with subplugin-specific options */
 export interface PluginOptions extends CommonPluginOptions {
   models?: (
-    | ModelReference</** @ignore */ typeof GeminiConfigSchema>
-    | string
+    ModelReference</** @ignore */ typeof GeminiConfigSchema> | string
   )[];
 }

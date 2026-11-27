@@ -18,6 +18,7 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -29,6 +30,8 @@ import (
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/core/status"
+	"github.com/firebase/genkit/go/internal/base"
+	"github.com/firebase/genkit/go/internal/tracingtest"
 )
 
 // --- counter: a config whose BuildMiddleware tracks hook invocations ---
@@ -451,6 +454,45 @@ func TestMiddlewareFunc(t *testing.T) {
 	}
 }
 
+func TestMiddlewareFuncSerializedRequest(t *testing.T) {
+	r := newTestRegistry(t)
+	m := defineFakeModel(t, r, fakeModelConfig{})
+
+	opts := &GenerateActionOptions{
+		Model:    m.Name(),
+		Messages: []*Message{NewUserTextMessage("hi")},
+		Use: []*MiddlewareRef{{
+			Name:   "inline",
+			Config: MiddlewareFunc(func(ctx context.Context) (*Hooks, error) { return &Hooks{}, nil }),
+		}},
+	}
+	// Trace spans record the request as JSON; a closure must not fail that.
+	b, err := json.Marshal(opts)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+
+	// Replayed from that JSON, the ref has no closure behind it, and a
+	// middleware registered under the same name must not stand in for it.
+	NewMiddleware("impostor", inlineNamedConfig{}).Register(r)
+	var replayed GenerateActionOptions
+	if err := json.Unmarshal(b, &replayed); err != nil {
+		t.Fatalf("unmarshal request: %v", err)
+	}
+	_, err = GenerateWithRequest(testCtx, r, &replayed, nil, nil)
+	if got := status.Of(err); got != status.FailedPrecondition {
+		t.Errorf("status = %v, want FAILED_PRECONDITION (err: %v)", got, err)
+	}
+}
+
+// inlineNamedConfig is registered middleware that claims the name reserved
+// for [MiddlewareFunc].
+type inlineNamedConfig struct{}
+
+func (inlineNamedConfig) Name() string { return "inline" }
+
+func (inlineNamedConfig) New(context.Context) (*Hooks, error) { return &Hooks{}, nil }
+
 func TestMiddlewareFuncCoexist(t *testing.T) {
 	// Two MiddlewareFunc adapter instances should be able to coexist in a
 	// single WithUse call.
@@ -745,7 +787,7 @@ func TestWrapToolInterrupts(t *testing.T) {
 	interrupter := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
 		return &Hooks{
 			WrapTool: func(ctx context.Context, p *ToolParams, next ToolNext) (*MultipartToolResponse, error) {
-				return nil, NewToolInterruptError(map[string]any{"reason": "blocked"})
+				return nil, &base.ToolInterruptError{Data: map[string]any{"reason": "blocked"}}
 			},
 		}, nil
 	})
@@ -803,7 +845,7 @@ func TestWrapToolShortCircuitEmitsToolSpan(t *testing.T) {
 		{
 			name: "interrupt",
 			hook: func(ctx context.Context, p *ToolParams, next ToolNext) (*MultipartToolResponse, error) {
-				return nil, NewToolInterruptError(map[string]any{"reason": "blocked"})
+				return nil, &base.ToolInterruptError{Data: map[string]any{"reason": "blocked"}}
 			},
 			wantState: "error",
 		},
@@ -826,7 +868,7 @@ func TestWrapToolShortCircuitEmitsToolSpan(t *testing.T) {
 			})
 			var toolCalls int32
 			tool := defineCountingTool(t, r, "myTool", &toolCalls)
-			spans := collectSpans(t)
+			spans := tracingtest.Capture(t)
 
 			shortCircuit := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
 				return &Hooks{WrapTool: tt.hook}, nil
@@ -850,7 +892,7 @@ func TestWrapToolShortCircuitEmitsToolSpan(t *testing.T) {
 				t.Errorf("tool ran %d times, want 0 (hook short-circuited)", got)
 			}
 
-			toolSpans := spans.allByName(tool.Name())
+			toolSpans := spans.ByName(tool.Name())
 			if len(toolSpans) != 1 {
 				t.Fatalf("got %d spans named %q, want exactly 1", len(toolSpans), tool.Name())
 			}
@@ -902,7 +944,7 @@ func TestWrapToolPassThroughEmitsSingleToolSpan(t *testing.T) {
 			})
 			var toolCalls int32
 			tool := defineCountingTool(t, r, "myTool", &toolCalls)
-			spans := collectSpans(t)
+			spans := tracingtest.Capture(t)
 
 			rewriter := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
 				return &Hooks{WrapTool: tt.hook}, nil
@@ -919,7 +961,7 @@ func TestWrapToolPassThroughEmitsSingleToolSpan(t *testing.T) {
 			if got := atomic.LoadInt32(&toolCalls); got != 1 {
 				t.Errorf("tool ran %d times, want 1", got)
 			}
-			toolSpans := spans.allByName(tool.Name())
+			toolSpans := spans.ByName(tool.Name())
 			if len(toolSpans) != 1 {
 				t.Fatalf("got %d spans named %q, want exactly 1", len(toolSpans), tool.Name())
 			}
@@ -1169,14 +1211,17 @@ func TestMiddlewareHookOrderOnToolRestart(t *testing.T) {
 		}, nil
 	})
 
-	restartPart, err := tool.RestartWith(interruptedPart, WithNewInput[restartInput](restartInput{Interrupt: false}))
-	assertNoError(t, err)
+	call, ok := tool.Interrupted(interruptedPart)
+	if !ok {
+		t.Fatal("Interrupted did not claim the tool's own interrupt")
+	}
+	restartPart := call.RestartWithInput(restartInput{Interrupt: false}, nil)
 
 	resumed, err := Generate(testCtx, r,
 		WithModel(model),
 		WithMessages(first.History()...),
 		WithTools(tool),
-		WithToolRestarts(restartPart),
+		WithResume(restartPart),
 		WithUse(tracker),
 	)
 	assertNoError(t, err)
@@ -1342,7 +1387,7 @@ func TestWrapGenerateOptionsAreIsolatedPerIteration(t *testing.T) {
 	})
 	var toolCalls int32
 	tool := defineCountingTool(t, r, "myTool", &toolCalls)
-	spans := collectSpans(t)
+	spans := tracingtest.Capture(t)
 
 	var seen []int
 	clobber := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
@@ -1369,10 +1414,67 @@ func TestWrapGenerateOptionsAreIsolatedPerIteration(t *testing.T) {
 	if !slices.Equal(seen, want) {
 		t.Errorf("hook saw %v messages per iteration, want %v", seen, want)
 	}
-	if got := len(spans.allByName("clobbered")); got != 0 {
+	if got := len(spans.ByName("clobbered")); got != 0 {
 		t.Errorf("got %d spans named %q, want 0: a hook's step name must not rename the loop's spans", got, "clobbered")
 	}
-	if got := len(spans.allByName("generate")); got != len(want) {
+	if got := len(spans.ByName("generate")); got != len(want) {
 		t.Errorf("got %d generate spans, want %d (one per iteration)", got, len(want))
+	}
+}
+
+// A middleware can contribute a resumable tool: it is a Tool like any
+// other. The application holds only the part, so it resolves the interrupt
+// with Part.ToToolRestart, and the typed resume still reaches the tool.
+func TestMiddlewareContributesResumableTool(t *testing.T) {
+	r := newTestRegistry(t)
+	defineFakeModel(t, r, fakeModelConfig{
+		name:    "test/askModel",
+		handler: toolCallingModelHandler("mw/askUser", map[string]any{"question": "proceed?"}, "done"),
+	})
+
+	type askInput struct {
+		Question string `json:"question"`
+	}
+	type answer struct {
+		Text string `json:"text"`
+	}
+	var got *answer
+	askUser := NewResumableTool("mw/askUser", "asks the person a question",
+		func(ctx context.Context, in askInput, a *answer) (string, error) {
+			if a == nil {
+				return "", &base.ToolInterruptError{Data: in}
+			}
+			got = a
+			return a.Text, nil
+		})
+	inject := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
+		return &Hooks{Tools: []Tool{askUser}}, nil
+	})
+
+	resp, err := Generate(testCtx, r,
+		WithModelName("test/askModel"),
+		WithPrompt("go"),
+		WithUse(inject),
+	)
+	assertNoError(t, err)
+	interrupts := resp.Interrupts()
+	if len(interrupts) != 1 {
+		t.Fatalf("got %d interrupts, want 1 (finish=%s)", len(interrupts), resp.FinishReason)
+	}
+
+	restart, err := interrupts[0].ToToolRestart(answer{Text: "yes"})
+	assertNoError(t, err)
+	resp, err = Generate(testCtx, r,
+		WithModelName("test/askModel"),
+		WithMessages(resp.History()...),
+		WithResume(restart),
+		WithUse(inject),
+	)
+	assertNoError(t, err)
+	if got == nil || got.Text != "yes" {
+		t.Errorf("resumed tool saw %+v, want the typed answer", got)
+	}
+	if resp.Text() != "done" {
+		t.Errorf("got %q, want %q", resp.Text(), "done")
 	}
 }

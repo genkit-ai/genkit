@@ -17,25 +17,38 @@
 """Tests for the BedrockModel generate orchestration (no AWS involved)."""
 
 from collections.abc import AsyncGenerator
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from botocore.exceptions import (
     BotoCoreError,
     ClientError,
+    ConfigNotFound,
+    ConnectionClosedError,
     ConnectTimeoutError,
+    CredentialRetrievalError,
     EndpointConnectionError,
     EventStreamError,
+    IncompleteReadError,
+    MetadataRetrievalError,
+    NoAuthTokenError,
     NoCredentialsError,
     NoRegionError,
     ParamValidationError,
     PartialCredentialsError,
+    ProfileNotFound,
+    ProxyConnectionError,
     ReadTimeoutError,
+    SSLError,
+    SSOTokenLoadError,
+    TokenRetrievalError,
+    UnauthorizedSSOTokenError,
 )
-from genkit_amazon_bedrock.models import BedrockModel
+from genkit_amazon_bedrock._models import BedrockModel
 
-from genkit import FinishReason, Message, ModelRequest, Part, Role
-from genkit.plugin_api import ActionRunContext, GenkitError
+from genkit import FinishReason, GenkitError, Message, Part, Role
+from genkit.model import ModelContext, ModelRequest
+from genkit.web import error_body, error_status
 
 
 class FakeTransport:
@@ -112,7 +125,7 @@ async def test_streaming_context_routes_to_converse_stream() -> None:
     model = BedrockModel(model_id='amazon.nova-lite-v1:0', transport=transport)
     chunks = []
 
-    response = await model.generate(text_request(), ActionRunContext(streaming_callback=chunks.append))
+    response = await model.generate(text_request(), ModelContext(streaming_callback=chunks.append))
 
     # The streaming path builds the same request as the sync one.
     assert transport.stream_kwargs is not None
@@ -129,7 +142,7 @@ async def test_streaming_context_routes_to_converse_stream() -> None:
 async def test_non_streaming_context_uses_converse_and_sends_no_chunks(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = FakeTransport(response=text_response())
     model = BedrockModel(model_id='amazon.nova-lite-v1:0', transport=transport)
-    ctx = ActionRunContext()
+    ctx = ModelContext()
     # Recorded directly: a context with no callback reports is_streaming False,
     # so only spying on send_chunk proves the guard is what suppresses chunks.
     sent: list[Any] = []
@@ -151,20 +164,28 @@ ENDPOINT = 'https://bedrock-runtime.us-east-1.amazonaws.com'
         (ParamValidationError(report='bad param'), 'INVALID_ARGUMENT'),
         (NoCredentialsError(), 'UNAUTHENTICATED'),
         (PartialCredentialsError(provider='env', cred_var='aws_secret_access_key'), 'UNAUTHENTICATED'),
+        (CredentialRetrievalError(provider='assume-role', error_msg='role denied'), 'UNAUTHENTICATED'),
+        (TokenRetrievalError(provider='sso', error_msg='token refresh failed'), 'UNAUTHENTICATED'),
+        (NoAuthTokenError(), 'UNAUTHENTICATED'),
+        (SSOTokenLoadError(error_msg='run aws sso login'), 'UNAUTHENTICATED'),
+        (UnauthorizedSSOTokenError(), 'UNAUTHENTICATED'),
         (NoRegionError(), 'FAILED_PRECONDITION'),
-        (ReadTimeoutError(endpoint_url=ENDPOINT), 'DEADLINE_EXCEEDED'),
-        (ConnectTimeoutError(endpoint_url=ENDPOINT), 'DEADLINE_EXCEEDED'),
-        (EndpointConnectionError(endpoint_url=ENDPOINT), 'UNAVAILABLE'),
+        (ProfileNotFound(profile='kitchen-prod'), 'FAILED_PRECONDITION'),
+        (ConfigNotFound(path='~/.aws/kitchen-config'), 'FAILED_PRECONDITION'),
         (BotoCoreError(), 'UNKNOWN'),
     ],
     ids=[
         'param_validation',
         'no_credentials',
         'partial_credentials',
+        'credential_retrieval',
+        'token_retrieval',
+        'no_auth_token',
+        'sso_token_load',
+        'unauthorized_sso_token',
         'no_region',
-        'read_timeout',
-        'connect_timeout',
-        'endpoint_connection',
+        'profile_not_found',
+        'config_not_found',
         'unlisted',
     ],
 )
@@ -177,8 +198,81 @@ async def test_botocore_errors_map_to_genkit_statuses(error: BotoCoreError, expe
         await model.generate(text_request())
 
     assert excinfo.value.status == expected_status
-    assert 'bedrock converse failed' in excinfo.value.original_message
+    assert 'bedrock converse failed' in excinfo.value.message
     assert excinfo.value.__cause__ is error
+
+
+@pytest.mark.parametrize(
+    'error',
+    [ReadTimeoutError(endpoint_url=ENDPOINT), ConnectTimeoutError(endpoint_url=ENDPOINT)],
+    ids=['read_timeout', 'connect_timeout'],
+)
+@pytest.mark.asyncio
+async def test_timeout_is_deadline_exceeded(error: BotoCoreError) -> None:
+    """A botocore socket timeout raises a provider-sourced DEADLINE_EXCEEDED GenkitError that keeps the cause."""
+    genkit_error = await generate_error(error)
+
+    assert genkit_error.status == 'DEADLINE_EXCEEDED'
+    assert 'bedrock converse failed' in genkit_error.message
+    assert genkit_error.__cause__ is error
+
+
+def _container_endpoint_timeout() -> CredentialRetrievalError:
+    """What botocore's ContainerProvider raises when the ECS/EKS credential endpoint times out."""
+    try:
+        try:
+            raise MetadataRetrievalError(error_msg='Read timeout on endpoint URL')
+        except MetadataRetrievalError as e:
+            raise CredentialRetrievalError(provider='container-role', error_msg=str(e))  # noqa: B904
+    except CredentialRetrievalError as error:
+        return error
+
+
+@pytest.mark.asyncio
+async def test_container_credential_endpoint_timeout_is_unavailable() -> None:
+    """A credential-endpoint blip raises UNAVAILABLE rather than UNAUTHENTICATED, so retry still tries again."""
+    error = _container_endpoint_timeout()
+
+    genkit_error = await generate_error(error)
+
+    assert genkit_error.status == 'UNAVAILABLE'
+    assert genkit_error.__cause__ is error
+
+
+@pytest.mark.asyncio
+async def test_bedrock_credentials_error_is_served_as_internal_error() -> None:
+    """Missing Bedrock credentials stay UNAUTHENTICATED in-process and serve as 500 Internal Error."""
+    transport = FakeTransport(error=NoCredentialsError())
+    model = BedrockModel(model_id='amazon.nova-lite-v1:0', transport=transport)
+
+    with pytest.raises(GenkitError) as excinfo:
+        await model.generate(text_request())
+
+    error = excinfo.value
+    assert error.status == 'UNAUTHENTICATED'
+    assert error_body(error) == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert error_status(error) == 500
+
+
+@pytest.mark.parametrize(
+    'error',
+    [
+        EndpointConnectionError(endpoint_url=ENDPOINT),
+        ConnectionClosedError(endpoint_url=ENDPOINT),
+        SSLError(endpoint_url=ENDPOINT, error=ConnectionResetError('handshake reset')),
+        ProxyConnectionError(proxy_url='http://proxy.internal:3128', error='refused'),
+        IncompleteReadError(actual_bytes=512, expected_bytes=2048),
+    ],
+    ids=['endpoint_connection', 'connection_closed', 'ssl', 'proxy', 'incomplete_read'],
+)
+@pytest.mark.asyncio
+async def test_connection_refused_is_unavailable(error: BotoCoreError) -> None:
+    """A refused, reset, or dropped connection raises a provider-sourced UNAVAILABLE that keeps the cause."""
+    genkit_error = await generate_error(error)
+
+    assert genkit_error.status == 'UNAVAILABLE'
+    assert 'bedrock converse failed' in genkit_error.message
+    assert genkit_error.__cause__ is error
 
 
 @pytest.mark.parametrize(
@@ -196,8 +290,6 @@ async def test_botocore_errors_map_to_genkit_statuses(error: BotoCoreError, expe
         ('ModelNotReadyException', 'UNAVAILABLE'),
         ('ServiceUnavailableException', 'UNAVAILABLE'),
         ('ModelErrorException', 'INTERNAL'),
-        ('SomeFutureException', 'UNKNOWN'),
-        ('', 'UNKNOWN'),
     ],
 )
 @pytest.mark.asyncio
@@ -210,14 +302,91 @@ async def test_client_errors_map_to_genkit_statuses(code: str, expected_status: 
         await model.generate(text_request())
 
     assert excinfo.value.status == expected_status
-    assert 'bedrock converse failed' in excinfo.value.original_message
+    assert 'bedrock converse failed' in excinfo.value.message
     assert excinfo.value.__cause__ is error
 
 
-def throttling_error(headers: dict[str, str] | None = None) -> ClientError:
+@pytest.mark.parametrize(
+    'code,http_status,expected_status',
+    [
+        ('ConflictException', 409, 'ABORTED'),
+        ('ServiceQuotaWarmupException', 429, 'RESOURCE_EXHAUSTED'),
+        ('SomeFutureException', 400, 'INVALID_ARGUMENT'),
+        ('SomeFutureException', 503, 'UNAVAILABLE'),
+        ('SomeFutureException', 599, 'INTERNAL'),
+        ('SomeFutureException', '503', 'UNAVAILABLE'),
+        ('', 404, 'NOT_FOUND'),
+    ],
+)
+@pytest.mark.asyncio
+async def test_unlisted_client_error_codes_fall_back_to_http_status(
+    code: str, http_status: object, expected_status: str
+) -> None:
+    error = ClientError(
+        cast(Any, {'Error': {'Code': code, 'Message': 'nope'}, 'ResponseMetadata': {'HTTPStatusCode': http_status}}),
+        'Converse',
+    )
+
+    genkit_error = await generate_error(error)
+
+    assert genkit_error.status == expected_status
+    assert genkit_error.__cause__ is error
+
+
+@pytest.mark.parametrize('http_status', [413, 418, 422])
+@pytest.mark.asyncio
+async def test_unmapped_4xx_is_unknown_genkit_error(http_status: int) -> None:
+    """An unlisted code on a 4xx with no Genkit status raises a provider-sourced UNKNOWN keeping the AWS message."""
+    error = ClientError(
+        cast(
+            Any,
+            {
+                'Error': {'Code': 'SomeFutureException', 'Message': 'teapot'},
+                'ResponseMetadata': {'HTTPStatusCode': http_status},
+            },
+        ),
+        'Converse',
+    )
+
+    genkit_error = await generate_error(error)
+
+    assert genkit_error.status == 'UNKNOWN'
+    assert genkit_error.message == (
+        'bedrock converse failed: An error occurred (SomeFutureException) when calling the Converse operation: teapot'
+    )
+    assert str(genkit_error).count('teapot') == 1
+    assert genkit_error.__cause__ is error
+
+
+@pytest.mark.parametrize(
+    'response',
+    [
+        {'Error': {'Code': 'SomeFutureException', 'Message': 'nope'}},
+        {'Error': {'Code': '', 'Message': 'nope'}},
+        {'Error': {'Code': 'SomeFutureException'}, 'ResponseMetadata': {'HTTPStatusCode': 200}},
+    ],
+    ids=['no_metadata', 'no_code', 'ok_status'],
+)
+@pytest.mark.asyncio
+async def test_client_error_without_a_failure_status_is_unknown_genkit_error(response: dict[str, Any]) -> None:
+    """An unlisted error code with no 4xx/5xx status raises a provider-sourced UNKNOWN GenkitError."""
+    error = ClientError(cast(Any, response), 'Converse')
+
+    genkit_error = await generate_error(error)
+
+    assert genkit_error.status == 'UNKNOWN'
+    assert genkit_error.__cause__ is error
+
+
+def throttling_error(headers: dict[str, str] | None = None, http_status: int | None = None) -> ClientError:
     response: dict[str, Any] = {'Error': {'Code': 'ThrottlingException', 'Message': 'slow down'}}
+    metadata: dict[str, Any] = {}
     if headers is not None:
-        response['ResponseMetadata'] = {'HTTPHeaders': headers}
+        metadata['HTTPHeaders'] = headers
+    if http_status is not None:
+        metadata['HTTPStatusCode'] = http_status
+    if metadata:
+        response['ResponseMetadata'] = metadata
     return ClientError(response, 'Converse')
 
 
@@ -228,21 +397,25 @@ async def generate_error(error: Exception) -> GenkitError:
     return excinfo.value
 
 
+@pytest.mark.parametrize('header', ['retry-after', 'Retry-After', 'RETRY-AFTER'])
 @pytest.mark.asyncio
-async def test_throttling_surfaces_retry_after_seconds() -> None:
-    genkit_error = await generate_error(throttling_error({'retry-after': '2'}))
+async def test_429_retry_after_header_sets_retry_delay(header: str) -> None:
+    """A throttled 429 with Retry-After in any casing raises RESOURCE_EXHAUSTED carrying that delay in milliseconds."""
+    error = throttling_error({header: '2'}, http_status=429)
+
+    genkit_error = await generate_error(error)
 
     assert genkit_error.status == 'RESOURCE_EXHAUSTED'
-    assert genkit_error.response_metadata == {'retry_after_ms': 2000.0}
+    assert genkit_error.retry_after_ms == 2000.0
+    assert genkit_error.__cause__ is error
 
 
 @pytest.mark.asyncio
 async def test_retry_after_accepts_an_http_date() -> None:
     genkit_error = await generate_error(throttling_error({'Retry-After': 'Wed, 21 Oct 2015 07:28:00 GMT'}))
 
-    assert genkit_error.response_metadata is not None
     # The date is long past, so the wait clamps to zero rather than going negative.
-    assert genkit_error.response_metadata['retry_after_ms'] == 0.0
+    assert genkit_error.retry_after_ms == 0.0
 
 
 @pytest.mark.parametrize(
@@ -255,7 +428,7 @@ async def test_missing_or_unparseable_retry_after_is_omitted(headers: dict[str, 
     genkit_error = await generate_error(throttling_error(headers))
 
     assert genkit_error.status == 'RESOURCE_EXHAUSTED'
-    assert genkit_error.response_metadata is None
+    assert genkit_error.retry_after_ms is None
 
 
 # Mid-stream failures are named by the event stream's ``:exception-type``
@@ -268,6 +441,7 @@ async def test_missing_or_unparseable_retry_after_is_omitted(headers: dict[str, 
         ('internalServerException', 'INTERNAL'),
         ('serviceUnavailableException', 'UNAVAILABLE'),
         ('modelStreamErrorException', 'INTERNAL'),
+        # The event stream carries no HTTP status, so a new type has nothing to fall back on.
         ('someFutureException', 'UNKNOWN'),
     ],
 )
@@ -282,13 +456,32 @@ async def test_mid_stream_errors_map_to_genkit_statuses(code: str, expected_stat
     chunks = []
 
     with pytest.raises(GenkitError) as excinfo:
-        await model.generate(text_request(), ActionRunContext(streaming_callback=chunks.append))
+        await model.generate(text_request(), ModelContext(streaming_callback=chunks.append))
 
     assert excinfo.value.status == expected_status
-    assert 'bedrock converse stream failed' in excinfo.value.original_message
+    assert 'bedrock converse stream failed' in excinfo.value.message
     assert excinfo.value.__cause__ is error
     # Chunks already delivered stand; the stream is closed on the way out.
     assert len(chunks) == 1
+    assert transport.stream_closed
+
+
+@pytest.mark.asyncio
+async def test_mid_stream_connection_drop_is_unavailable() -> None:
+    """A connection dropped mid-stream raises a provider-sourced UNAVAILABLE and still closes the stream."""
+    error = ConnectionClosedError(endpoint_url=ENDPOINT)
+    transport = FakeTransport(
+        error=error,
+        stream_events=[{'contentBlockDelta': {'contentBlockIndex': 0, 'delta': {'text': 'partial'}}}],
+    )
+    model = BedrockModel(model_id='amazon.nova-lite-v1:0', transport=transport)
+
+    with pytest.raises(GenkitError) as excinfo:
+        await model.generate(text_request(), ModelContext(streaming_callback=lambda _chunk: None))
+
+    assert excinfo.value.status == 'UNAVAILABLE'
+    assert 'bedrock converse stream failed' in excinfo.value.message
+    assert excinfo.value.__cause__ is error
     assert transport.stream_closed
 
 
@@ -299,10 +492,10 @@ async def test_stream_botocore_errors_map_to_genkit_statuses() -> None:
     model = BedrockModel(model_id='amazon.nova-lite-v1:0', transport=transport)
 
     with pytest.raises(GenkitError) as excinfo:
-        await model.generate(text_request(), ActionRunContext(streaming_callback=lambda _chunk: None))
+        await model.generate(text_request(), ModelContext(streaming_callback=lambda _chunk: None))
 
     assert excinfo.value.status == 'DEADLINE_EXCEEDED'
-    assert 'bedrock converse stream failed' in excinfo.value.original_message
+    assert 'bedrock converse stream failed' in excinfo.value.message
     assert transport.stream_closed
 
 
@@ -320,6 +513,86 @@ async def test_stream_is_closed_when_a_chunk_callback_raises() -> None:
     model = BedrockModel(model_id='amazon.nova-lite-v1:0', transport=transport)
 
     with pytest.raises(RuntimeError, match='callback failed'):
-        await model.generate(text_request(), ActionRunContext(streaming_callback=explode))
+        await model.generate(text_request(), ModelContext(streaming_callback=explode))
 
     assert transport.stream_closed
+
+
+CLAUDE_ID = 'anthropic.claude-sonnet-4-5-20250929-v1:0'
+
+
+def reasoning_response() -> dict[str, Any]:
+    return {
+        'output': {
+            'message': {
+                'role': 'assistant',
+                'content': [
+                    {'reasoningContent': {'reasoningText': {'text': 'because', 'signature': 'sig'}}},
+                    {'text': '391'},
+                ],
+            }
+        },
+        'stopReason': 'end_turn',
+        'usage': {'inputTokens': 1, 'outputTokens': 1, 'totalTokens': 2},
+    }
+
+
+@pytest.mark.asyncio
+async def test_reasoning_part_has_only_thought_signature() -> None:
+    transport = FakeTransport(response=reasoning_response())
+    model = BedrockModel(model_id=CLAUDE_ID, transport=transport)
+
+    response = await model.generate(text_request('what is 17 * 23?'))
+
+    assert response.message is not None
+    reasoning, answer = response.message.content
+    assert reasoning.reasoning == 'because'
+    assert reasoning.metadata == {'thoughtSignature': 'sig'}
+    assert answer.text == '391'
+
+
+@pytest.mark.asyncio
+async def test_streamed_reasoning_part_has_only_thought_signature() -> None:
+    transport = FakeTransport(
+        stream_events=[
+            {'contentBlockDelta': {'contentBlockIndex': 0, 'delta': {'reasoningContent': {'text': 'because'}}}},
+            {'contentBlockDelta': {'contentBlockIndex': 0, 'delta': {'reasoningContent': {'signature': 'sig'}}}},
+            {'contentBlockDelta': {'contentBlockIndex': 1, 'delta': {'text': '391'}}},
+            {'messageStop': {'stopReason': 'end_turn'}},
+        ]
+    )
+    model = BedrockModel(model_id=CLAUDE_ID, transport=transport)
+
+    response = await model.generate(
+        text_request('what is 17 * 23?'), ModelContext(streaming_callback=lambda _chunk: None)
+    )
+
+    assert response.message is not None
+    reasoning, answer = response.message.content
+    assert reasoning.reasoning == 'because'
+    assert reasoning.metadata == {'thoughtSignature': 'sig'}
+    assert answer.text == '391'
+
+
+@pytest.mark.asyncio
+async def test_saved_reasoning_part_replays_thought_signature() -> None:
+    transport = FakeTransport(response=text_response())
+    model = BedrockModel(model_id=CLAUDE_ID, transport=transport)
+    request = ModelRequest(
+        messages=[
+            Message(role=Role.USER, content=[Part.from_text('what is 17 * 23?')]),
+            Message(
+                role=Role.MODEL,
+                content=[Part.from_reasoning('because', metadata={'thoughtSignature': 'sig'}), Part.from_text('391')],
+            ),
+            Message(role=Role.USER, content=[Part.from_text('now add 100')]),
+        ]
+    )
+
+    await model.generate(request)
+
+    assert transport.kwargs is not None
+    assert transport.kwargs['messages'][1]['content'] == [
+        {'reasoningContent': {'reasoningText': {'text': 'because', 'signature': 'sig'}}},
+        {'text': '391'},
+    ]

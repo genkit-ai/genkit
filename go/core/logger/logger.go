@@ -25,6 +25,7 @@ import (
 	"sync"
 
 	"github.com/firebase/genkit/go/internal/base"
+	"github.com/firebase/genkit/go/internal/tracingbridge"
 	otrace "go.opentelemetry.io/otel/trace"
 )
 
@@ -258,10 +259,20 @@ type ctxHandler struct {
 // when it carries a span, since a log statement under a deeper span must
 // attribute to that span, and the bound context otherwise.
 func (h *ctxHandler) resolve(ctx context.Context) context.Context {
-	if h.ctx == nil || otrace.SpanContextFromContext(ctx).IsValid() {
+	if h.ctx == nil || hasSpan(ctx) {
 		return ctx
 	}
 	return h.ctx
+}
+
+// hasSpan reports whether ctx carries a span: a Genkit span (which, with no
+// OpenTelemetry SDK installed, has no valid OTel span context), or a user's own
+// OTel span outside any Genkit action.
+func hasSpan(ctx context.Context) bool {
+	if f := tracingbridge.HasSpan; f != nil && f(ctx) {
+		return true
+	}
+	return otrace.SpanContextFromContext(ctx).IsValid()
 }
 
 func (h *ctxHandler) Enabled(ctx context.Context, l slog.Level) bool {

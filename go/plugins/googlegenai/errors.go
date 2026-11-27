@@ -92,8 +92,25 @@ func retryDelayFromAPIError(apiErr genai.APIError) (time.Duration, bool) {
 }
 
 func statusForAPIError(e genai.APIError) status.Name {
+	// The Gemini API reports a rejected key as INVALID_ARGUMENT, and names
+	// the cause only in its google.rpc.ErrorInfo detail.
+	if errorInfoReason(e) == "API_KEY_INVALID" {
+		return status.Unauthenticated
+	}
 	if n := status.Name(e.Status); n.IsValid() {
 		return n
 	}
 	return status.FromHTTPCode(e.Code)
+}
+
+// errorInfoReason returns the reason of the google.rpc.ErrorInfo detail on e,
+// or "" when there is none.
+func errorInfoReason(e genai.APIError) string {
+	for _, detail := range e.Details {
+		if typ, _ := detail["@type"].(string); strings.HasSuffix(typ, "google.rpc.ErrorInfo") {
+			reason, _ := detail["reason"].(string)
+			return reason
+		}
+	}
+	return ""
 }

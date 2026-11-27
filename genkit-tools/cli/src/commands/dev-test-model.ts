@@ -14,23 +14,24 @@
  * limitations under the License.
  */
 
-import {
+import type {
   GenerateRequestData,
   GenerateResponseChunkData,
   GenerateResponseData,
-  GenerateResponseSchema,
   Part,
 } from '@genkit-ai/tools-common';
-import {
-  BaseRuntimeManager,
-  GenkitToolsError,
-} from '@genkit-ai/tools-common/manager';
+import { GenerateResponseSchema } from '@genkit-ai/tools-common';
+import type { BaseRuntimeManager } from '@genkit-ai/tools-common/manager';
+import { GenkitToolsError } from '@genkit-ai/tools-common/manager';
 import { findProjectRoot, logger } from '@genkit-ai/tools-common/utils';
 import { Command } from 'commander';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import { parse } from 'yaml';
-import { startDevProcessManager, startManager } from '../utils/manager-utils';
+import {
+  startDevProcessManager,
+  startManager,
+} from '../utils/manager-utils.js';
 
 interface TestOptions {
   supports: string;
@@ -128,7 +129,8 @@ const VALIDATORS: Record<
       JSON.parse(textPart.text!);
     } catch (e) {
       throw new Error(
-        `Response text is not valid JSON. Text: ${textPart.text}`
+        `Response text is not valid JSON. Text: ${textPart.text}`,
+        { cause: e }
       );
     }
   },
@@ -187,7 +189,9 @@ const VALIDATORS: Record<
     try {
       JSON.parse(streamedText);
     } catch (e) {
-      throw new Error(`Streamed text is not valid JSON: ${streamedText}`);
+      throw new Error(`Streamed text is not valid JSON: ${streamedText}`, {
+        cause: e,
+      });
     }
   },
   'text-starts-with': (response, expected) => {
@@ -230,7 +234,7 @@ const VALIDATORS: Record<
         try {
           new URL(url);
         } catch (e) {
-          throw new Error(`Invalid URL: ${url}`);
+          throw new Error(`Invalid URL: ${url}`, { cause: e });
         }
       } else {
         throw new Error(`Unknown URL format: ${url}`);
@@ -637,7 +641,7 @@ export const devTestModel = new Command('dev:test-model')
   .argument('[args...]', 'Command arguments')
   .option(
     '--supports <list>',
-    'Comma-separated list of supported capabilities (tool-request, structured-output, multiturn, system-role, input-image-base64, input-image-url, input-video-youtube, output-audio, output-image, streaming-multiturn, reasoning)',
+    `Comma-separated list of supported capabilities (${Object.keys(TEST_CASES).join(', ')})`,
     'tool-request,structured-output,multiturn,system-role,input-image-base64,input-image-url,streaming-multiturn,streaming-tool-request,streaming-structured-output'
   )
   .option('--from-file <file>', 'Path to a file containing test payloads')

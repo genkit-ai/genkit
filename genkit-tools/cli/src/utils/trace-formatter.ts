@@ -24,7 +24,7 @@ import {
   stackTraceSpans,
 } from '@genkit-ai/tools-common/utils';
 import YAML from 'yaml';
-import { z } from 'zod';
+import type { z } from 'zod';
 
 type FormattedPart = {
   type: 'toolCall' | 'toolResponse' | 'text' | 'media' | 'other';

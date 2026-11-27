@@ -19,42 +19,127 @@ package middleware
 import (
 	"context"
 	"fmt"
+	"io"
+	"io/fs"
+	"maps"
 	"os"
+	"path"
 	"path/filepath"
-	"sort"
+	"slices"
+	"strconv"
 	"strings"
+	"sync"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/logger"
 	"github.com/goccy/go-yaml"
 )
 
-// defaultSkillsPath is the directory scanned when Skills.SkillPaths is unset.
-const defaultSkillsPath = "skills"
+// Tool names registered by [Skills]. When [Skills.ToolNamePrefix] is set, the
+// registered name is the prefix followed by the constant.
+//
+// Use them to name the tools in [ToolApproval.AllowedTools]: that field is
+// matched by exact string, so a skills tool missing from the list is held for
+// approval rather than run.
+const (
+	// SkillToolName loads a skill's instructions by name. The name matches the
+	// JS and Python runtimes so prompts and evaluations port between them.
+	SkillToolName = "use_skill"
 
-// skillsMarker marks the system prompt part injected by this middleware so it
-// can be refreshed on later tool-loop iterations instead of duplicated.
-const skillsMarker = "skills-instructions"
+	// SkillResourceToolName reads a file bundled inside a skill directory. It
+	// is registered only when [Skills.AllowResourceAccess] is set.
+	SkillResourceToolName = "read_skill_file"
+)
 
-const skillsMissingDescription = "No description provided."
+// SkillActivationMetadataKey is the metadata key stamped on every message part
+// that carries a skill's instructions, whether the model loaded them with
+// [SkillToolName] or [Skills.Preload] injected them. Its value is the skill
+// name as a string.
+//
+// [Skills] reads the key back out of the conversation to recognize a skill
+// that is already loaded. Context-management middleware can use it to find
+// skill instructions in a transcript and exempt them from summarization.
+const SkillActivationMetadataKey = "skillActivation"
 
-// useSkillToolName is the name of the tool registered by this middleware.
-// The name intentionally matches the JS implementation so prompts and
-// evaluations port cleanly between runtimes.
-const useSkillToolName = "use_skill"
+const (
+	// agentsSkillsPath and defaultSkillsPath are the directories scanned when
+	// Skills.SkillPaths is unset. ".agents/skills" is the cross-client interoperability convention;
+	// "skills" is scanned last so it keeps winning collisions.
+	agentsSkillsPath  = ".agents/skills"
+	defaultSkillsPath = "skills"
+
+	// skillFileName is matched case-exactly. A case-insensitive volume would
+	// otherwise let "skill.md" load on macOS and Windows but not on Linux.
+	skillFileName = "SKILL.md"
+
+	// skillsMarker marks the catalog part injected by this middleware so a
+	// later tool-loop iteration refreshes it instead of appending a second
+	// copy. Its value is true, which is what the JS and Python runtimes write
+	// and look for, so a conversation can move between runtimes without
+	// gaining a second catalog.
+	skillsMarker = "skills-instructions"
+
+	// skillsToolMetadataKey records the activation tool name of the Skills
+	// instance that wrote a part. It sits beside skillsMarker on the catalog
+	// and beside SkillActivationMetadataKey on a skill's instructions, and is
+	// what tells two Skills instances on one call apart: they must set
+	// distinct ToolNamePrefixes anyway, since duplicate tool names fail the
+	// request.
+	skillsToolMetadataKey = "skillsActivationTool"
+)
+
+const (
+	// skillMaxBytes bounds a single SKILL.md. This is a process resource
+	// limit, not an enforcement of the specification's authoring guidance on
+	// SKILL.md length: an oversized file is skipped, never truncated.
+	skillMaxBytes = 1 << 20
+
+	// skillResourceMaxBytes bounds one read through SkillResourceToolName. It
+	// shares the Filesystem middleware's bound, since both put the whole file
+	// into the model's context.
+	skillResourceMaxBytes = readMaxBytes
+
+	// Advisory bounds from the specification. Exceeding one is a diagnostic;
+	// the skill still loads.
+	skillNameMaxRunes        = 64
+	skillDescriptionMaxRunes = 1024
+
+	// Bounds on the bundled-resource listing appended at activation.
+	skillResourceListMax  = 100
+	skillResourceMaxDepth = 4
+)
+
+// skillAlreadyLoadedStub answers a repeat activation.
+const skillAlreadyLoadedStub = "Skill %q is already loaded in this conversation; its instructions are still in context. Refer to the earlier result instead of loading it again."
 
 // Skills is a middleware that makes a local library of "skills" available to
-// the model. A skill is a directory containing a SKILL.md file whose contents
-// become specialized instructions the model can load on demand.
+// the model, following the Agent Skills specification (https://agentskills.io).
+// A skill is a directory containing a SKILL.md file whose contents become
+// specialized instructions the model can load on demand.
 //
-// When used, Skills:
-//   - Injects a system prompt listing the available skill names and their
-//     (optional) descriptions.
-//   - Registers a use_skill tool that the model can call to load a skill's
-//     full SKILL.md content into the conversation.
+// Skills implements the specification's three tiers of progressive disclosure:
 //
-// SKILL.md may start with a YAML frontmatter block with name and description
-// fields; if absent, only the directory name is surfaced to the model.
+//   - Catalog. A system prompt lists each available skill's name and
+//     description, and names the tool that loads one.
+//   - Instructions. A use_skill tool returns a skill's full SKILL.md, wrapped
+//     in <skill_content> together with the skill's directory. A skill already
+//     loaded in the conversation is not sent twice.
+//   - Resources. When AllowResourceAccess is set, each activation lists the
+//     files the skill bundles, and a read_skill_file tool reads them on demand,
+//     confined to that one skill directory.
+//
+// SKILL.md should start with a YAML frontmatter block carrying name and
+// description. Following the specification's guidance for clients, a skill
+// that violates the format is loaded anyway and reported through the logger,
+// so a library authored for another agent still works here.
+//
+// Security: skill paths resolve against the process working directory by
+// default, or inside SkillFS when it is set, and a discovered SKILL.md becomes
+// instruction text the model follows. Treat a skills tree the way you treat
+// source code, and prefer an absolute path over the default in a server
+// process. Genkit applies no trust gate of its own.
 //
 // Usage:
 //
@@ -65,87 +150,644 @@ const useSkillToolName = "use_skill"
 //	)
 type Skills struct {
 	// SkillPaths lists directories that are scanned for skills. Each direct
-	// subdirectory containing a SKILL.md file is exposed as a skill.
-	// Defaults to []string{"skills"}.
-	SkillPaths []string `json:"skillPaths,omitempty" jsonschema_description:"Directories that are scanned for skills. Each direct subdirectory containing a SKILL.md file is exposed as a skill. Defaults to the \"skills\" directory."`
+	// subdirectory containing a SKILL.md file is exposed as a skill; scanning
+	// is one level deep. A symbolic link to a skill directory is followed, as
+	// skill installers commonly create them, but a SKILL.md that is itself a
+	// symbolic link is not. Relative paths resolve against the process working
+	// directory, and a skill's directory is shown to the model the way its
+	// entry here names it, so a relative entry keeps host paths out of the
+	// conversation.
+	//
+	// When two paths hold a skill of the same name the later path wins, and
+	// the shadowing is logged.
+	//
+	// Defaults to []string{".agents/skills", "skills"}.
+	SkillPaths []string `json:"skillPaths,omitempty" jsonschema_description:"Directories scanned for skills. Each direct subdirectory containing a SKILL.md file is exposed as a skill; scanning is one level deep. If two paths hold the same skill name, the later path wins. Defaults to the \".agents/skills\" and \"skills\" directories."`
+
+	// Preload names skills whose instructions are injected before the first
+	// model turn instead of waiting for the model to call use_skill. Use it
+	// when the application, rather than the model, decides that a skill
+	// applies.
+	//
+	// Preloaded skills are left out of the catalog's list of loadable skills.
+	// A preload injects the SKILL.md bytes the scan read, so a skill that was
+	// discovered is always delivered, with the same content on every turn. A
+	// name matching no discovered skill, including one whose SKILL.md could
+	// not be read, is logged and ignored: skills are rescanned on every
+	// request, so a temporarily unreadable directory must not fail the
+	// request.
+	Preload []string `json:"preload,omitempty" jsonschema_description:"Skills whose instructions are injected before the first model turn, without waiting for the model to load them. Names matching no discovered skill are logged and ignored."`
+
+	// AllowResourceAccess registers read_skill_file, which reads files bundled
+	// inside a skill directory (references/, scripts/, assets/, and anything
+	// else the skill ships), and appends a listing of those files to each
+	// activation. Paths resolve against that one skill's directory and are
+	// confined to it: by [os.Root] on disk, and by path validation in SkillFS.
+	//
+	// Defaults to false: enabling it grants the model file access it does not
+	// otherwise have, and adds a tool name that [ToolApproval.AllowedTools]
+	// must list.
+	AllowResourceAccess bool `json:"allowResourceAccess,omitempty" jsonschema_description:"Adds the read_skill_file tool and lists each skill's bundled files at activation. Reads are confined to the individual skill directory. Defaults to false."`
+
+	// ToolNamePrefix is prepended to each registered tool name. Use distinct
+	// prefixes when attaching more than one Skills middleware to a call, or to
+	// avoid colliding with a caller-supplied tool of the same name, since a
+	// collision fails the whole request. A prefix breaks tool-name parity with
+	// the other Genkit runtimes; leave it empty unless you need it.
+	ToolNamePrefix string `json:"toolNamePrefix,omitempty" jsonschema_description:"Prepended to each tool name. Use distinct prefixes when attaching multiple skills middlewares to one call so their tool names do not collide."`
+
+	// SkillFS, when set, is the file system that SkillPaths are read from, in
+	// place of the operating system's. Use it to ship skills inside the binary
+	// with an [embed.FS]:
+	//
+	//	//go:embed skills
+	//	var skillsFS embed.FS
+	//
+	//	ai.WithUse(&middleware.Skills{SkillFS: skillsFS})
+	//
+	// SkillPaths are then slash-separated paths inside SkillFS, and the
+	// defaults apply unchanged. A go:embed pattern that names a directory
+	// leaves out the files in it whose names begin with "." or "_", so name
+	// ".agents/skills" in the pattern itself, and add the "all:" prefix if a
+	// skill bundles such a file.
+	//
+	// A skill in SkillFS has no path that another tool can open, so its
+	// activation does not tell the model where relative paths resolve. Its
+	// bundled files are reachable only through read_skill_file.
+	//
+	// Containment comes from path validation, which refuses ".." and absolute
+	// paths, and from SkillFS itself. An [os.DirFS] follows symbolic links out
+	// of its tree, so for a directory on disk, set SkillPaths and leave SkillFS
+	// unset.
+	//
+	// SkillFS is not part of the JSON configuration. A call that the Dev UI
+	// dispatches by name reads skills from disk.
+	SkillFS fs.FS `json:"-"`
 }
 
-// skillInfo records where a skill's SKILL.md lives and its description.
+// skillInfo records a discovered skill. Name is the directory name, which is
+// both what the catalog advertises and what the tools accept. Dir is the root
+// that bundled-file reads resolve against, as store names it. ShownDir is the
+// same directory as the SkillPaths entry names it, which is what the model
+// sees.
 type skillInfo struct {
+	Name        string
+	Dir         string
+	ShownDir    string
 	Path        string
 	Description string
+
+	// store is where the skill was found, and where its files are read from.
+	store skillStore
+
+	// body holds the SKILL.md bytes the scan read. It is kept only for the
+	// skills the scan was asked to retain, which are the preloaded ones.
+	body []byte
 }
 
 // skillFrontmatter mirrors the YAML block expected at the top of a SKILL.md.
+// The specification's other fields (license, compatibility, metadata,
+// allowed-tools) are deliberately not parsed: nothing consumes them, and the
+// full file delivered at activation already carries them to the model.
 type skillFrontmatter struct {
 	Name        string `yaml:"name"`
 	Description string `yaml:"description"`
 }
 
+// Name implements [ai.Middleware].
 func (s Skills) Name() string { return provider + "/skills" }
 
-// New scans the configured skill paths and returns a [ai.Hooks] that injects
-// the skills system prompt and exposes the use_skill tool. Scanning happens
-// once per [ai.Generate] call; the result is captured in the returned hooks
-// so WrapGenerate and the use_skill tool agree on the same skill set.
+// New scans the configured skill paths and returns the [ai.Hooks] that inject
+// the skills catalog and expose the skill tools. Scanning happens once per
+// [ai.Generate] call, so WrapGenerate and the tools agree on one skill set and
+// an edited SKILL.md takes effect on the next call.
+//
+// A skill tool with nothing to load is not registered, as the specification
+// requires. Unreadable paths, malformed frontmatter, and oversized files are
+// logged and skipped rather than reported as errors.
 func (s Skills) New(ctx context.Context) (*ai.Hooks, error) {
-	info, err := scanSkills(ctx, s.paths(), len(s.SkillPaths) > 0)
-	if err != nil {
-		return nil, err
+	info := scanSkills(ctx, s.store(), s.paths(), len(s.SkillPaths) > 0, s.Preload)
+	if len(info) == 0 {
+		return &ai.Hooks{}, nil
 	}
-	names := make([]string, 0, len(info))
-	for name := range info {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	logger.Debug(ctx, "skills middleware scanned", "skills", names)
+	logger.Debug(ctx, "skills middleware scanned", "skills", sortedNames(info))
 
-	useSkill := ai.NewTool(
-		useSkillToolName,
-		"Use a skill by its name.",
-		func(_ *ai.ToolContext, in struct {
-			SkillName string `json:"skillName" jsonschema_description:"The name of the skill to use."`
-		}) (string, error) {
-			si, ok := info[in.SkillName]
-			if !ok {
-				return "", fmt.Errorf("skill %q not found", in.SkillName)
-			}
-			data, err := os.ReadFile(si.Path)
-			if err != nil {
-				return "", fmt.Errorf("failed to read skill %q: %w", in.SkillName, err)
-			}
-			return string(data), nil
-		},
-	)
+	preload := s.resolvePreload(ctx, info)
+
+	act := &activationSet{tool: s.toolName(SkillToolName), loaded: map[string]bool{}}
+	available := availableSkillsSentence(info)
+
+	// Registering the activation tool with nothing left to activate would offer
+	// the model a tool whose every input is a dead end, which happens when
+	// Preload names every discovered skill.
+	loadable := loadableNames(info, preload)
+	catalog := s.buildSkillsPrompt(info, loadable)
+
+	var tools []ai.Tool
+	if len(loadable) > 0 {
+		tools = append(tools, s.newUseSkillTool(info, act, available))
+	}
+	if s.AllowResourceAccess {
+		tools = append(tools, s.newReadSkillFileTool(info, available))
+	}
+	toolSet := map[string]bool{}
+	for _, t := range tools {
+		toolSet[t.Name()] = true
+	}
 
 	wrapGenerate := func(ctx context.Context, params *ai.GenerateParams, next ai.GenerateNext) (*ai.ModelResponse, error) {
-		if len(info) == 0 {
-			return next(ctx, params)
-		}
-		params.Request = injectSkillsPrompt(params.Request, buildSkillsPrompt(info))
+		// Inject first, then read the activation set back out of the result:
+		// a preloaded skill marks itself through the metadata on the part that
+		// carries it.
+		params.Request = s.injectSkills(ctx, params.Request, catalog, preload)
+		act.reset(params.Request.Messages)
 		return next(ctx, params)
 	}
 
+	// Recover from a failed skill tool instead of aborting the generation, the
+	// way the sibling Filesystem middleware does. This has to live in the hook
+	// rather than in the handler: input decoding and schema validation run
+	// inside the tool action, which the hook chain wraps, so a malformed call
+	// never reaches a handler at all.
+	wrapTool := func(ctx context.Context, params *ai.ToolParams, next ai.ToolNext) (*ai.MultipartToolResponse, error) {
+		if !toolSet[params.Tool.Name()] {
+			return next(ctx, params)
+		}
+		resp, err := next(ctx, params)
+		if err == nil {
+			return resp, nil
+		}
+		if isInterrupt, _ := ai.IsToolInterruptError(err); isInterrupt {
+			return nil, err
+		}
+		logger.Debug(ctx, "skills tool failed, reporting to the model",
+			"tool", params.Tool.Name(), "error", err)
+		// The error text carries path components from disk, so it is folded
+		// like any other on-disk string before the model reads it.
+		msg := fmt.Sprintf("Tool %q failed: %s.", params.Tool.Name(), catalogText(err.Error()))
+		// The skill list helps a model that could not name a skill to load.
+		// A failed file read already named a valid skill, so the list would
+		// only be noise.
+		if params.Tool.Name() == s.toolName(SkillToolName) {
+			msg += " " + available
+		}
+		return &ai.MultipartToolResponse{Output: msg}, nil
+	}
+
 	return &ai.Hooks{
-		Tools:        []ai.Tool{useSkill},
+		Tools:        tools,
 		WrapGenerate: wrapGenerate,
+		WrapTool:     wrapTool,
 	}, nil
 }
 
-// paths returns the directories to scan, falling back to the default.
+// paths returns the directories to scan, falling back to the defaults.
 func (s *Skills) paths() []string {
 	if len(s.SkillPaths) == 0 {
-		return []string{defaultSkillsPath}
+		return []string{agentsSkillsPath, defaultSkillsPath}
 	}
 	return s.SkillPaths
 }
 
+// store returns where skills are read from: SkillFS when it is set, and the
+// operating system's file system otherwise.
+func (s *Skills) store() skillStore {
+	if s.SkillFS != nil {
+		return fsStore{s.SkillFS}
+	}
+	return diskStore{}
+}
+
+// toolName returns suffix prefixed with s.ToolNamePrefix.
+func (s *Skills) toolName(suffix string) string { return s.ToolNamePrefix + suffix }
+
+// resolvePreload returns the discovered skills named in Skills.Preload, keyed
+// by skill name. Each carries the SKILL.md bytes the scan read, and rendering
+// from those rather than reading again means a discovered skill cannot fail to
+// preload, so no skill is left out of both the catalog and the request. An
+// unknown name is logged and dropped: New runs on the request path, so a name
+// that fails to resolve because a directory was briefly unreadable must not
+// fail the request.
+func (s *Skills) resolvePreload(ctx context.Context, info map[string]skillInfo) map[string]skillInfo {
+	if len(s.Preload) == 0 {
+		return nil
+	}
+	preload := make(map[string]skillInfo, len(s.Preload))
+	for _, name := range s.Preload {
+		si, ok := info[name]
+		if !ok {
+			logger.Warn(ctx, "preloaded skill not found, ignoring",
+				"skill", name, "available", sortedNames(info))
+			continue
+		}
+		preload[name] = si
+	}
+	return preload
+}
+
+// newUseSkillTool builds the activation tool. It returns the full SKILL.md,
+// frontmatter included, wrapped so the model and any context-management
+// middleware can tell skill instructions from the rest of the conversation.
+//
+// WithOutputSchema is required rather than cosmetic: a multipart tool does not
+// infer an output schema from a type parameter the way [ai.NewTool] does, so
+// without it the tool would advertise the multipart envelope where the model
+// expects a string.
+func (s *Skills) newUseSkillTool(info map[string]skillInfo, act *activationSet, available string) ai.Tool {
+	return ai.NewMultipartTool(
+		s.toolName(SkillToolName),
+		"Load a skill's instructions by name.",
+		func(tc *ai.ToolContext, in useSkillInput) (*ai.MultipartToolResponse, error) {
+			si, ok := lookupSkill(info, in.SkillName)
+			if !ok {
+				return &ai.MultipartToolResponse{
+					Output: unknownSkillMessage(in.SkillName, available),
+				}, nil
+			}
+			claimed, release := act.claim(si.Name)
+			if !claimed {
+				return &ai.MultipartToolResponse{
+					Output: fmt.Sprintf(skillAlreadyLoadedStub, si.Name),
+				}, nil
+			}
+			content, err := s.renderSkill(tc, si)
+			if err != nil {
+				release()
+				return nil, err
+			}
+			return &ai.MultipartToolResponse{
+				Output:   content,
+				Metadata: s.activationMetadata(si.Name),
+			}, nil
+		},
+		ai.WithOutputSchema(map[string]any{"type": "string"}),
+	)
+}
+
+// renderSkill reads a skill from its store and returns the instructions to
+// place in the conversation.
+func (s *Skills) renderSkill(ctx context.Context, si skillInfo) (string, error) {
+	data, err := si.store.readSkillFile(si.Path)
+	if err != nil {
+		return "", err
+	}
+	return s.skillContent(ctx, si, data), nil
+}
+
+// skillContent renders a skill's SKILL.md bytes as the instructions to place
+// in the conversation. An activation and a preload both go through it, so the
+// two deliver the same content.
+func (s *Skills) skillContent(ctx context.Context, si skillInfo, body []byte) string {
+	var resources string
+	if s.AllowResourceAccess {
+		resources = listSkillResources(ctx, si.store, si.Dir, s.toolName(SkillResourceToolName))
+	}
+	return wrapSkillContent(si, string(body), resources)
+}
+
+// activationMetadata returns the metadata stamped on a part carrying the
+// instructions of the named skill.
+func (s *Skills) activationMetadata(name string) map[string]any {
+	return map[string]any{
+		SkillActivationMetadataKey: name,
+		skillsToolMetadataKey:      s.toolName(SkillToolName),
+	}
+}
+
+// activationSet is the per-call view of which skills are already loaded into
+// the conversation by the instance whose activation tool is named tool.
+//
+// claim takes the whole check-and-set under one lock. A turn runs its tool
+// calls concurrently, so a split check and mark would let two calls for the
+// same skill both pass and both return the body. The returned release undoes
+// the reservation, so a failed read leaves the skill loadable.
+type activationSet struct {
+	tool   string
+	mu     sync.Mutex
+	loaded map[string]bool
+}
+
+func (a *activationSet) claim(name string) (bool, func()) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.loaded[name] {
+		return false, func() {}
+	}
+	a.loaded[name] = true
+	return true, func() {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		delete(a.loaded, name)
+	}
+}
+
+// reset rebuilds the set from a turn's messages, so it can never report a
+// skill as loaded after context management has dropped the part carrying it.
+func (a *activationSet) reset(msgs []*ai.Message) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.loaded = activatedSkills(msgs, a.tool)
+}
+
+// lookupSkill resolves a model-supplied skill name. The catalog prints each
+// name folded to one line, so a name whose folded form differs from its
+// directory name would otherwise be advertised in a spelling the tools reject.
+func lookupSkill(info map[string]skillInfo, name string) (skillInfo, bool) {
+	if si, ok := info[name]; ok {
+		return si, true
+	}
+	var (
+		match skillInfo
+		found bool
+	)
+	for _, si := range info {
+		if catalogText(si.Name) != name {
+			continue
+		}
+		if found {
+			// Two skills share a folded form. Guessing between them would be
+			// worse than the unknown-skill reply, which lists both.
+			return skillInfo{}, false
+		}
+		match, found = si, true
+	}
+	return match, found
+}
+
+// unknownSkillMessage reports a name that resolved to no skill. available is
+// the sentence from [availableSkillsSentence], built once per request.
+func unknownSkillMessage(name, available string) string {
+	return fmt.Sprintf("Unknown skill %q. %s", catalogText(name), available)
+}
+
+// availableSkillsSentence lists every discovered skill for a model that named
+// one that does not exist. Names are quoted so whitespace an author did not
+// intend is visible, and folded so a name from disk cannot forge structure in
+// the text the model reads.
+func availableSkillsSentence(info map[string]skillInfo) string {
+	quoted := make([]string, 0, len(info))
+	for _, n := range sortedNames(info) {
+		quoted = append(quoted, strconv.Quote(catalogText(n)))
+	}
+	return fmt.Sprintf("Available skills: %s.", strings.Join(quoted, ", "))
+}
+
+// useSkillInput is the input to the activation tool.
+type useSkillInput struct {
+	SkillName string `json:"skillName" jsonschema_description:"The name of the skill to use, exactly as listed in <skills>."`
+}
+
+// readSkillFileInput is the input to the bundled-resource reader.
+type readSkillFileInput struct {
+	SkillName string `json:"skillName" jsonschema_description:"Name of the skill that bundles the file, exactly as listed in <skills>."`
+	FilePath  string `json:"filePath" jsonschema_description:"Path to the file, relative to the skill directory (for example \"references/api.md\")."`
+}
+
+// newReadSkillFileTool builds the tier-3 resource reader. Each read is confined
+// to the one skill's directory; see [skillStore.readResource].
+func (s *Skills) newReadSkillFileTool(info map[string]skillInfo, available string) ai.Tool {
+	return ai.NewTool(
+		s.toolName(SkillResourceToolName),
+		"Read a file bundled inside a skill directory, such as a reference document or a script.",
+		func(_ *ai.ToolContext, in readSkillFileInput) (string, error) {
+			// An unknown name is an answer, not a failure, the same as for
+			// use_skill, and it is the one failure the skill list helps with.
+			si, ok := lookupSkill(info, in.SkillName)
+			if !ok {
+				return unknownSkillMessage(in.SkillName, available), nil
+			}
+			if err := requireFilePath(in.FilePath); err != nil {
+				return "", err
+			}
+			rel := normalizeRel(in.FilePath)
+			if hiddenPath(rel) {
+				return "", fmt.Errorf("%s is not readable: skills expose no path with a segment starting with \".\"", rel)
+			}
+			data, err := si.store.readResource(si.Dir, rel)
+			if err != nil {
+				return "", fmt.Errorf("read %q from skill %q: %w", rel, in.SkillName, err)
+			}
+			// The result is a string, so bytes that are not UTF-8, such as an
+			// image under assets/, would reach the model as replacement
+			// characters. Saying what the file is costs a line instead.
+			if !utf8.Valid(data) {
+				return fmt.Sprintf("%s is a binary file (%d bytes); %s returns text files only.",
+					catalogText(rel), len(data), s.toolName(SkillResourceToolName)), nil
+			}
+			return string(data), nil
+		},
+	)
+}
+
+// hiddenPath reports whether any segment of the slash-separated path rel
+// starts with ".". The resource listing leaves such entries out, and the reader
+// refuses them to match: a skill installed with git clone carries .git/config,
+// whose remote URL can hold a token, and os.Root does not help because the
+// file is inside the root.
+func hiddenPath(rel string) bool {
+	for seg := range strings.SplitSeq(rel, "/") {
+		if strings.HasPrefix(seg, ".") {
+			return true
+		}
+	}
+	return false
+}
+
+// skillStore is where skills are read from. Names are in the store's own
+// form: host paths for [diskStore], slash-separated paths for [fsStore].
+type skillStore interface {
+	// resolve turns a SkillPaths entry into the name the other methods take.
+	resolve(p string) (string, error)
+	join(elem ...string) string
+	readDir(name string) ([]fs.DirEntry, error)
+	stat(name string) (fs.FileInfo, error)
+
+	// readSkillFile reads a SKILL.md, refusing a symbolic link, anything that
+	// is not a regular file, and anything over skillMaxBytes.
+	readSkillFile(name string) ([]byte, error)
+
+	// readResource reads rel, a slash-separated path, from the skill
+	// directory dir. A path that resolves outside dir is refused.
+	readResource(dir, rel string) ([]byte, error)
+
+	// openDir returns the skill directory dir as an [fs.FS] confined to it,
+	// and a function that releases it.
+	openDir(dir string) (fs.FS, func(), error)
+
+	// hostPaths reports whether names are paths on the host, which other
+	// tools given to the model can open.
+	hostPaths() bool
+}
+
+// diskStore reads skills from the operating system's file system. A skills
+// tree on disk can be written while it is read, so its readers refuse a
+// symbolic link out of the skill, a named pipe, and a file swapped between the
+// check and the open.
+type diskStore struct{}
+
+func (diskStore) resolve(p string) (string, error)           { return filepath.Abs(p) }
+func (diskStore) join(elem ...string) string                 { return filepath.Join(elem...) }
+func (diskStore) readDir(name string) ([]fs.DirEntry, error) { return os.ReadDir(name) }
+func (diskStore) stat(name string) (fs.FileInfo, error)      { return os.Stat(name) }
+func (diskStore) readSkillFile(name string) ([]byte, error)  { return readSkillFile(name) }
+func (diskStore) readResource(dir, rel string) ([]byte, error) {
+	return readSkillResource(dir, rel)
+}
+func (diskStore) hostPaths() bool { return true }
+
+func (diskStore) openDir(dir string) (fs.FS, func(), error) {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, nil, err
+	}
+	return root.FS(), func() { root.Close() }, nil
+}
+
+// fsStore reads skills from an [fs.FS], typically an [embed.FS], which cannot
+// change while it is read. Containment of a bundled-file read comes from
+// [fs.Sub], which refuses a name that is not a valid path, so ".." and an
+// absolute path never reach the file system.
+type fsStore struct{ fsys fs.FS }
+
+func (fsStore) resolve(p string) (string, error) {
+	name := path.Clean(filepath.ToSlash(p))
+	if !fs.ValidPath(name) {
+		return "", fmt.Errorf("%q is not a path inside SkillFS: use a slash-separated relative path without \"..\"", p)
+	}
+	return name, nil
+}
+
+func (fsStore) join(elem ...string) string                   { return path.Join(elem...) }
+func (f fsStore) readDir(name string) ([]fs.DirEntry, error) { return fs.ReadDir(f.fsys, name) }
+func (f fsStore) stat(name string) (fs.FileInfo, error)      { return fs.Stat(f.fsys, name) }
+func (fsStore) hostPaths() bool                              { return false }
+
+func (f fsStore) readSkillFile(name string) ([]byte, error) {
+	st, err := fs.Lstat(f.fsys, name)
+	if err != nil {
+		return nil, err
+	}
+	return readFSChecked(f.fsys, name, st, skillMaxBytes)
+}
+
+func (f fsStore) readResource(dir, rel string) ([]byte, error) {
+	sub, err := fs.Sub(f.fsys, dir)
+	if err != nil {
+		return nil, err
+	}
+	st, err := fs.Stat(sub, rel)
+	if err != nil {
+		return nil, err
+	}
+	return readFSChecked(sub, rel, st, skillResourceMaxBytes)
+}
+
+func (f fsStore) openDir(dir string) (fs.FS, func(), error) {
+	sub, err := fs.Sub(f.fsys, dir)
+	return sub, func() {}, err
+}
+
+// readFSChecked reads name from fsys after st, its stat, passes
+// [checkReadable]. The length is checked again after the read, since an fs.FS
+// gives no way to tie the read to the file that was checked.
+func readFSChecked(fsys fs.FS, name string, st fs.FileInfo, maxBytes int64) ([]byte, error) {
+	if err := checkReadable(st, name, maxBytes); err != nil {
+		return nil, err
+	}
+	data, err := fs.ReadFile(fsys, name)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("%s is over the %d byte limit", name, maxBytes)
+	}
+	return data, nil
+}
+
+// readSkillResource reads one bundled file, confined to dir by [os.Root],
+// which rejects any path resolving outside it including via "..", an absolute
+// path, or a symbolic link.
+//
+// It differs from [readSkillFile] in one deliberate way: Stat follows symbolic
+// links, so a link to a file elsewhere in the same skill works. That is safe
+// here because os.Root keeps the target inside the skill directory, whereas a
+// symlinked SKILL.md would name a file outside any skill at all.
+func readSkillResource(dir, rel string) ([]byte, error) {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+
+	name := filepath.FromSlash(rel)
+	st, err := root.Stat(name)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkReadable(st, rel, skillResourceMaxBytes); err != nil {
+		return nil, err
+	}
+	return readChecked(func(flag int) (*os.File, error) {
+		return root.OpenFile(name, flag, 0)
+	}, st, rel)
+}
+
+// readChecked opens a file through open and reads it whole, provided it is
+// still the file described by st.
+//
+// Between the stat and the open the path can be replaced, by a symbolic link
+// that the open follows or by a named pipe. Comparing the opened file against
+// the checked one refuses either substitute instead of reading it. The open is
+// non-blocking, since opening a named pipe for reading otherwise blocks until
+// a writer appears, and the comparison would never run.
+func readChecked(open func(flag int) (*os.File, error), st os.FileInfo, name string) ([]byte, error) {
+	f, err := open(os.O_RDONLY | openNonblock)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	opened, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !os.SameFile(st, opened) {
+		return nil, fmt.Errorf("%s changed while it was being opened", name)
+	}
+	data := make([]byte, st.Size())
+	if _, err := io.ReadFull(f, data); err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+// checkReadable is the rule both skill readers apply before opening anything:
+// a regular file within the byte limit. The type check has to precede the open
+// rather than follow it, because opening a named pipe blocks until a writer
+// appears.
+func checkReadable(st os.FileInfo, name string, maxBytes int64) error {
+	switch {
+	case st.IsDir():
+		return fmt.Errorf("%s is a directory, not a file", name)
+	case !st.Mode().IsRegular():
+		return fmt.Errorf("%s is not a regular file (mode %s)", name, st.Mode().Type())
+	case st.Size() > maxBytes:
+		return fmt.Errorf("%s is %d bytes, over the %d byte limit", name, st.Size(), maxBytes)
+	}
+	return nil
+}
+
 // scanSkills enumerates SKILL.md files under each path and returns a map keyed
-// by the skill's directory name. Missing or unreadable paths are skipped,
-// matching the JS implementation; a skipped path is a warning when the caller
-// configured it explicitly (a likely misconfiguration) and debug noise when it
-// is only the unset default.
-func scanSkills(ctx context.Context, paths []string, explicit bool) (map[string]skillInfo, error) {
+// by the skill's directory name. It keeps the SKILL.md bytes of each skill
+// named in retain, so those skills can be delivered without a second read that
+// could fail. Missing or unreadable paths are skipped; a
+// skipped path is a warning when the caller configured it explicitly (a likely
+// misconfiguration) and debug noise when it is only the unset default.
+//
+// Diagnostics are split by consequence. A condition that removes a skill from
+// the catalog, or silently changes which instructions the model receives, is a
+// warning. Advisory lint that changes nothing is debug, so that a warning
+// remains worth reading.
+func scanSkills(ctx context.Context, store skillStore, paths []string, explicit bool, retain []string) map[string]skillInfo {
 	result := make(map[string]skillInfo)
 	skipped := func(p string, err error) {
 		if explicit {
@@ -155,148 +797,726 @@ func scanSkills(ctx context.Context, paths []string, explicit bool) (map[string]
 		}
 	}
 	for _, p := range paths {
-		abs, err := filepath.Abs(p)
+		abs, err := store.resolve(p)
 		if err != nil {
 			skipped(p, err)
 			continue
 		}
-		entries, err := os.ReadDir(abs)
+		entries, err := store.readDir(abs)
 		if err != nil {
 			skipped(abs, err)
 			continue
 		}
 		for _, entry := range entries {
-			if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+			if strings.HasPrefix(entry.Name(), ".") || !isDirEntry(store, abs, entry) {
 				continue
 			}
-			skillMd := filepath.Join(abs, entry.Name(), "SKILL.md")
-			data, err := os.ReadFile(skillMd)
-			if err != nil {
+			si, ok := readSkillDir(ctx, store, abs, entry.Name(), slices.Contains(retain, entry.Name()))
+			if !ok {
 				continue
 			}
-			fm := parseFrontmatter(data)
-			desc := strings.TrimSpace(fm.Description)
-			if desc == "" {
-				desc = skillsMissingDescription
+			si.ShownDir = store.join(p, entry.Name())
+			if prev, dup := result[si.Name]; dup {
+				// An installer that links one copy of a skill into several
+				// agents' directories makes the same skill appear twice.
+				// Nothing is shadowed then, so there is nothing to warn about.
+				if sameDir(store, prev.Dir, si.Dir) {
+					logger.Debug(ctx, "skill found in more than one path through a symbolic link",
+						"skill", si.Name, "paths", []string{prev.Path, si.Path})
+				} else {
+					logger.Warn(ctx, "skill name found in more than one path, the later path wins",
+						"skill", si.Name, "shadowed", prev.Path, "using", si.Path)
+				}
 			}
-			result[entry.Name()] = skillInfo{
-				Path:        skillMd,
-				Description: desc,
-			}
+			result[si.Name] = si
 		}
 	}
-	return result, nil
+	return result
 }
 
-// parseFrontmatter extracts the YAML frontmatter (fenced by "---" lines) at
-// the top of a SKILL.md. Returns the zero value if no frontmatter is present
-// or it fails to parse.
-func parseFrontmatter(content []byte) skillFrontmatter {
+// isDirEntry reports whether entry, listed in parent, is a directory or a
+// symbolic link to one. Following a link is safe because the target is held to
+// the same rules as any skill: its SKILL.md must be a regular file, and
+// bundled-file reads are confined to it.
+func isDirEntry(store skillStore, parent string, entry fs.DirEntry) bool {
+	if entry.IsDir() {
+		return true
+	}
+	if entry.Type()&fs.ModeSymlink == 0 {
+		return false
+	}
+	st, err := store.stat(store.join(parent, entry.Name()))
+	return err == nil && st.IsDir()
+}
+
+// sameDir reports whether a and b name the same directory. [os.SameFile]
+// reports false for a FileInfo that does not come from the os package, so in
+// an fs.FS, which has no links to compare through, only equal names match.
+func sameDir(store skillStore, a, b string) bool {
+	if a == b {
+		return true
+	}
+	sa, errA := store.stat(a)
+	sb, errB := store.stat(b)
+	return errA == nil && errB == nil && os.SameFile(sa, sb)
+}
+
+// readSkillDir loads one candidate skill directory, keeping the SKILL.md bytes
+// when retain is set. It reports false when the directory holds no SKILL.md,
+// or holds one that cannot be used.
+func readSkillDir(ctx context.Context, store skillStore, parent, name string, retain bool) (skillInfo, bool) {
+	dir := store.join(parent, name)
+	entries, err := store.readDir(dir)
+	if err != nil {
+		logger.Debug(ctx, "skill directory could not be read, skipping", "path", dir, "error", err)
+		return skillInfo{}, false
+	}
+
+	// Match SKILL.md case-exactly. Reading the joined path would instead
+	// accept "skill.md" on a case-insensitive volume, so the same library
+	// would discover a different set of skills on macOS and on Linux.
+	//
+	// The entry must also be a regular file. A symbolic link here would read a
+	// file the skill author neither owns nor can write, and a named pipe would
+	// block the request that opened it.
+	var found fs.DirEntry
+	for _, e := range entries {
+		if e.Name() != skillFileName {
+			continue
+		}
+		if !e.Type().IsRegular() {
+			logger.Warn(ctx, "SKILL.md is not a regular file, skipping skill",
+				"path", store.join(dir, skillFileName), "mode", e.Type())
+			break
+		}
+		found = e
+		break
+	}
+	if found == nil {
+		warnNestedSkills(ctx, store, dir, entries)
+		return skillInfo{}, false
+	}
+
+	skillMd := store.join(dir, skillFileName)
+	if fi, err := found.Info(); err == nil && fi.Size() > skillMaxBytes {
+		logger.Warn(ctx, "SKILL.md is over the size limit, skipping skill",
+			"path", skillMd, "bytes", fi.Size(), "limit", skillMaxBytes)
+		return skillInfo{}, false
+	}
+	data, err := store.readSkillFile(skillMd)
+	if err != nil {
+		logger.Warn(ctx, "SKILL.md could not be read, skipping skill", "path", skillMd, "error", err)
+		return skillInfo{}, false
+	}
+
+	fm, yamlErr := parseFrontmatter(data)
+	desc := strings.TrimSpace(fm.Description)
+	switch {
+	case yamlErr != nil && desc == "" && fm.Name == "":
+		logger.Warn(ctx, "SKILL.md frontmatter could not be parsed; the skill is listed by name only",
+			"path", skillMd, "error", yamlErr)
+	case yamlErr != nil:
+		logger.Debug(ctx, "SKILL.md frontmatter is not valid YAML; fields were recovered leniently",
+			"path", skillMd, "error", yamlErr)
+	}
+	if desc == "" {
+		// The specification's client guidance suggests skipping a skill with
+		// no description, since the description is the entire signal the model
+		// routes on. Genkit loads it anyway, to stay compatible with the other
+		// runtimes and with plain-Markdown skill files, and reports it here.
+		logger.Warn(ctx, "skill has no description and will be listed by name only", "path", skillMd)
+	}
+
+	validateSkillMetadata(ctx, name, fm, desc, skillMd)
+	si := skillInfo{Name: name, Dir: dir, Path: skillMd, Description: desc, store: store}
+	if retain {
+		si.body = data
+	}
+	return si, true
+}
+
+// validateSkillMetadata reports specification violations that do not stop the
+// skill from loading. The directory name is what the catalog advertises and
+// what the tools accept, so it is checked alongside the frontmatter name.
+func validateSkillMetadata(ctx context.Context, dirName string, fm skillFrontmatter, desc, skillMd string) {
+	if !validSkillName(dirName) {
+		logger.Debug(ctx, "skill directory name does not meet the Agent Skills naming rules "+
+			"(1-64 lowercase letters, digits and single hyphens); the skill is loaded anyway",
+			"skill", dirName, "path", skillMd)
+	}
+	switch fmName := strings.TrimSpace(fm.Name); {
+	case fmName == "":
+		logger.Debug(ctx, "SKILL.md has no name field, which the specification requires; "+
+			"the directory name is used", "directory", dirName, "path", skillMd)
+	case fmName != dirName:
+		logger.Debug(ctx, "SKILL.md name does not match its directory name; the directory name is used",
+			"name", fmName, "directory", dirName, "path", skillMd)
+	}
+	if n := utf8.RuneCountInString(desc); n > skillDescriptionMaxRunes {
+		logger.Warn(ctx, "skill description is over the length the specification allows "+
+			"and will be clipped in the skills catalog; the full text still loads with the skill",
+			"skill", dirName, "runes", n, "limit", skillDescriptionMaxRunes, "path", skillMd)
+	}
+}
+
+// warnNestedSkills reports a directory that holds no SKILL.md but does hold a
+// subdirectory that does. Scanning is one level deep, so those skills are
+// invisible; this is the diagnostic that explains why.
+func warnNestedSkills(ctx context.Context, store skillStore, dir string, entries []fs.DirEntry) {
+	for _, e := range entries {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		if _, err := store.stat(store.join(dir, e.Name(), skillFileName)); err == nil {
+			logger.Debug(ctx, "directory holds nested skills, which are not scanned; "+
+				"add it to SkillPaths to expose them",
+				"path", dir)
+			return
+		}
+	}
+}
+
+// readSkillFile reads a SKILL.md, refusing anything over the size limit rather
+// than truncating it.
+//
+// Lstat, not Stat: a symbolic link here would name a file the skill author
+// neither owns nor can write. The scan applies the same rule, but a file can be
+// replaced between the two, and again between this check and the open, which
+// [readChecked] catches.
+func readSkillFile(p string) ([]byte, error) {
+	fi, err := os.Lstat(p)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkReadable(fi, p, skillMaxBytes); err != nil {
+		return nil, err
+	}
+	return readChecked(func(flag int) (*os.File, error) {
+		return os.OpenFile(p, flag, 0)
+	}, fi, p)
+}
+
+// validSkillName reports whether name meets the Agent Skills naming rules:
+// 1 to 64 runes of lowercase letters, digits, and hyphens, with no leading,
+// trailing, or doubled hyphen.
+func validSkillName(name string) bool {
+	n := utf8.RuneCountInString(name)
+	if n == 0 || n > skillNameMaxRunes {
+		return false
+	}
+	if strings.HasPrefix(name, "-") || strings.HasSuffix(name, "-") || strings.Contains(name, "--") {
+		return false
+	}
+	for _, r := range name {
+		switch {
+		case r == '-', unicode.IsDigit(r):
+		case unicode.IsLetter(r) && !unicode.IsUpper(r) && !unicode.IsTitle(r):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// parseFrontmatter extracts the YAML frontmatter fenced by "---" lines at the
+// top of a SKILL.md.
+//
+// The closing fence must be a line holding only "---", so a horizontal rule or
+// a run of dashes inside a block scalar does not truncate the block. When the
+// YAML does not parse, the block is parsed again with its plain top-level
+// values turned into block scalars, the fallback the specification's client
+// guide recommends for an unquoted colon in a description. If that also fails,
+// name and description are recovered by scanning those lines directly, which is
+// what the JS runtime does. The first parse error is returned whenever the
+// block was not valid YAML, for the caller to log.
+func parseFrontmatter(content []byte) (skillFrontmatter, error) {
 	var fm skillFrontmatter
 	text := strings.TrimPrefix(string(content), "\ufeff") // strip optional BOM
-	if !strings.HasPrefix(text, "---") {
-		return fm
+
+	rest, ok := strings.CutPrefix(text, "---")
+	if !ok {
+		return fm, nil
 	}
-	rest := text[3:]
-	// The opening fence must be followed by a newline.
-	if !strings.HasPrefix(rest, "\n") && !strings.HasPrefix(rest, "\r\n") {
-		return fm
+	// The opening fence runs to the end of its line; trailing spaces are
+	// tolerated, as they are in the other runtimes.
+	nl := strings.IndexByte(rest, '\n')
+	if nl < 0 || strings.TrimRight(rest[:nl], " \t\r") != "" {
+		return fm, nil
 	}
-	// Locate the closing fence ("\n---") on its own line.
-	idx := strings.Index(rest, "\n---")
-	if idx < 0 {
-		return fm
+	rest = rest[nl+1:]
+
+	block, ok := cutFrontmatterBlock(rest)
+	if !ok {
+		return fm, nil
 	}
-	_ = yaml.Unmarshal([]byte(rest[:idx]), &fm)
+	if err := yaml.Unmarshal([]byte(block), &fm); err != nil {
+		var repaired skillFrontmatter
+		if yaml.Unmarshal([]byte(blockScalarPlainValues(block)), &repaired) == nil {
+			return repaired, err
+		}
+		return scanFrontmatterLines(block), err
+	}
+	return fm, nil
+}
+
+// blockScalarPlainValues rewrites each plain top-level value in a frontmatter
+// block as a folded block scalar, taking its space-indented continuation lines
+// with it. Inside a block scalar a colon, a leading "@" or backtick, and a "#"
+// are text, which is how other clients read such values. Quoted, flow, block,
+// and empty values (a nested mapping such as metadata) are left untouched.
+func blockScalarPlainValues(block string) string {
+	lines := strings.Split(block, "\n")
+	var b strings.Builder
+	for i := 0; i < len(lines); i++ {
+		line := strings.TrimRight(lines[i], "\r")
+		key, value, ok := strings.Cut(line, ":")
+		value = strings.TrimSpace(value)
+		if !ok || key == "" || strings.ContainsAny(key[:1], " \t#-") ||
+			value == "" || strings.ContainsAny(value[:1], `"'|>[{&*!#`) {
+			b.WriteString(line)
+			b.WriteByte('\n')
+			continue
+		}
+		fmt.Fprintf(&b, "%s: >-\n  %s\n", key, value)
+		for i+1 < len(lines) {
+			next := strings.TrimRight(lines[i+1], "\r")
+			if next != "" && !strings.HasPrefix(next, " ") {
+				break
+			}
+			i++
+			if next = strings.TrimSpace(next); next == "" {
+				b.WriteByte('\n')
+				continue
+			}
+			fmt.Fprintf(&b, "  %s\n", next)
+		}
+	}
+	return b.String()
+}
+
+// cutFrontmatterBlock returns everything before the closing fence: the first
+// line consisting only of "---" and optional trailing whitespace.
+func cutFrontmatterBlock(s string) (string, bool) {
+	for offset := 0; offset < len(s); {
+		line := s[offset:]
+		end := len(s)
+		if nl := strings.IndexByte(line, '\n'); nl >= 0 {
+			line = line[:nl]
+			end = offset + nl
+		}
+		if strings.TrimRight(line, " \t\r") == "---" {
+			return s[:offset], true
+		}
+		if end == len(s) {
+			break
+		}
+		offset = end + 1
+	}
+	return "", false
+}
+
+// scanFrontmatterLines recovers name and description from frontmatter that is
+// not valid YAML, taking each value verbatim to the end of its line.
+//
+// A value that is only a block-scalar header ("|", ">-", and so on) is treated
+// as absent: the real value is on the lines below, which this scan cannot
+// reassemble, and reporting the header as the description would both mislead
+// the model and hide the missing-description diagnostic.
+func scanFrontmatterLines(block string) skillFrontmatter {
+	var fm skillFrontmatter
+	value := func(v string) string {
+		v = strings.TrimSpace(v)
+		if isBlockScalarHeader(v) {
+			return ""
+		}
+		return v
+	}
+	for _, line := range strings.Split(block, "\n") {
+		line = strings.TrimRight(line, "\r")
+		if v, ok := strings.CutPrefix(line, "name:"); ok && fm.Name == "" {
+			fm.Name = value(v)
+			continue
+		}
+		if v, ok := strings.CutPrefix(line, "description:"); ok && fm.Description == "" {
+			fm.Description = value(v)
+		}
+	}
 	return fm
 }
 
-// buildSkillsPrompt renders the system prompt text listing available skills.
-// Skills are sorted alphabetically to produce stable output across runs.
-func buildSkillsPrompt(info map[string]skillInfo) string {
-	names := make([]string, 0, len(info))
-	for name := range info {
-		names = append(names, name)
+// isBlockScalarHeader reports whether s is a YAML block-scalar indicator on its
+// own: "|" or ">", with an optional indentation digit and chomping indicator in
+// either order.
+func isBlockScalarHeader(s string) bool {
+	if s == "" || (s[0] != '|' && s[0] != '>') {
+		return false
 	}
-	sort.Strings(names)
+	for _, r := range s[1:] {
+		if r != '+' && r != '-' && !unicode.IsDigit(r) {
+			return false
+		}
+	}
+	return true
+}
+
+// buildSkillsPrompt renders the catalog listing the skills named in names,
+// which [loadableNames] has already sorted and filtered: a preloaded skill is
+// left out, since its instructions are in the request and offering it would
+// only invite a wasted turn.
+func (s *Skills) buildSkillsPrompt(info map[string]skillInfo, names []string) string {
+	if len(names) == 0 {
+		return ""
+	}
 
 	var b strings.Builder
 	b.WriteString("<skills>\n")
 	b.WriteString("You have access to a library of skills that serve as specialized instructions/personas.\n")
 	b.WriteString("Strongly prefer to use them when working on anything related to them.\n")
 	b.WriteString("Only use them once to load the context.\n")
+	fmt.Fprintf(&b, "Call the %s tool with a skill's name to load its instructions.\n", s.toolName(SkillToolName))
 	b.WriteString("Here are the available skills:\n")
 	for _, name := range names {
-		desc := info[name].Description
-		if desc == "" || desc == skillsMissingDescription {
-			fmt.Fprintf(&b, " - %s\n", name)
+		// Clip before escaping: the specification's bound is on the author's
+		// text, and clipping afterwards could cut a generated entity in half.
+		desc := catalogText(clipRunes(info[name].Description, skillDescriptionMaxRunes))
+		if desc == "" {
+			fmt.Fprintf(&b, " - %s\n", catalogText(name))
 			continue
 		}
-		fmt.Fprintf(&b, " - %s - %s\n", name, desc)
+		fmt.Fprintf(&b, " - %s - %s\n", catalogText(name), desc)
 	}
 	b.WriteString("</skills>")
 	return b.String()
 }
 
-// injectSkillsPrompt returns a copy of req with promptText placed in a part
-// marked by skillsMarker. If such a part already exists it is replaced in
-// place; otherwise the text is appended to the existing system message, or a
-// new system message is prepended.
-func injectSkillsPrompt(req *ai.ModelRequest, promptText string) *ai.ModelRequest {
+// clipRunes truncates s to max runes, marking that it was cut. The catalog is
+// injected into every request, so an over-long description is bounded here
+// rather than left to inflate each one; activation still delivers the file
+// whole.
+func clipRunes(s string, max int) string {
+	if utf8.RuneCountInString(s) <= max {
+		return s
+	}
+	runes := []rune(s)
+	return strings.TrimRight(string(runes[:max]), " ") + "..."
+}
+
+// wrapSkillContent renders an activated skill. The full file is returned,
+// frontmatter included: the specification leaves stripping optional, and the
+// frontmatter is the only path by which fields the harness does not parse,
+// such as compatibility, reach the model at all.
+func wrapSkillContent(si skillInfo, body, resources string) string {
+	// The attribute values are escaped by attrText, so they are quoted
+	// explicitly rather than with %q, which would escape them a second time and
+	// print a Windows path with doubled separators. The prose below is not an
+	// attribute, so it takes the same escaper as every other line the model
+	// reads as text.
+	var b strings.Builder
+	fmt.Fprintf(&b, "<skill_content name=\"%s\" path=\"%s\">\n", attrText(si.Name), attrText(si.ShownDir))
+	b.WriteString(body)
+	if !strings.HasSuffix(body, "\n") {
+		b.WriteString("\n")
+	}
+	if si.store.hostPaths() {
+		fmt.Fprintf(&b, "\nRelative paths in this skill resolve against %s\n", catalogText(si.ShownDir))
+	}
+	b.WriteString(resources)
+	b.WriteString("</skill_content>")
+	return b.String()
+}
+
+// listSkillResources enumerates the files a skill bundles, so the model knows
+// they exist without any of them being read. The optional directory names in
+// the specification are conventions, not a closed set, so everything the skill
+// ships is listed.
+//
+// The walk goes through the confined view the reader uses, so it applies the
+// same containment, and so a skill directory reached through a symbolic link
+// is walked rather than reported as a single link entry.
+func listSkillResources(ctx context.Context, store skillStore, dir, toolName string) string {
+	root, release, err := store.openDir(dir)
+	if err != nil {
+		logger.Debug(ctx, "skill resources could not be listed", "path", dir, "error", err)
+		return ""
+	}
+	defer release()
+	var (
+		files     []string
+		truncated bool
+	)
+	// The walk never fails: every entry error is reported and swallowed below,
+	// so WalkDir has nothing left to return. An unreadable corner of a skill
+	// directory costs the model that listing, not the activation, which is why
+	// this degrades rather than propagating.
+	_ = fs.WalkDir(root, ".", func(rel string, d fs.DirEntry, err error) error {
+		if err != nil {
+			logger.Debug(ctx, "skill resource could not be listed, skipping",
+				"path", store.join(dir, rel), "error", err)
+			return nil //nolint:nilerr // an unreadable entry is skipped, not fatal
+		}
+		if rel == "." {
+			return nil
+		}
+		if strings.HasPrefix(d.Name(), ".") {
+			if d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		// Installed dependencies are not something the skill author wrote for
+		// the model, and the walk is lexical, so node_modules would otherwise
+		// fill the listing cap before references/ and scripts/ are reached.
+		if d.IsDir() && d.Name() == "node_modules" {
+			return fs.SkipDir
+		}
+		if d.IsDir() {
+			if strings.Count(rel, "/")+1 >= skillResourceMaxDepth {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if rel == skillFileName {
+			return nil
+		}
+		// Listing a path is an invitation to read it, so the listing admits
+		// exactly what the reader does: a regular file, or a symbolic link
+		// that resolves to one without leaving the skill directory. A named
+		// pipe, a socket, or a device node is left out.
+		if !d.Type().IsRegular() && !linksToRegularFile(root, rel, d) {
+			return nil
+		}
+		if len(files) >= skillResourceListMax {
+			truncated = true
+			return fs.SkipAll
+		}
+		files = append(files, rel)
+		return nil
+	})
+	if len(files) == 0 {
+		return ""
+	}
+	slices.Sort(files)
+
+	var b strings.Builder
+	b.WriteString("\n<skill_resources>\n")
+	fmt.Fprintf(&b, "Paths are relative to the skill directory above; read them with the %s tool.\n", toolName)
+	for _, f := range files {
+		fmt.Fprintf(&b, " - %s\n", catalogText(f))
+	}
+	if truncated {
+		fmt.Fprintf(&b, " (listing truncated at %d files)\n", skillResourceListMax)
+	}
+	b.WriteString("</skill_resources>\n")
+	return b.String()
+}
+
+// linksToRegularFile reports whether d is a symbolic link that resolves, inside
+// root, to a regular file. It applies the containment the reader applies, so
+// the listing never advertises a link the reader refuses.
+func linksToRegularFile(root fs.FS, rel string, d fs.DirEntry) bool {
+	if d.Type()&fs.ModeSymlink == 0 {
+		return false
+	}
+	st, err := fs.Stat(root, rel)
+	return err == nil && st.Mode().IsRegular()
+}
+
+// activatedSkills returns the set of skills whose instructions the instance
+// with activation tool tool placed in msgs. It is rebuilt from the
+// conversation on every turn, so it never reports a skill as loaded once
+// context management has dropped the part carrying it. Two instances can each
+// hold a skill of the same name from different directories, so a part loaded
+// by the other instance does not count.
+func activatedSkills(msgs []*ai.Message, tool string) map[string]bool {
+	activated := map[string]bool{}
+	for _, msg := range msgs {
+		if msg == nil {
+			continue
+		}
+		for _, part := range msg.Content {
+			if part == nil || part.Metadata == nil {
+				continue
+			}
+			name, ok := part.Metadata[SkillActivationMetadataKey].(string)
+			if ok && name != "" && ownsPart(part.Metadata, tool) {
+				activated[name] = true
+			}
+		}
+	}
+	return activated
+}
+
+// injectSkills returns a copy of req carrying the skills catalog and the
+// instructions of any preloaded skill. The catalog is marked by skillsMarker so
+// a later tool-loop iteration refreshes it in place instead of appending a
+// second copy; preloaded parts are recognized by their activation metadata. A
+// preload is rendered only when its part is missing, which after the first
+// turn it rarely is, so its resource listing is not rebuilt on every turn.
+func (s *Skills) injectSkills(ctx context.Context, req *ai.ModelRequest, catalog string, preload map[string]skillInfo) *ai.ModelRequest {
 	newReq := *req
 	newReq.Messages = append([]*ai.Message(nil), req.Messages...)
 
-	// Refresh an existing injected part in place.
-	for i, msg := range newReq.Messages {
+	if catalog != "" {
+		s.injectCatalogPart(&newReq, catalog)
+	}
+	if len(preload) == 0 {
+		return &newReq
+	}
+
+	present := activatedSkills(newReq.Messages, s.toolName(SkillToolName))
+	var parts []*ai.Part
+	for _, name := range slices.Sorted(maps.Keys(preload)) {
+		if present[name] {
+			continue
+		}
+		si := preload[name]
+		p := ai.NewTextPart(s.skillContent(ctx, si, si.body))
+		p.Metadata = s.activationMetadata(name)
+		parts = append(parts, p)
+	}
+	if len(parts) > 0 {
+		appendToSystemMessage(&newReq, parts...)
+	}
+	return &newReq
+}
+
+// injectCatalogPart places catalog in this middleware's marked part, replacing
+// an existing one in place, or adding a new part when there is none.
+func (s *Skills) injectCatalogPart(req *ai.ModelRequest, catalog string) {
+	tool := s.toolName(SkillToolName)
+	for i, msg := range req.Messages {
 		if msg == nil {
 			continue
 		}
 		for j, part := range msg.Content {
-			if !hasSkillsMarker(part) {
+			if part == nil || !part.IsText() || !isCatalogPart(part, tool) {
 				continue
 			}
-			if part.Text == promptText {
-				return &newReq
+			if part.Text == catalog {
+				return
 			}
 			msgCopy := msg.Clone()
-			msgCopy.Content[j] = newSkillsPart(promptText)
-			newReq.Messages[i] = msgCopy
-			return &newReq
+			msgCopy.Content[j] = s.newSkillsPart(catalog)
+			req.Messages[i] = msgCopy
+			return
 		}
 	}
+	appendToSystemMessage(req, s.newSkillsPart(catalog))
+}
 
-	// Append to an existing system message.
-	for i, msg := range newReq.Messages {
+// appendToSystemMessage adds parts to the request's system message, creating
+// one at the front of the conversation when there is none.
+func appendToSystemMessage(req *ai.ModelRequest, parts ...*ai.Part) {
+	for i, msg := range req.Messages {
 		if msg == nil || msg.Role != ai.RoleSystem {
 			continue
 		}
 		msgCopy := msg.Clone()
-		msgCopy.Content = append(msgCopy.Content, newSkillsPart(promptText))
-		newReq.Messages[i] = msgCopy
-		return &newReq
+		msgCopy.Content = append(msgCopy.Content, parts...)
+		req.Messages[i] = msgCopy
+		return
 	}
-
-	// Otherwise prepend a fresh system message.
-	newReq.Messages = append(
-		[]*ai.Message{ai.NewSystemMessage(newSkillsPart(promptText))},
-		newReq.Messages...,
-	)
-	return &newReq
+	req.Messages = append([]*ai.Message{ai.NewSystemMessage(parts...)}, req.Messages...)
 }
 
-// newSkillsPart builds the text part that carries the skills prompt, tagged
-// with skillsMarker so later iterations can find and refresh it.
-func newSkillsPart(text string) *ai.Part {
+// isCatalogPart reports whether part is the skills catalog of the instance
+// whose activation tool is named tool.
+func isCatalogPart(part *ai.Part, tool string) bool {
+	marked, _ := part.Metadata[skillsMarker].(bool)
+	return marked && ownsPart(part.Metadata, tool)
+}
+
+// ownsPart reports whether a part marked by this middleware belongs to the
+// instance whose activation tool is named tool.
+//
+// A part without skillsToolMetadataKey is claimed by any instance. The JS and
+// Python runtimes, and earlier Go builds, mark the catalog without it, so a
+// conversation started there has its catalog refreshed rather than gaining a
+// second, stale copy. Refreshing adds the key, so a history self-heals on its
+// first turn. Two instances would both claim such a part, but two instances
+// could not have produced one: before the key existed they collided on the
+// tool name and failed the request outright.
+func ownsPart(meta map[string]any, tool string) bool {
+	owner, ok := meta[skillsToolMetadataKey].(string)
+	return !ok || owner == tool
+}
+
+// newSkillsPart builds the text part that carries the skills catalog.
+func (s *Skills) newSkillsPart(text string) *ai.Part {
 	p := ai.NewTextPart(text)
-	p.Metadata = map[string]any{skillsMarker: true}
+	p.Metadata = map[string]any{
+		skillsMarker:          true,
+		skillsToolMetadataKey: s.toolName(SkillToolName),
+	}
 	return p
 }
 
-// hasSkillsMarker reports whether p is a text part tagged as the skills prompt.
-func hasSkillsMarker(p *ai.Part) bool {
-	if p == nil || !p.IsText() || p.Metadata == nil {
-		return false
+// sortedNames returns the discovered skill names in a stable order.
+func sortedNames(info map[string]skillInfo) []string {
+	return slices.Sorted(maps.Keys(info))
+}
+
+// loadableNames returns the skills the model may activate: everything
+// discovered, less anything already injected by Preload.
+func loadableNames(info map[string]skillInfo, preload map[string]skillInfo) []string {
+	names := make([]string, 0, len(info))
+	for _, name := range sortedNames(info) {
+		if _, ok := preload[name]; !ok {
+			names = append(names, name)
+		}
 	}
-	v, ok := p.Metadata[skillsMarker].(bool)
-	return ok && v
+	return names
+}
+
+// catalogText prepares author-supplied text for a catalog line. A skill file
+// is instruction text the model follows, so a description must not be able to
+// forge catalog structure: newlines are folded away so it stays one line, and
+// a tag-like "<" is escaped so it cannot close the block it sits in. Text that
+// is not markup, such as "values < 10", is left alone.
+func catalogText(s string) string {
+	return escapeMarkup(strings.Join(strings.Fields(s), " "))
+}
+
+// escapeMarkup escapes each "<" that begins a tag, leaving other uses intact.
+func escapeMarkup(s string) string {
+	if !strings.Contains(s, "<") {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] != '<' {
+			b.WriteByte(s[i])
+			continue
+		}
+		j := i + 1
+		if j < len(s) && s[j] == '/' {
+			j++
+		}
+		if j < len(s) && isASCIILetter(s[j]) {
+			b.WriteString("&lt;")
+			continue
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
+// attrReplacer escapes text placed in a quoted attribute of the markup this
+// middleware emits. A [strings.Replacer] compiles its matcher once and is safe
+// for concurrent use, so it is built at package scope rather than per call.
+var attrReplacer = strings.NewReplacer(
+	`&`, "&amp;",
+	`<`, "&lt;",
+	`>`, "&gt;",
+	`"`, "&quot;",
+	"\n", " ",
+	"\r", " ",
+)
+
+// attrText escapes text placed in a quoted attribute.
+func attrText(s string) string { return attrReplacer.Replace(s) }
+
+func isASCIILetter(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
 }

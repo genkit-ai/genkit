@@ -279,13 +279,14 @@ func TestPromptAgent_HistoryTagStrippedBeforeModel(t *testing.T) {
 			t.Errorf("request message %d (%s) carries %s: %v", i, m.Role, sessionMessageKey, m.Metadata)
 		}
 	}
-	// The scaffolding tag is what the loop filters on, so it must be present
-	// on the system message and absent from the conversation.
-	if !hasTag((*reqs)[1].Messages[0], promptMessageKey) {
+	// The scaffolding tag is what the loop filters on, and what middleware
+	// reads through IsPromptMessage, so it must be present on the system
+	// message and absent from the conversation.
+	if !IsPromptMessage((*reqs)[1].Messages[0]) {
 		t.Errorf("system message is not tagged %s", promptMessageKey)
 	}
 	for i, m := range (*reqs)[1].Messages[1:] {
-		if hasTag(m, promptMessageKey) {
+		if IsPromptMessage(m) {
 			t.Errorf("history message %d (%s) is tagged %s", i, m.Role, promptMessageKey)
 		}
 	}

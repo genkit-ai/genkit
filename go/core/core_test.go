@@ -17,11 +17,21 @@
 package core
 
 import (
+	"os"
 	"testing"
 
 	"github.com/firebase/genkit/go/internal/registry"
+	"github.com/firebase/genkit/go/internal/tracingtest"
 	"github.com/google/go-cmp/cmp"
 )
+
+// TestMain routes the package's spans through an in-memory Direct
+// instrumentation, so runs carry real trace ids with no OpenTelemetry SDK.
+// Tests that inspect traces use tracingtest.Capture.
+func TestMain(m *testing.M) {
+	tracingtest.InstallDefault()
+	os.Exit(m.Run())
+}
 
 func TestRegisterSchema(t *testing.T) {
 	t.Run("registers schema in registry", func(t *testing.T) {

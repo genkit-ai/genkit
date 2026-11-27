@@ -403,7 +403,7 @@ func TestConfigValidationAtBoundary(t *testing.T) {
 		}
 	}
 
-	sdkSchema := newSDKModel(o.client, "testprovider", "sdk-model", ai.ModelOptions{}).Desc().InputSchema
+	sdkSchema := newSDKModel(o, "sdk-model", ai.ModelOptions{}).Desc().InputSchema
 	if err := base.ValidateValue(req(openai.ChatCompletionNewParams{Temperature: openai.Float(0.5)}), sdkSchema); err != nil {
 		t.Errorf("partial typed SDK config rejected at the boundary: %v", err)
 	}

@@ -182,21 +182,17 @@ async function sanitizeUserPrompt(
     const promptText = extractText(userMessage.content);
 
     if (promptText) {
+      const request = {
+        name: options.templateName,
+        userPromptData: {
+          text: promptText,
+        },
+      };
+      // Input is set at creation so the realtime pending export carries it.
       await runInNewSpan(
-        { metadata: { name: 'sanitizeUserPrompt' } },
+        { metadata: { name: 'sanitizeUserPrompt', input: request } },
         async (meta) => {
-          meta.input = {
-            name: options.templateName,
-            userPromptData: {
-              text: promptText,
-            },
-          };
-          const [response] = await client.sanitizeUserPrompt({
-            name: options.templateName,
-            userPromptData: {
-              text: promptText,
-            },
-          });
+          const [response] = await client.sanitizeUserPrompt(request);
           meta.output = response;
 
           if (response.sanitizationResult) {
@@ -243,21 +239,17 @@ async function sanitizeModelResponse(
     const modelText = extractText(candidate.message.content);
 
     if (modelText) {
+      const request = {
+        name: options.templateName,
+        modelResponseData: {
+          text: modelText,
+        },
+      };
+      // Input is set at creation so the realtime pending export carries it.
       await runInNewSpan(
-        { metadata: { name: 'sanitizeModelResponse' } },
+        { metadata: { name: 'sanitizeModelResponse', input: request } },
         async (meta) => {
-          meta.input = {
-            name: options.templateName,
-            modelResponseData: {
-              text: modelText,
-            },
-          };
-          const [apiResponse] = await client.sanitizeModelResponse({
-            name: options.templateName,
-            modelResponseData: {
-              text: modelText,
-            },
-          });
+          const [apiResponse] = await client.sanitizeModelResponse(request);
           meta.output = apiResponse;
 
           if (apiResponse.sanitizationResult) {

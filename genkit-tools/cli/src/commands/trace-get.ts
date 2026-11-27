@@ -22,8 +22,9 @@ import {
 } from '@genkit-ai/tools-common/utils';
 import { yellow } from 'colorette';
 import { Command, Option } from 'commander';
-import { runWithManager } from '../utils/manager-utils';
-import { cleanTraceJson, formatTraceTree } from '../utils/trace-formatter';
+import { runWithManager } from '../utils/manager-utils.js';
+import { writeStdout } from '../utils/output.js';
+import { cleanTraceJson, formatTraceTree } from '../utils/trace-formatter.js';
 
 /**
  * Options for the `trace:get` CLI command.
@@ -46,7 +47,7 @@ export const traceGet = new Command('trace:get')
   )
   .option('--keep-base64', 'do not strip base64 data URLs in output', false)
   .action(async (traceId: string, options: TraceGetOptions) => {
-    // Redirect logging to stdout for clean JSON
+    // Redirect logging to stderr for clean JSON
     forceStderr();
     const projectRoot = await findProjectRoot();
 
@@ -55,6 +56,7 @@ export const traceGet = new Command('trace:get')
         const response = await manager.getTrace({ traceId });
         if (!response) {
           logger.error(`Trace with ID '${traceId}' not found.`);
+          process.exitCode = 1;
           return;
         }
 
@@ -62,17 +64,18 @@ export const traceGet = new Command('trace:get')
         const processedTrace = cleanTraceJson(response, keepBase64);
 
         if (options.format === 'json') {
-          console.log(JSON.stringify(processedTrace, undefined, 2));
+          writeStdout(JSON.stringify(processedTrace, undefined, 2));
         } else {
-          console.log(
+          logger.info(
             yellow(
               'Hint: pass `--format json` flag to get trace data in JSON format\n'
             )
           );
-          console.log(formatTraceTree(processedTrace));
+          writeStdout(formatTraceTree(processedTrace));
         }
       } catch (e) {
         logger.error(`Error retrieving trace: ${e}`);
+        process.exitCode = 1;
       }
     };
 

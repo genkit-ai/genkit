@@ -16,17 +16,16 @@
 
 """A flow as a Django view. Streaming and request context included."""
 
-from django.http import HttpRequest
 from genkit_django import genkit_django_handler
 from genkit_google_genai import GoogleAI
 from pydantic import BaseModel
 
-from genkit import ActionRunContext, Genkit, ModelResponse
-from genkit.plugin_api import RequestData
+from genkit import FlowContext, Genkit, ModelResponse
+from genkit.web import RequestData
 
 ai = Genkit(
     plugins=[GoogleAI()],
-    model=GoogleAI.gemini_model('gemini-flash-latest'),
+    model=GoogleAI.gemini('gemini-flash-latest'),
 )
 
 
@@ -34,14 +33,14 @@ class SayHiInput(BaseModel):
     name: str = 'Mittens'
 
 
-async def auth_context(request: RequestData[HttpRequest]) -> dict[str, object]:
+async def auth_context(request: RequestData) -> dict[str, object]:
     # The caller is identified from the request, not the JSON body.
-    return {'username': request.request.META.get('HTTP_AUTHORIZATION') or 'guest'}
+    return {'username': request.headers.get('authorization') or 'guest'}
 
 
 @genkit_django_handler(ai, context_provider=auth_context)
 @ai.flow()
-async def say_hi(input: SayHiInput, ctx: ActionRunContext) -> ModelResponse:
+async def say_hi(input: SayHiInput, ctx: FlowContext) -> ModelResponse:
     username = ctx.context.get('username', 'guest')
     stream = ai.generate_stream(
         prompt=f'tell a medium sized joke about {input.name} for user {username}',

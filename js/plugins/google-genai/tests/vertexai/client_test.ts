@@ -19,12 +19,20 @@ import { GoogleAuth } from 'google-auth-library';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import * as sinon from 'sinon';
 import { TextEncoder } from 'util';
+import {
+  CreateInteractionRequest,
+  GeminiInteraction,
+} from '../../src/common/interaction-types.js';
 import { getGenkitClientHeader } from '../../src/common/utils.js';
 import {
   TEST_ONLY,
+  cancelInteraction,
+  createInteraction,
   embedContent,
+  embedPredict,
   generateContent,
   generateContentStream,
+  getInteraction,
   getVertexAIUrl,
   imagenPredict,
   listModels,
@@ -37,6 +45,8 @@ import {
   Content,
   EmbedContentRequest,
   EmbedContentResponse,
+  EmbedPredictRequest,
+  EmbedPredictResponse,
   GenerateContentRequest,
   GenerateContentResponse,
   GenerateContentStreamResult,
@@ -701,7 +711,7 @@ describe('Vertex AI Client', () => {
               generateContent(model, request, currentOptions),
               (err: any) => {
                 assert.strictEqual(err.name, 'GenkitError');
-                assert.strictEqual(err.status, 'UNKNOWN');
+                assert.strictEqual(err.status, 'PERMISSION_DENIED');
                 assert.match(
                   err.message,
                   /Error fetching from .* \[403 Forbidden\] Permission denied/
@@ -712,19 +722,19 @@ describe('Vertex AI Client', () => {
           });
         });
 
-        describe('embedContent', () => {
-          const request: EmbedContentRequest = {
+        describe('embedPredict', () => {
+          const request: EmbedPredictRequest = {
             instances: [{ content: 'test content' }],
             parameters: {},
           };
           const model = 'text-embedding-005';
 
           if (!isExpress) {
-            it('should return EmbedContentResponse', async () => {
-              const mockResponse: EmbedContentResponse = { predictions: [] };
+            it('should return EmbedPredictResponse', async () => {
+              const mockResponse: EmbedPredictResponse = { predictions: [] };
               mockFetchResponse(mockResponse);
 
-              await embedContent(model, request, currentOptions);
+              await embedPredict(model, request, currentOptions);
               const expectedUrl = getResourceUrl(model, 'predict');
               sinon.assert.calledOnceWithExactly(fetchSpy, expectedUrl, {
                 method: 'POST',
@@ -735,8 +745,8 @@ describe('Vertex AI Client', () => {
               sinon.assert.notCalled(runInNewSpanSpy);
             });
 
-            it('should trace embedContent if experimental_debugTraces is true', async () => {
-              const mockResponse: EmbedContentResponse = { predictions: [] };
+            it('should trace embedPredict if experimental_debugTraces is true', async () => {
+              const mockResponse: EmbedPredictResponse = { predictions: [] };
               mockFetchResponse(mockResponse);
 
               const optionsWithTrace: ClientOptions = {
@@ -744,7 +754,7 @@ describe('Vertex AI Client', () => {
                 experimental_debugTraces: true,
               };
 
-              await embedContent(model, request, optionsWithTrace);
+              await embedPredict(model, request, optionsWithTrace);
 
               sinon.assert.calledOnce(runInNewSpanSpy);
 
@@ -757,10 +767,47 @@ describe('Vertex AI Client', () => {
                 model: model,
                 headers: {
                   ...getExpectedHeaders(),
-                  Authorization: '<REDACTED> (17 characters)', // embedContent only runs in Regional/Global mode in tests
+                  Authorization: '<REDACTED> (17 characters)', // embedPredict only runs in Regional/Global mode in tests
                 },
               });
               assert.deepStrictEqual(traceMetadata.output, mockResponse);
+            });
+          } else {
+            it('should throw with unsupported for Express', async () => {
+              await assert.rejects(
+                embedPredict(model, request, currentOptions),
+                notSupportedInExpressErrorMessage
+              );
+            });
+          }
+        });
+
+        describe('embedContent', () => {
+          const request: EmbedContentRequest = {
+            content: { role: 'user', parts: [{ text: 'test content' }] },
+            outputDimensionality: 128,
+          };
+          const model = 'gemini-embedding-2';
+
+          if (!isExpress) {
+            it('should call the embedContent method', async () => {
+              const mockResponse: EmbedContentResponse = {
+                embedding: { values: [0.1, 0.2] },
+              };
+              mockFetchResponse(mockResponse);
+
+              const result = await embedContent(model, request, currentOptions);
+              assert.deepStrictEqual(result, mockResponse);
+              sinon.assert.calledOnceWithExactly(
+                fetchSpy,
+                getResourceUrl(model, 'embedContent'),
+                {
+                  method: 'POST',
+                  headers: getExpectedHeaders(),
+                  redirect: 'manual',
+                  body: JSON.stringify(request),
+                }
+              );
             });
           } else {
             it('should throw with unsupported for Express', async () => {
@@ -830,6 +877,139 @@ describe('Vertex AI Client', () => {
               );
             });
           }
+        });
+
+        describe('createInteraction', () => {
+          const request: CreateInteractionRequest = {
+            model: 'lyria-3-clip-preview',
+            input: [
+              {
+                type: 'user_input',
+                content: [{ type: 'text', text: 'a song' }],
+              },
+            ],
+          };
+          if (!isExpress) {
+            it('should send the Api-Revision header', async () => {
+              const mockResponse: GeminiInteraction = {
+                status: 'completed',
+                steps: [],
+              };
+              mockFetchResponse(mockResponse);
+              const result = await createInteraction(request, currentOptions);
+
+              assert.deepStrictEqual(result, mockResponse);
+              sinon.assert.calledOnceWithExactly(
+                fetchSpy,
+                getBaseUrl(
+                  `projects/${projectId}/locations/${location}/interactions`
+                ),
+                {
+                  method: 'POST',
+                  headers: {
+                    ...getExpectedHeaders(),
+                    'Api-Revision': '2026-05-20',
+                  },
+                  redirect: 'manual',
+                  body: JSON.stringify(request),
+                }
+              );
+            });
+
+            it('should not let custom headers change the Api-Revision', async () => {
+              mockFetchResponse({ status: 'completed', steps: [] });
+              await createInteraction(request, {
+                ...currentOptions,
+                customHeaders: { 'Api-Revision': '2025-01-01' },
+              });
+
+              const headers = fetchSpy.lastCall.args[1].headers;
+              assert.strictEqual(headers['Api-Revision'], '2026-05-20');
+            });
+
+            it('should not let custom headers in another case change the Api-Revision', async () => {
+              mockFetchResponse({ status: 'completed', steps: [] });
+              await createInteraction(request, {
+                ...currentOptions,
+                customHeaders: {
+                  'api-revision': '2025-01-01',
+                  'x-custom': 'a',
+                },
+              });
+
+              // fetch merges case variants of a header, so check the merged
+              // value.
+              const headers = new Headers(fetchSpy.lastCall.args[1].headers);
+              assert.strictEqual(headers.get('api-revision'), '2026-05-20');
+              assert.strictEqual(headers.get('x-custom'), 'a');
+            });
+          } else {
+            it('should use the Express Interactions URL', async () => {
+              mockFetchResponse({ status: 'completed', steps: [] });
+              await createInteraction(request, currentOptions);
+
+              sinon.assert.calledOnceWithExactly(
+                fetchSpy,
+                getBaseUrl('locations/global/interactions'),
+                {
+                  method: 'POST',
+                  headers: {
+                    ...getExpectedHeaders(),
+                    'Api-Revision': '2026-05-20',
+                  },
+                  redirect: 'manual',
+                  body: JSON.stringify(request),
+                }
+              );
+            });
+          }
+
+          it('should get and cancel an interaction by ID', async () => {
+            const interactionsPath = isExpress
+              ? 'locations/global/interactions'
+              : `projects/${projectId}/locations/${location}/interactions`;
+
+            mockFetchResponse({ id: 'v1_abc123', status: 'in_progress' });
+            await getInteraction('v1_abc123', currentOptions);
+            assert.strictEqual(
+              fetchSpy.lastCall.args[0],
+              getBaseUrl(`${interactionsPath}/v1_abc123`)
+            );
+            assert.strictEqual(fetchSpy.lastCall.args[1].method, 'GET');
+            assert.strictEqual(
+              fetchSpy.lastCall.args[1].headers['Api-Revision'],
+              '2026-05-20'
+            );
+
+            mockFetchResponse({ id: 'v1_abc123', status: 'cancelled' });
+            const cancelled = await cancelInteraction(
+              'v1_abc123',
+              currentOptions
+            );
+            assert.strictEqual(
+              fetchSpy.lastCall.args[0],
+              getBaseUrl(`${interactionsPath}/v1_abc123/cancel`)
+            );
+            assert.strictEqual(fetchSpy.lastCall.args[1].method, 'POST');
+            assert.strictEqual(cancelled.status, 'cancelled');
+          });
+
+          it('should prefer the Interactions error code over the HTTP status', async () => {
+            mockFetchResponse(
+              { error: { code: 'model_not_found', message: 'No such model' } },
+              false,
+              400,
+              'Bad Request'
+            );
+            await assert.rejects(
+              createInteraction(request, currentOptions),
+              (err: any) => {
+                assert.strictEqual(err.name, 'GenkitError');
+                assert.strictEqual(err.status, 'NOT_FOUND');
+                return true;
+              }
+            );
+          });
         });
 
         describe('veoPredict', () => {
@@ -1016,7 +1196,7 @@ describe('Vertex AI Client', () => {
 
       await assert.rejects(listModels(regionalClientOptions), (err: any) => {
         assert.strictEqual(err.name, 'GenkitError');
-        assert.strictEqual(err.status, 'UNKNOWN');
+        assert.strictEqual(err.status, 'DEADLINE_EXCEEDED');
         assert.match(
           err.message,
           /Error fetching from .* \[504 Gateway Timeout\] <h1>Gateway Timeout<\/h1>/

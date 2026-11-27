@@ -1,6 +1,18 @@
 # Genkit Python SDK
 
-Build production-ready AI applications in Python with type-safe flows, structured outputs, and integrated observability.
+Build production-ready AI applications in Python with type-safe flows, structured outputs, and pluggable observability.
+
+> **Building with a coding agent? Install the Genkit Python skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-python
+> ```
+>
+> It teaches your agent the current Genkit Python APIs and common gotchas.
+> Source, manual install and skills for other languages:
+> [genkit-ai/skills](https://github.com/genkit-ai/skills).
+
+> **Upgrading from 0.12?** See the [0.12 → 0.13 migration guide](docs/migrating-from-0.12.md).
 
 ## Quick Start
 
@@ -29,7 +41,7 @@ ai = Genkit(plugins=[GoogleAI()])
 def get_weather(city: str) -> str:
     return f"Sunny, 72°F in {city}"
 
-# 3. Define an observable flow
+# 3. Define a flow
 @ai.flow()
 async def plan_trip(destination: str) -> str:
     response = await ai.generate(
@@ -44,7 +56,7 @@ async def plan_trip(destination: str) -> str:
 
 - **Type-Safe by Design:** Leverage Python type annotations and Pydantic models for structured inputs, outputs, and tool definitions.
 - **Multi-Model Provider API:** Switch effortlessly between Google Gemini, Anthropic Claude, OpenAI, Ollama, Vertex AI, and Amazon Bedrock with a unified API.
-- **Integrated Observability:** Built-in OpenTelemetry tracing and evaluation metrics. Inspect spans and debug flows in real-time using the Genkit Developer UI (`genkit start`).
+- **Pluggable Observability:** Under `genkit start`, `Genkit()` fills the Developer UI Traces tab over HTTP. If you start the app yourself after `genkit start`, the collector URL arrives on the reflection handshake.
 - **Deploy Anywhere:** Expose flows as standard ASGI/WSGI applications compatible with FastAPI, Flask, Django, Cloud Run, or any serverless platform.
 
 ---
@@ -96,6 +108,7 @@ Open the Dev UI in your browser to interact with registered flows and agents dir
 
 ### Documentation & Maintenance
 - **API Reference:** For complete class and method signatures, see [docs/index.md](docs/index.md).
+- **Migration Guides:** Upgrading between versions, see [docs/migrating-from-0.12.md](docs/migrating-from-0.12.md).
 - **Contributing & Standards:** For coding conventions, commit guidelines, and type-checking rules, see [CONTRIBUTING.md](../CONTRIBUTING.md).
 - **Release Playbook:** For maintainer release procedures, see [docs/release_playbook.md](docs/release_playbook.md).
 

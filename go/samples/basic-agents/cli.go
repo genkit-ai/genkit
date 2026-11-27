@@ -171,7 +171,7 @@ var errQuit = errors.New("quit")
 //
 // The CLI itself knows nothing about any particular agent: it lists them,
 // streams their turns, and (when set) routes tool interrupts to onInterrupt.
-// Agents without interruptible tools leave onInterrupt nil and the rest of the
+// Agents without resumable tools leave onInterrupt nil and the rest of the
 // flow is identical. That split is what lets this same cli.go back any future
 // sample, with tool interrupts or without.
 type agentEntry struct {
@@ -207,11 +207,11 @@ func newEntry[State any](a *aix.Agent[State], onInterrupt InterruptHandler) agen
 
 // InterruptHandler resolves a single tool interrupt into a resume part. It
 // receives the interrupted tool-request part (read its typed payload with
-// tool.InterruptAs) and a Prompter for asking the user questions through
+// ai.InterruptAs) and a Prompter for asking the user questions through
 // the CLI's input stream. It returns one of:
 //
-//   - a restart part (tool.Resume) to re-run the tool with resume data,
-//   - a response part (tool.Respond) to answer the tool directly, or
+//   - a restart part (InterruptedCall.Restart) to re-run the tool with resume data,
+//   - a response part (InterruptedCall.Respond) to answer the tool directly, or
 //   - nil to leave this interrupt unresolved.
 //
 // The CLI sorts the returned part into the right half of aix.ToolResume,
@@ -924,7 +924,7 @@ func formatToolInput(input any) string {
 // handlers never deal with the wire shape. Returns nil if none resolved.
 func resolveInterrupts(hooks agentHooks, p *Prompter, interrupts []*ai.Part) *aix.ToolResume {
 	if hooks.onInterrupt == nil {
-		// An interruptible tool fired on an agent the CLI wasn't told how to
+		// A resumable tool fired on an agent the CLI wasn't told how to
 		// resume. That's a wiring bug in the sample, not user input, so say
 		// so plainly instead of hanging on a prompt that never comes.
 		fmt.Printf("\n[%s paused on %d tool interrupt(s), but no interrupt handler is registered for it]\n",

@@ -2,6 +2,16 @@
 
 Experimental [A2UI](https://a2ui.org/) middleware for Genkit Python.
 
+> **Building with a coding agent? Install the Genkit Python skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-python
+> ```
+>
+> It teaches your agent the current Genkit Python APIs and common gotchas.
+> Source, manual install and skills for other languages:
+> [genkit-ai/skills](https://github.com/genkit-ai/skills).
+
 Add `Surfaces()` to `use=[...]` on `ai.generate` or `define_agent`. The model may
 emit ` ```a2ui ` fences; the middleware rewrites them into
 `application/a2ui+json` data parts. On the next turn, those parts become text
@@ -15,7 +25,7 @@ from genkit_google_genai import GoogleAI
 ai = Genkit(plugins=[GoogleAI()])
 
 response = await ai.generate(
-    model='googleai/gemini-2.5-flash',
+    model='googleai/gemini-flash-latest',
     prompt='Show me the weather in Tokyo',
     use=[Surfaces()],
 )
@@ -37,7 +47,7 @@ catalog = A2uiCatalog(
 load_catalog(ai, catalog)
 
 response = await ai.generate(
-    model='googleai/gemini-2.5-flash',
+    model='googleai/gemini-flash-latest',
     prompt='Show a warning banner',
     use=[Surfaces(catalog=catalog.id)],
 )

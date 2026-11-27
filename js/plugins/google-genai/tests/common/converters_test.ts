@@ -56,6 +56,35 @@ describe('toGeminiMessage', () => {
     },
     {
       should:
+        'should send speechMetadata (TTS speaker and style) on text parts',
+      inputMessage: {
+        role: 'user',
+        content: [
+          {
+            text: "How's it going today, Jane?",
+            metadata: {
+              speechMetadata: { speaker: 'Joe', style: 'cheerful' },
+            },
+          },
+          {
+            text: 'Not too bad.',
+            metadata: { speechMetadata: { speaker: 'Jane' } },
+          },
+        ],
+      },
+      expectedOutput: {
+        role: 'user',
+        parts: [
+          {
+            text: "How's it going today, Jane?",
+            speechMetadata: { speaker: 'Joe', style: 'cheerful' },
+          },
+          { text: 'Not too bad.', speechMetadata: { speaker: 'Jane' } },
+        ],
+      },
+    },
+    {
+      should:
         'should transform genkit message (tool request content) correctly',
       inputMessage: {
         role: 'model',

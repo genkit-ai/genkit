@@ -6,6 +6,16 @@ Genkit is a Python SDK from Google. One API for generate, tools, structured outp
 
 Vertex AI, Cloud Trace, and Firestore are there if you want them. So are OpenAI, Anthropic, Ollama, and Bedrock.
 
+> **Building with a coding agent? Install the Genkit Python skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-python
+> ```
+>
+> It teaches your agent the current Genkit Python APIs and common gotchas.
+> Source, manual install and skills for other languages:
+> [genkit-ai/skills](https://github.com/genkit-ai/skills).
+
 ## Install
 
 ```bash
@@ -14,10 +24,10 @@ uv add genkit genkit-google-genai
 
 ```python
 from pydantic import BaseModel, Field
-from genkit import Genkit
+from genkit import Genkit, PublicError
 from genkit_google_genai import GoogleAI
 
-ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
 
 
 class Issue(BaseModel):
@@ -32,6 +42,11 @@ async def review(code: str) -> Issue:
         prompt=f'Review this code:\n{code}',
         output_schema=Issue,
     )
+    if result.output is None:
+        raise PublicError(
+            'INTERNAL',
+            f'Model did not return an Issue (finish_reason={result.finish_reason}, error={result.error})',
+        )
     return result.output
 
 

@@ -16,75 +16,50 @@
 
 """Model protocol types for plugin authors; application code should call :class:`genkit.Genkit` ``generate``."""
 
+from genkit._ai._background_model import BackgroundModel
 from genkit._ai._model import (
-    ModelConfigDict,
-    model,
-    model_action_metadata,
-    model_ref,
+    Model,
 )
-from genkit._core._background import BackgroundAction, background_model
+from genkit._core._action import ModelContext
 from genkit._core._model import (
-    Candidate,
-    Document,
     GenerateActionOptions,
-    Message,
+    GenerationUsage,
+    ModelConfig,
     ModelRef,
     ModelRequest,
-    ModelResponse,
-    ModelResponseChunk,
-    ModelUsage,
-    Part,
-    get_basic_usage_stats,
+    OutputConfig,
 )
 from genkit._core._typing import (
-    Constrained,
-    Error,
-    FinishReason,
+    ConstrainedSupport,
     ModelInfo,
-    Operation,
-    Stage,
-    Supports,
+    ModelStage,
+    ModelSupports,
     ToolDefinition,
     ToolRequest,
     ToolResponse,
 )
 
 __all__ = [
-    # Request/Response types
-    'BackgroundAction',
-    'ModelRequest',
-    'ModelResponse',
-    'ModelResponseChunk',
-    # Usage and metadata
-    'ModelUsage',
-    'Candidate',
-    'FinishReason',
+    # Models, request and context types
+    'Model',
+    'BackgroundModel',
     'GenerateActionOptions',
-    # Error and operation
-    'Error',
-    'Operation',
+    'ModelContext',
+    'ModelRequest',
+    'OutputConfig',
+    # Usage and metadata
+    'GenerationUsage',
     # Tool types
     'ToolRequest',
     'ToolDefinition',
     'ToolResponse',
     # Model info
     'ModelInfo',
-    'Supports',
-    'Constrained',
-    'Stage',
-    # Factory functions and metadata
-    'model',
-    'background_model',
-    'model_action_metadata',
-    'model_ref',
+    'ModelSupports',
+    'ConstrainedSupport',
+    'ModelStage',
     # Reference types
     'ModelRef',
     # Config
-    'ModelConfigDict',
-    # Message
-    'Document',
-    'Message',
-    'Part',
-    # Usage
-    'get_basic_usage_stats',
+    'ModelConfig',
 ]

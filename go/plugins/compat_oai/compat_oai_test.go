@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
@@ -184,4 +185,39 @@ func TestClientForKeyKeepsTheIdentityScrub(t *testing.T) {
 	}
 	assertHeaderAbsent(t, got, "OpenAI-Organization")
 	assertHeaderAbsent(t, got, "OpenAI-Project")
+}
+
+// TestSDKModelsCountReasoningApart pins that every path to a model whose
+// config is the SDK's request type reads usage by the plugin's
+// SeparateReasoningTokens. A response with no total_tokens leaves nothing
+// else to decide by, so a path that drops the flag subtracts reasoning the
+// provider counted apart from the completion.
+func TestSDKModelsCountReasoningApart(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{
+			"id":"c1","object":"chat.completion","created":1,"model":"m",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],
+			"usage":{"prompt_tokens":10,"completion_tokens":7,"completion_tokens_details":{"reasoning_tokens":5}}
+		}`)
+	}))
+	t.Cleanup(server.Close)
+	o := &OpenAICompatible{Provider: "testprovider", APIKey: "stub", BaseURL: server.URL, SeparateReasoningTokens: true}
+	o.Init(context.Background())
+
+	for name, m := range map[string]api.Action{
+		"NewModel":           o.NewModel("m", ai.ModelOptions{}),
+		"ResolveAction":      o.ResolveAction(api.ActionTypeModel, "m"),
+		"ResolveModelAction": ResolveModelAction(o, api.ActionTypeModel, "m", func(string) ai.ModelOptions { return ai.ModelOptions{} }),
+	} {
+		t.Run(name, func(t *testing.T) {
+			resp, err := m.(*ai.ModelAction).Generate(context.Background(), &ai.ModelRequest{Messages: []*ai.Message{ai.NewUserTextMessage("hi")}}, nil)
+			if err != nil {
+				t.Fatalf("Generate() error = %v", err)
+			}
+			if got := resp.Usage.OutputTokens; got != 7 {
+				t.Errorf("OutputTokens = %d, want 7, the reasoning counted apart", got)
+			}
+		})
+	}
 }

@@ -27,6 +27,7 @@ import (
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/compat_oai/openrouter"
 	"github.com/openai/openai-go"
@@ -576,5 +577,30 @@ func TestDynamicCapabilitiesAndOverride(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "does not support media") {
 		t.Errorf("error = %v, want it to name the missing media support", err)
+	}
+}
+
+// OpenRouter answers an unknown model with 400; its message names the cause. The plugin reports the status the cause calls for, and leaves any
+// other 400 as INVALID_ARGUMENT.
+func TestUnknownModelIsNotFound(t *testing.T) {
+	for body, want := range map[string]status.Name{
+		`{"error":{"message":"no-such-model is not a valid model ID","code":400}}`: status.NotFound,
+		`{"error":{"message":"Invalid request.","code":400}}`:                      status.InvalidArgument,
+	} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, body)
+		}))
+		g := genkit.Init(context.Background(), genkit.WithPlugins(&openrouter.OpenRouter{
+			APIKey: "test-key",
+			Opts:   []option.RequestOption{option.WithBaseURL(server.URL)},
+		}))
+		_, err := genkit.Generate(context.Background(), g,
+			ai.WithModelName("openrouter/no-such-model"), ai.WithPrompt("hi"))
+		server.Close()
+		if got := status.Of(err); got != want {
+			t.Errorf("body %s: status = %q, want %q: %v", body, got, want, err)
+		}
 	}
 }

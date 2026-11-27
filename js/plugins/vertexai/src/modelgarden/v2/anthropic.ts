@@ -387,7 +387,9 @@ function toAnthropicContent(
   | ThinkingBlockParam
 > {
   return content.map((p) => {
-    if (p.reasoning) {
+    // Claude can return signed thinking blocks with empty text, so check the
+    // type rather than truthiness.
+    if (typeof p.reasoning === 'string') {
       const signature = p.metadata?.thoughtSignature;
       return {
         type: 'thinking',
@@ -413,10 +415,7 @@ function toAnthropicContent(
           type: 'base64',
           data: b64Data,
           media_type: p.media.contentType as
-            | 'image/jpeg'
-            | 'image/png'
-            | 'image/gif'
-            | 'image/webp',
+            'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
         },
       };
     }
@@ -430,7 +429,7 @@ function toAnthropicContent(
   });
 }
 
-function toAnthropicRole(role): 'user' | 'assistant' {
+function toAnthropicRole(role: string): 'user' | 'assistant' {
   if (role === 'model') {
     return 'assistant';
   }
@@ -497,11 +496,7 @@ export function fromAnthropicResponse(
     message,
     finishReason: toGenkitFinishReason(
       response.stop_reason as
-        | 'end_turn'
-        | 'max_tokens'
-        | 'stop_sequence'
-        | 'tool_use'
-        | null
+        'end_turn' | 'max_tokens' | 'stop_sequence' | 'tool_use' | null
     ),
     custom: {
       id: response.id,

@@ -1,7 +1,7 @@
 # Tool interrupts
 
 A tool can stop and ask a human before it finishes. You see the reason,
-then `restart_tool` re-runs it or `respond_to_interrupt` injects a
+then `part.restart()` re-runs it or `part.respond()` injects a
 result without running the tool.
 
 ```bash

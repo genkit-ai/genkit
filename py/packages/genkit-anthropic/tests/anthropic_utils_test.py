@@ -23,7 +23,7 @@ and cache-aware usage building.
 
 import base64
 
-from genkit_anthropic.utils import (
+from genkit_anthropic._utils import (
     DOCUMENT_MIME_TYPES,
     PDF_MIME_TYPE,
     TEXT_MIME_TYPE,
@@ -36,11 +36,8 @@ from genkit_anthropic.utils import (
     to_anthropic_media,
 )
 
-from genkit import (
-    Metadata,
-    ModelUsage,
-    Part,
-)
+from genkit import Part
+from genkit.model import GenerationUsage
 
 # ---------------------------------------------------------------------------
 # get_cache_control tests
@@ -61,19 +58,19 @@ class TestGetCacheControl:
         assert get_cache_control(part) is None
 
     def test_returns_cache_control_with_metadata_rootmodel(self) -> None:
-        """Extracts cache_control when metadata is a Metadata RootModel."""
-        part = Part.from_text('hello', metadata=Metadata({'cache_control': {'type': 'ephemeral'}}))
+        """Extracts cache_control when metadata is a dict."""
+        part = Part.from_text('hello', metadata={'cache_control': {'type': 'ephemeral'}})
         result = get_cache_control(part)
         assert result == {'type': 'ephemeral'}
 
     def test_returns_none_when_no_cache_control_key(self) -> None:
         """Returns None when metadata has no cache_control key."""
-        part = Part.from_text('hello', metadata=Metadata({'other_key': 'value'}))
+        part = Part.from_text('hello', metadata={'other_key': 'value'})
         assert get_cache_control(part) is None
 
     def test_returns_none_for_non_dict_cache_control(self) -> None:
         """Returns None when cache_control is not a dict."""
-        part = Part.from_text('hello', metadata=Metadata({'cache_control': 'invalid'}))
+        part = Part.from_text('hello', metadata={'cache_control': 'invalid'})
         assert get_cache_control(part) is None
 
     def test_works_with_media_part(self) -> None:
@@ -81,7 +78,7 @@ class TestGetCacheControl:
         part = Part.from_media(
             url='https://example.com/img.png',
             content_type='image/png',
-            metadata=Metadata({'cache_control': {'type': 'ephemeral'}}),
+            metadata={'cache_control': {'type': 'ephemeral'}},
         )
         result = get_cache_control(part)
         assert result == {'type': 'ephemeral'}
@@ -111,32 +108,17 @@ class TestGetThinkingSignature:
 
     def test_returns_none_when_metadata_key_absent(self) -> None:
         """Returns None when metadata has no signature keys."""
-        part = Part.from_text('hello', metadata=Metadata({'other_key': 'value'}))
+        part = Part.from_text('hello', metadata={'other_key': 'value'})
         assert get_thinking_signature(part) is None
 
     def test_reads_thought_signature(self) -> None:
-        """Reads JS-style thoughtSignature metadata."""
-        part = Part.from_text('hello', metadata=Metadata({'thoughtSignature': 'sig-js'}))
-        assert get_thinking_signature(part) == 'sig-js'
-
-    def test_falls_back_to_signature(self) -> None:
-        """Reads Go-style signature metadata when thoughtSignature is absent."""
-        part = Part.from_text('hello', metadata=Metadata({'signature': 'sig-go'}))
-        assert get_thinking_signature(part) == 'sig-go'
-
-    def test_prefers_thought_signature(self) -> None:
-        """Prefers JS-style metadata when both aliases are present."""
-        part = Part.from_text('hello', metadata=Metadata({'thoughtSignature': 'sig-js', 'signature': 'sig-go'}))
-        assert get_thinking_signature(part) == 'sig-js'
-
-    def test_decodes_bytes_signature(self) -> None:
-        """Decodes Go-style raw byte signatures."""
-        part = Part.from_text('hello', metadata=Metadata({'signature': b'sig-go'}))
-        assert get_thinking_signature(part) == 'sig-go'
+        """Reads thoughtSignature metadata."""
+        part = Part.from_text('hello', metadata={'thoughtSignature': 'sig'})
+        assert get_thinking_signature(part) == 'sig'
 
     def test_returns_none_for_non_string_signature(self) -> None:
         """Returns None when signature metadata is not string-like."""
-        part = Part.from_text('hello', metadata=Metadata({'signature': 123}))
+        part = Part.from_text('hello', metadata={'thoughtSignature': 123})
         assert get_thinking_signature(part) is None
 
 
@@ -300,7 +282,7 @@ class TestBuildCacheUsage:
 
     def test_basic_usage_without_cache(self) -> None:
         """Builds usage without cache tokens."""
-        basic = ModelUsage(input_characters=10, output_characters=20)
+        basic = GenerationUsage(input_characters=10, output_characters=20)
         result = build_cache_usage(
             input_tokens=100,
             output_tokens=50,
@@ -315,7 +297,7 @@ class TestBuildCacheUsage:
 
     def test_usage_with_cache_creation(self) -> None:
         """Includes cache_creation_input_tokens in custom."""
-        basic = ModelUsage()
+        basic = GenerationUsage()
         result = build_cache_usage(
             input_tokens=100,
             output_tokens=50,
@@ -328,7 +310,7 @@ class TestBuildCacheUsage:
 
     def test_usage_with_cache_read(self) -> None:
         """Includes cache_read_input_tokens in custom."""
-        basic = ModelUsage()
+        basic = GenerationUsage()
         result = build_cache_usage(
             input_tokens=100,
             output_tokens=50,
@@ -341,7 +323,7 @@ class TestBuildCacheUsage:
 
     def test_usage_with_both_cache_fields(self) -> None:
         """Includes both cache token fields when both are present."""
-        basic = ModelUsage()
+        basic = GenerationUsage()
         result = build_cache_usage(
             input_tokens=100,
             output_tokens=50,
@@ -355,7 +337,7 @@ class TestBuildCacheUsage:
 
     def test_zero_cache_tokens_are_excluded(self) -> None:
         """Zero cache tokens don't appear in custom field."""
-        basic = ModelUsage()
+        basic = GenerationUsage()
         result = build_cache_usage(
             input_tokens=100,
             output_tokens=50,

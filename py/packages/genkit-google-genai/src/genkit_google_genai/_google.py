@@ -1,0 +1,1556 @@
+# Copyright 2025 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+
+"""Google AI and Vertex AI plugin implementations for Genkit.
+
+This module provides the GoogleAI and VertexAI plugins that enable Genkit to use
+Google's generative AI models. Both plugins use dynamic model discovery via the
+Google GenAI SDK to detect and register available models at runtime.
+
+Supported capabilities include text generation (Gemini/Gemma), text embeddings,
+image generation (Gemini native image), and video generation (Veo).
+
+Example:
+    ```python
+    from genkit import Genkit
+    from genkit_google_genai import GoogleAI
+
+    # 1. Initialize Genkit with dynamic model discovery
+    ai = Genkit(plugins=[GoogleAI()])
+
+    # 2. Generate content using any discovered Gemini model
+    response = await ai.generate(
+        model=GoogleAI.gemini('gemini-flash-latest'),
+        prompt='Suggest 3 names for a space-themed coffee shop.',
+    )
+
+    # 3. Inspect output shapes directly
+    print(response.text)
+    # => 1. AstroBrew
+    #    2. Nebula Nectar
+    #    3. Cosmic Cup
+    ```
+"""
+
+from __future__ import annotations
+
+import os
+from collections.abc import Callable, Mapping
+from typing import Any, NoReturn
+
+import httpx
+from google import genai
+from google.auth import default as google_auth_default
+from google.auth.credentials import Credentials
+from google.auth.exceptions import DefaultCredentialsError
+from google.genai.errors import APIError
+from google.genai.types import HttpOptions, HttpRetryOptions, Model as GenaiModel
+from pydantic import BaseModel
+
+import genkit_google_genai._constants as const
+from genkit import GenkitError, ModelResponse, Operation, get_logger
+from genkit.embedder import Embedder, EmbedderRef, EmbedRequest, EmbedResponse
+from genkit.model import (
+    BackgroundModel,
+    Model,
+    ModelContext,
+    ModelInfo,
+    ModelRef,
+    ModelRequest,
+)
+from genkit.plugin_api import (
+    GENKIT_USER_AGENT,
+    Action,
+    ActionKind,
+    BackgroundAction,
+    Plugin,
+    loop_local_client,
+)
+from genkit_google_genai._auth import GOOGLE_AUTH_ERRORS, raise_auth_error
+from genkit_google_genai._evaluators._evaluation import (
+    VertexAIEvaluationMetricType,
+    create_vertex_evaluators,
+)
+from genkit_google_genai._interactions._options import ClientOptions
+from genkit_google_genai._models._antigravity import AntigravityConfig, create_antigravity_action
+from genkit_google_genai._models._deep_research import (
+    DeepResearchConfig,
+    create_deep_research_background_model,
+    deep_research_model,
+)
+from genkit_google_genai._models._embedder import (
+    VERTEX_KNOWN_EMBEDDERS,
+    Embedder as GoogleEmbedder,
+    EmbeddingConfig,
+    get_embedder_info,
+)
+from genkit_google_genai._models._gemini import (
+    SUPPORTED_MODELS,
+    GeminiConfig,
+    GeminiImageConfig,
+    GeminiModel,
+    GeminiTtsConfig,
+    GemmaConfig,
+    KnownGeminiImage,
+    KnownGeminiTts,
+    KnownGemma,
+    KnownGoogleAIGemini,
+    KnownVertexAIGemini,
+    google_model_info,
+    is_gemma_model,
+    is_image_model,
+    is_tts_model,
+    is_tuned_gemini_name,
+)
+from genkit_google_genai._models._interactions_lyria import (
+    LyriaConfig as InteractionsLyriaConfig,
+    create_lyria_action,
+)
+from genkit_google_genai._models._interactions_registry import (
+    KnownLyria,
+    deep_research_model_info,
+    is_antigravity_model_name,
+    is_deep_research_model_name,
+    is_lyria_model_name,
+    list_known_antigravity_models,
+    list_known_deep_research_models,
+    list_known_lyria_models,
+)
+from genkit_google_genai._models._model_refs import (
+    family_embedder_ref,
+    family_model_ref,
+)
+from genkit_google_genai._models._routing import (
+    is_unroutable_model_id,
+    is_unsupported_image_model_name,
+    strip_ref_prefixes,
+)
+from genkit_google_genai._models._sdk_config import check_timeout_seconds, timeout_seconds_to_ms
+from genkit_google_genai._models._veo import (
+    KnownGoogleAIVeo,
+    KnownVertexAIVeo,
+    VeoConfig,
+    VeoModel,
+    is_veo_model,
+    veo_model_info,
+)
+from genkit_google_genai._models._virtual_try_on import (
+    VERTEX_KNOWN_VIRTUAL_TRY_ON,
+    KnownVirtualTryOn,
+    VirtualTryOnConfig,
+    VirtualTryOnModel,
+    is_virtual_try_on_model,
+    virtual_try_on_model_info,
+)
+from genkit_google_genai._provider_errors import TRANSPORT_ERRORS, api_error, transport_error
+
+logger = get_logger(__name__)
+
+
+class GenaiModels:
+    """Container for models discovered dynamically from the Google GenAI API.
+
+    This class categorizes models by their capabilities based on the
+    supported_actions field returned by the API.
+
+    Attributes:
+        gemini: List of Gemini/Gemma model names (generateContent action).
+        embedders: List of embedding model names (embedContent action).
+        veo: List of Veo video generation model names (generateVideos action).
+    """
+
+    gemini: list[str]
+    embedders: list[str]
+    veo: list[str]
+
+    def __init__(self) -> None:
+        """Initialize empty model lists."""
+        self.gemini = []
+        self.embedders = []
+        self.veo = []
+
+
+def _categorize_genai_model(m: GenaiModel, models: GenaiModels, is_vertex: bool) -> None:
+    """Add a model to the appropriate catalog bucket."""
+    name = m.name
+    if not name:
+        return
+
+    # Cleanup prefix
+    if is_vertex:
+        if name.startswith('publishers/google/models/'):
+            name = name[25:]
+    elif name.startswith('models/'):
+        name = name[7:]
+
+    description = (m.description or '').lower()
+    if 'deprecated' in description:
+        return
+
+    # Vertex AI returns supported_actions=None for every publisher model, so
+    # categorize by name. Embedders and Virtual Try-On are deliberately excluded:
+    # they are advertised from curated lists (VERTEX_KNOWN_EMBEDDERS,
+    # VERTEX_KNOWN_VIRTUAL_TRY_ON) rather than discovered here.
+    if is_vertex:
+        lower_name = name.lower()
+        if 'embedding' in lower_name or is_virtual_try_on_model(name):
+            return
+        elif is_unsupported_image_model_name(name):
+            return
+        elif is_veo_model(name):
+            models.veo.append(name)
+        elif 'gemini' in lower_name or 'gemma' in lower_name:
+            models.gemini.append(name)
+        return
+
+    if not m.supported_actions:
+        return
+
+    # Embedders
+    if 'embedContent' in m.supported_actions:
+        models.embedders.append(name)
+
+    # Veo
+    if 'generateVideos' in m.supported_actions or is_veo_model(name):
+        models.veo.append(name)
+
+    # Gemini / Gemma
+    if 'generateContent' in m.supported_actions:
+        lower_name = name.lower()
+        if 'gemini' in lower_name or 'gemma' in lower_name:
+            models.gemini.append(name)
+
+
+async def _list_genai_models(client: genai.Client, is_vertex: bool) -> GenaiModels:
+    """Discover and categorize models through the SDK's asynchronous client."""
+    models = GenaiModels()
+    try:
+        async for listed_model in await client.aio.models.list():
+            _categorize_genai_model(listed_model, models, is_vertex)
+    except APIError as e:
+        raise api_error(e) from e
+    except GOOGLE_AUTH_ERRORS as e:
+        raise_auth_error(e)
+    except TRANSPORT_ERRORS as e:
+        raise transport_error(e) from e
+    return models
+
+
+GOOGLEAI_PLUGIN_NAME = 'googleai'
+VERTEXAI_PLUGIN_NAME = 'vertexai'
+
+PLUGIN_DISPLAY_NAME: dict[str, str] = {
+    GOOGLEAI_PLUGIN_NAME: 'Google AI',
+    VERTEXAI_PLUGIN_NAME: 'Vertex AI',
+}
+
+
+def _plugin_client(client_kwargs: dict[str, Any]) -> genai.Client:
+    """Build the plugin's client on first use in a loop.
+
+    Construction is lazy, so it runs inside the first action body. Vertex with
+    no project resolves ADC here; a missing or rejected credential becomes
+    UNAUTHENTICATED instead of a bare google.auth error.
+    """
+    try:
+        return genai.client.Client(**client_kwargs)
+    except GOOGLE_AUTH_ERRORS as e:
+        raise_auth_error(e)
+
+
+def _new_gemini(plugin: GoogleAI | VertexAI, clean_name: str) -> GeminiModel:
+    """Construct a GeminiModel using the plugin's loop-local client."""
+    return GeminiModel(
+        clean_name,
+        plugin._runtime_client(),
+        client_kwargs=plugin._loop_client_kwargs(),
+        base_url_pinned=plugin._base_url_pinned,
+        legacy_response_schema=plugin._legacy_response_schema,
+    )
+
+
+def _model_action(name: str, fn: Callable[..., Any], model_info: ModelInfo, config_schema: type[BaseModel]) -> Model:
+    """Build a MODEL Action with family-specific request typing on ``fn``."""
+    return Model(name, fn, config_schema=config_schema, info=model_info)
+
+
+def googleai_name(name: str) -> str:
+    """Create a GoogleAI action name.
+
+    Args:
+        name: Base name for the action.
+
+    Returns:
+        The fully qualified Google AI action name.
+    """
+    return f'{GOOGLEAI_PLUGIN_NAME}/{name}'
+
+
+def vertexai_name(name: str) -> str:
+    """Create a VertexAI action name.
+
+    Args:
+        name: Base name for the action.
+
+    Returns:
+        The fully qualified Google AI action name.
+    """
+    return f'{VERTEXAI_PLUGIN_NAME}/{name}'
+
+
+def _create_embedder_action(
+    name: str,
+    client_getter: Callable[[], genai.Client],
+    plugin_name: str,
+) -> Action:
+    """Create an Action object for an embedder.
+
+    Args:
+        name: The embedder id without the plugin prefix.
+        client_getter: Function returning the loop-local Google GenAI client.
+        plugin_name: The name of the plugin (googleai or vertexai).
+
+    Returns:
+        Action object for the embedder.
+    """
+    full_name = f'{plugin_name}/{name}'
+    label = f'{PLUGIN_DISPLAY_NAME[plugin_name]} - {name}'
+    embed_info = get_embedder_info(
+        name=name,
+        label=label,
+        is_vertex=(plugin_name == VERTEXAI_PLUGIN_NAME),
+    )
+
+    async def _run(request: EmbedRequest[EmbeddingConfig]) -> EmbedResponse:
+        embedder_client = GoogleEmbedder(
+            version=name,
+            client=client_getter(),
+            is_vertex=(plugin_name == VERTEXAI_PLUGIN_NAME),
+        )
+        return await embedder_client.generate(request)
+
+    return Embedder(full_name, _run, config_schema=EmbeddingConfig, info=embed_info)
+
+
+def _create_veo_background_model(
+    name: str,
+    client_getter: Callable[[], genai.Client],
+    plugin_name: str,
+    client_kwargs: Callable[[], dict[str, Any]] | None = None,
+) -> BackgroundModel:
+    """Create the start/check action pair for a Veo video generation model.
+
+    Veo runs as a background operation: callers start a generation and poll
+    it, they never block a generate call on a multi-minute video render. Both
+    plugins therefore expose Veo only as a BackgroundModel (start + check),
+    never as a blocking MODEL.
+
+    Args:
+        name: The model id without the plugin prefix.
+        client_getter: Function returning the loop-local Google GenAI client.
+        plugin_name: The name of the plugin (googleai or vertexai).
+        client_kwargs: Returns the plugin-level client kwargs for the running
+            loop, cloned when a call overrides the key or endpoint.
+
+    Returns:
+        BackgroundModel pairing the start and check actions.
+    """
+    full_name = f'{plugin_name}/{name}'
+
+    async def _start(request: ModelRequest[VeoConfig], ctx: ModelContext) -> Operation:
+        veo = VeoModel(name, client_getter(), client_kwargs=client_kwargs() if client_kwargs else None)
+        return await veo.start(request, ctx)
+
+    async def _check(op: Operation, ctx: ModelContext) -> Operation:
+        veo = VeoModel(name, client_getter(), client_kwargs=client_kwargs() if client_kwargs else None)
+        return await veo.check(op, ctx)
+
+    return BackgroundModel(
+        full_name,
+        start=_start,
+        check=_check,
+        config_schema=VeoConfig,
+        info=veo_model_info(name),
+        metadata={'type': 'background-model'},
+    )
+
+
+class GoogleFamilyRefs:
+    """Typed ref constructors shared by GoogleAI and VertexAI.
+
+    One constructor per config family, because the function name is what
+    picks the return type. Each constructor strips pasted prefixes, stamps
+    this plugin's namespace, and refuses ids whose runtime action validates
+    a different schema.
+    """
+
+    name: str  # plugin namespace ('googleai' or 'vertexai')
+
+    @classmethod
+    def gemini_tts(
+        cls, name: KnownGeminiTts | str, *, config: GeminiTtsConfig | None = None
+    ) -> ModelRef[GeminiTtsConfig]:
+        """Typed ref for a Gemini TTS model (``gemini-…-tts``)."""
+        return family_model_ref(
+            name,
+            namespace=cls.name,
+            plugin_class=cls.__name__,
+            family='tts',
+            method='gemini_tts',
+            config_schema=GeminiTtsConfig,
+            config=config,
+        )
+
+    @classmethod
+    def gemini_image(
+        cls, name: KnownGeminiImage | str, *, config: GeminiImageConfig | None = None
+    ) -> ModelRef[GeminiImageConfig]:
+        """Typed ref for a Gemini native-image model (``gemini-…-image``)."""
+        return family_model_ref(
+            name,
+            namespace=cls.name,
+            plugin_class=cls.__name__,
+            family='image',
+            method='gemini_image',
+            config_schema=GeminiImageConfig,
+            config=config,
+        )
+
+    @classmethod
+    def imagen(cls, name: str, *, config: object | None = None) -> NoReturn:
+        """Always raises: Imagen is no longer supported. Use ``gemini_image``."""
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=(
+                f'{cls.__name__}.imagen: Imagen is no longer supported; '
+                f'for image generation use {cls.__name__}.gemini_image().'
+            ),
+        )
+
+    @classmethod
+    def embedder(cls, name: str, *, config: EmbeddingConfig | None = None) -> EmbedderRef[EmbeddingConfig]:
+        """Typed ref for an embedder, e.g. ``GoogleAI.embedder('gemini-embedding-001')``.
+
+        Returns an ``EmbedderRef[EmbeddingConfig]``, not a ``ModelRef``: an
+        embedder id must never end up in ``generate(model=...)``. Pass raw
+        dicts to ``ai.embed(config=...)`` at call time.
+        """
+        return family_embedder_ref(name, namespace=cls.name, plugin_class=cls.__name__, config=config)
+
+
+class GoogleAI(GoogleFamilyRefs, Plugin):
+    """GoogleAI plugin for Genkit with dynamic model discovery.
+
+    This plugin provides access to Google AI models (Gemini, embedders, Veo)
+    through the Google AI Studio API. Models are discovered dynamically at
+    initialization time, ensuring new models are available without SDK updates.
+
+    Model Types:
+        | Type | Action Kind | Example |
+        |---|---|---|
+        | Gemini / Gemma | MODEL | ``googleai/gemini-flash-latest`` |
+        | Embedders | EMBEDDER | ``googleai/gemini-embedding-001`` |
+        | Veo (Video) | BACKGROUND_MODEL | ``googleai/veo-3.1-generate-preview`` |
+
+    Example:
+        ```python
+        from genkit import Genkit
+        from genkit_google_genai import GoogleAI
+
+        # 1. Initialize Genkit with dynamic model discovery
+        ai = Genkit(plugins=[GoogleAI()])
+
+        # 2. Generate text using Gemini Flash
+        res = await ai.generate(
+            model=GoogleAI.gemini('gemini-flash-latest'),
+            prompt='Explain quantum computing in one sentence.',
+        )
+
+        # 3. Inspect output text directly
+        print(res.text)
+        # => Quantum computing utilizes quantum bits to solve complex problems faster...
+        ```
+
+    Attributes:
+        name: The plugin name ('googleai').
+        _vertexai: Internal flag, always False for GoogleAI.
+
+    See Also:
+        - https://ai.google.dev/gemini-api/docs
+        - https://aistudio.google.com/
+    """
+
+    name = GOOGLEAI_PLUGIN_NAME
+    _vertexai = False
+
+    @classmethod
+    def gemini(cls, name: KnownGoogleAIGemini | str, *, config: GeminiConfig | None = None) -> ModelRef[GeminiConfig]:
+        """Typed ref for a Gemini text model, e.g. ``GoogleAI.gemini('gemini-flash-latest')``.
+
+        Unknown ids are allowed so a brand-new Gemini release works before
+        this plugin learns its name; ids from other families are refused.
+        """
+        return family_model_ref(
+            name,
+            namespace=cls.name,
+            plugin_class=cls.__name__,
+            family='gemini',
+            method='gemini',
+            config_schema=GeminiConfig,
+            config=config,
+        )
+
+    @classmethod
+    def gemma(cls, name: KnownGemma | str, *, config: GemmaConfig | None = None) -> ModelRef[GemmaConfig]:
+        """Typed ref for a Gemma open model (``gemma-…``)."""
+        return family_model_ref(
+            name,
+            namespace=cls.name,
+            plugin_class=cls.__name__,
+            family='gemma',
+            method='gemma',
+            config_schema=GemmaConfig,
+            config=config,
+        )
+
+    @classmethod
+    def veo(cls, name: KnownGoogleAIVeo | str, *, config: VeoConfig | None = None) -> ModelRef[VeoConfig]:
+        """Typed ref for a Veo video model (``veo-…``)."""
+        return family_model_ref(
+            name,
+            namespace=cls.name,
+            plugin_class=cls.__name__,
+            family='veo',
+            method='veo',
+            config_schema=VeoConfig,
+            config=config,
+        )
+
+    @classmethod
+    def deep_research(cls, name: str, *, config: DeepResearchConfig | None = None) -> ModelRef[DeepResearchConfig]:
+        """Typed ref for a Deep Research agent. Pass to generate_operation()."""
+        clean = strip_ref_prefixes(name) if isinstance(name, str) else ''
+        return family_model_ref(
+            name,
+            namespace=cls.name,
+            plugin_class=cls.__name__,
+            family='deep-research',
+            method='deep_research',
+            config_schema=DeepResearchConfig,
+            config=config,
+            info=deep_research_model_info(clean) if clean else None,
+        )
+
+    @classmethod
+    def antigravity(cls, name: str, *, config: AntigravityConfig | None = None) -> ModelRef[AntigravityConfig]:
+        """Typed ref for an Antigravity agent."""
+        return family_model_ref(
+            name,
+            namespace=cls.name,
+            plugin_class=cls.__name__,
+            family='antigravity',
+            method='antigravity',
+            config_schema=AntigravityConfig,
+            config=config,
+        )
+
+    @classmethod
+    def lyria(
+        cls, name: KnownLyria | str, *, config: InteractionsLyriaConfig | None = None
+    ) -> ModelRef[InteractionsLyriaConfig]:
+        """Typed ref for Google AI Interactions Lyria (lyria-3-clip-preview, …)."""
+        return family_model_ref(
+            name,
+            namespace=cls.name,
+            plugin_class=cls.__name__,
+            family='lyria',
+            method='lyria',
+            config_schema=InteractionsLyriaConfig,
+            config=config,
+        )
+
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        credentials: Credentials | None = None,
+        api_version: str | None = None,
+        base_url: str | None = None,
+        headers: Mapping[str, str] | None = None,
+        timeout: float | None = None,
+        max_retries: int | None = None,
+        http_client_factory: Callable[[], httpx.AsyncClient] | None = None,
+        legacy_response_schema: bool = False,
+    ) -> None:
+        """Initializes the GoogleAI plugin.
+
+        Args:
+            api_key: The API key for authenticating with the Google AI service.
+                If not provided, it defaults to reading from the 'GEMINI_API_KEY'
+                environment variable.
+            credentials: Google Cloud credentials for authentication.
+                Defaults to None, in which case the client uses default authentication
+                mechanisms (e.g., application default credentials or API key).
+            api_version: The API version to use (e.g., 'v1beta'). Defaults to None.
+            base_url: The base URL for the API. Defaults to None.
+            headers: Extra HTTP headers sent on every request. Genkit appends
+                its client attribution to ``x-goog-api-client`` and ``user-agent``.
+                Interactions models (Deep Research, Antigravity, Lyria) drop a
+                caller's ``x-goog-api-client`` and send only Genkit's.
+            timeout: Per-request timeout in **seconds**, as a float. Must be
+                positive and finite. Defaults to no timeout. A model config's
+                ``timeout`` overrides it for a single call. A timeout set on
+                the client from ``http_client_factory`` is not used.
+
+                Seconds is the Python convention for an argument named
+                ``timeout``: the standard library (``asyncio.wait_for``,
+                ``socket.settimeout``, ``subprocess.run``), ``requests``,
+                ``httpx``, ``aiohttp`` and the OpenAI and Anthropic SDKs all
+                use it. google-genai's ``HttpOptions.timeout`` is in
+                **milliseconds**, so divide by 1000 when migrating:
+                ``HttpOptions(timeout=30000)`` becomes ``timeout=30``. Passing
+                ``timeout=30000`` waits over 8 hours.
+            max_retries: How many times to retry a failed request after the
+                first attempt. Defaults to None: no retries, which is
+                google-genai's default. Same name and meaning as
+                ``max_retries`` in the OpenAI and Anthropic SDKs, which
+                Genkit's plugins for them take through ``client_options``
+                (those SDKs default to 2 retries).
+                Retries use google-genai's backoff (about 1, 2, 4 seconds,
+                doubling up to 60, with jitter) on HTTP 408, 429, 500, 502,
+                503 and 504 and on connection errors and timeouts, so each
+                attempt gets its own ``timeout``. Covers Gemini, Veo
+                (including operation polling), embedders and model listing.
+                Interactions models (Deep Research, Antigravity, Lyria) don't
+                retry.
+
+                ``genkit_middleware.Retry`` also retries model calls; with
+                both on, attempts multiply. Use ``max_retries`` for
+                embeddings, polling and listing, and ``Retry`` when you need
+                per-status control over model calls.
+
+                Migrating from ``http_options``: ``HttpRetryOptions`` counts
+                the first attempt, so ``HttpRetryOptions(attempts=5)``
+                becomes ``max_retries=4``.
+            http_client_factory: A function with no arguments that returns an
+                ``httpx.AsyncClient``, for proxies, mTLS, or a custom
+                transport. Genkit calls it once per event loop and reuses that
+                client for every model call on the loop. An ``AsyncClient``
+                only works on the loop that first used it, and Genkit runs on
+                more than one: ``genkit start`` serves the Dev UI from its own
+                thread and loop. Genkit never closes these clients.
+                OAuth token refresh for ``credentials`` and downloads of media
+                URLs in prompts don't use them.
+
+                ```python
+                GoogleAI(http_client_factory=lambda: httpx.AsyncClient(proxy='http://proxy.internal:3128'))
+                ```
+            legacy_response_schema: Send JSON output schemas as Gemini's
+                ``responseSchema`` field instead of ``responseJsonSchema``,
+                converted to its format; a schema that cannot be converted
+                raises ``INVALID_ARGUMENT``. Defaults to False.
+
+        Raises:
+            ValueError: If `api_key` is not provided and the 'GEMINI_API_KEY'
+                environment variable is not set.
+        """
+        api_key = api_key if api_key else os.getenv('GEMINI_API_KEY')
+        if not api_key and credentials is None:
+            msg = (
+                '\n[Genkit] GEMINI_API_KEY environment variable not set.\n\n'
+                'To get started with Google AI models:\n'
+                '1. Obtain an API key from Google AI Studio: https://aistudio.google.com/app/apikey\n'
+                '2. Set your key in the terminal environment:\n'
+                '   export GEMINI_API_KEY="your-api-key"\n\n'
+                'Documentation: https://genkit.dev/docs/python/integrations/google-genai/\n'
+            )
+            raise ValueError(msg)
+
+        self._client_kwargs: dict[str, Any] = {
+            'vertexai': self._vertexai,
+            'api_key': api_key,
+            'credentials': credentials,
+            'http_options': _plugin_http_options(
+                base_url=base_url,
+                api_version=api_version,
+                headers=headers,
+                timeout=timeout,
+                max_retries=max_retries,
+            ),
+        }
+        self._http_client_factory = _loop_local_http_client(http_client_factory)
+        self._base_url_pinned = bool(self._client_kwargs['http_options'].base_url)
+        self._legacy_response_schema = legacy_response_schema
+        self._list_actions_cache: list[Action | BackgroundAction[Any, Any]] | None = None
+
+    @loop_local_client
+    def _runtime_client(self) -> genai.Client:
+        # One client per event loop, used everywhere in plugin runtime paths.
+        return _plugin_client(self._loop_client_kwargs())
+
+    def _loop_client_kwargs(self) -> dict[str, Any]:
+        """Client kwargs carrying this loop's client from ``http_client_factory``, if one was given."""
+        return _with_loop_http_client(self._client_kwargs, self._http_client_factory)
+
+    def _interactions_client_options(self) -> ClientOptions:
+        """Plugin-level transport knobs for Interactions models.
+
+        Per-request config can still override timeout/headers/api_version.
+        A ticket never supplies the host.
+        """
+        http_options: HttpOptions = self._client_kwargs['http_options']
+        return ClientOptions(
+            api_version=http_options.api_version,
+            base_url=http_options.base_url,
+            custom_headers=dict(http_options.headers) if http_options.headers else None,
+            timeout=float(http_options.timeout) if http_options.timeout is not None else None,
+            # The getter, not a client: Interactions calls it per request so
+            # each event loop gets its own client.
+            http_client_factory=self._http_client_factory,
+        )
+
+    def _plugin_api_key(self) -> str | None:
+        raw = self._client_kwargs.get('api_key')
+        return raw if isinstance(raw, str) else None
+
+    async def init(self) -> list[Action | BackgroundAction[Any, Any]]:
+        """Initialize the plugin.
+
+        Returns:
+            Actions and background models for known/supported models.
+        """
+        genai_models = await _list_genai_models(self._runtime_client(), is_vertex=False)
+
+        actions: list[Action | BackgroundAction[Any, Any]] = []
+        # Gemini Models
+        for name in genai_models.gemini:
+            if action := self._resolve_model(name):
+                actions.append(action)
+
+        # Veo Models (background models)
+        for name in genai_models.veo:
+            actions.append(self._resolve_veo_model(name))
+
+        client_options = self._interactions_client_options()
+        plugin_api_key = self._plugin_api_key()
+        for name in list_known_deep_research_models():
+            actions.append(
+                create_deep_research_background_model(
+                    name,
+                    plugin_api_key=plugin_api_key,
+                    client_options=client_options,
+                )
+            )
+        for name in list_known_antigravity_models():
+            actions.append(
+                create_antigravity_action(
+                    googleai_name(name),
+                    plugin_api_key=plugin_api_key,
+                    client_options=client_options,
+                )
+            )
+        for name in list_known_lyria_models():
+            actions.append(
+                create_lyria_action(
+                    googleai_name(name),
+                    plugin_api_key=plugin_api_key,
+                    client_options=client_options,
+                )
+            )
+
+        # Embedders
+        for name in genai_models.embedders:
+            actions.append(self._resolve_embedder(name))
+
+        return actions
+
+    async def resolve(self, action_type: ActionKind, name: str) -> Action | BackgroundAction[Any, Any] | None:
+        """Resolve an action by creating and returning an Action object.
+
+        Args:
+            action_type: The kind of action to resolve.
+            name: The id without the ``googleai/`` prefix.
+
+        Returns:
+            Action or BackgroundModel if found, None otherwise. Genkit
+            registers a BackgroundModel's check and cancel actions with it.
+        """
+        if action_type == ActionKind.MODEL:
+            return self._resolve_model(name)
+        if action_type == ActionKind.BACKGROUND_MODEL:
+            return self._resolve_background_model(name)
+        if action_type == ActionKind.EMBEDDER:
+            return self._resolve_embedder(name)
+        return None
+
+    def _resolve_background_model(self, name: str) -> BackgroundModel | None:
+        """Resolve a background model for Veo or Deep Research."""
+        if is_veo_model(name):
+            return self._resolve_veo_model(name)
+        if is_deep_research_model_name(name):
+            return create_deep_research_background_model(
+                deep_research_model(name),
+                plugin_api_key=self._plugin_api_key(),
+                client_options=self._interactions_client_options(),
+            )
+        return None
+
+    def _resolve_veo_model(self, name: str) -> BackgroundModel:
+        """Create a BackgroundModel for a Veo video generation model.
+
+        Args:
+            name: The model id without the ``googleai/`` prefix.
+
+        Returns:
+            BackgroundModel for the Veo model.
+        """
+        return _create_veo_background_model(name, self._runtime_client, GOOGLEAI_PLUGIN_NAME, self._loop_client_kwargs)
+
+    def _resolve_model(self, name: str) -> Action | None:
+        """Create an Action object for a Google AI model.
+
+        Args:
+            name: The model id without the ``googleai/`` prefix.
+
+        Returns:
+            Action object for the model, or None if this id has no generate
+            path here (Veo runs as a background model, embedders are
+            EMBEDDER actions, and retired/unimplemented ids fail closed
+            instead of defaulting to Gemini).
+        """
+        # Interactions families before the shared fail-closed table so Vertex
+        # can keep them unroutable while Google AI actually serves them.
+        if is_deep_research_model_name(name):
+            return None
+        if is_antigravity_model_name(name):
+            return create_antigravity_action(
+                googleai_name(name),
+                plugin_api_key=self._plugin_api_key(),
+                client_options=self._interactions_client_options(),
+            )
+        if is_lyria_model_name(name):
+            return create_lyria_action(
+                googleai_name(name),
+                plugin_api_key=self._plugin_api_key(),
+                client_options=self._interactions_client_options(),
+            )
+
+        if is_unroutable_model_id(name):
+            return None
+        # One annotated closure per family. Action validates request.config
+        # from the fn annotation; a single _run cannot switch schemas at runtime.
+        model_info = google_model_info(name)
+        SUPPORTED_MODELS[name] = model_info
+        action_name = googleai_name(name)
+
+        if is_tts_model(name):
+
+            async def _run_tts(request: ModelRequest[GeminiTtsConfig], ctx: ModelContext) -> ModelResponse:
+                return await _new_gemini(self, name).generate(request, ctx)
+
+            return _model_action(action_name, _run_tts, model_info, GeminiTtsConfig)
+
+        if is_image_model(name):
+
+            async def _run_image(request: ModelRequest[GeminiImageConfig], ctx: ModelContext) -> ModelResponse:
+                return await _new_gemini(self, name).generate(request, ctx)
+
+            return _model_action(action_name, _run_image, model_info, GeminiImageConfig)
+
+        if is_gemma_model(name):
+
+            async def _run_gemma(request: ModelRequest[GemmaConfig], ctx: ModelContext) -> ModelResponse:
+                return await _new_gemini(self, name).generate(request, ctx)
+
+            return _model_action(action_name, _run_gemma, model_info, GemmaConfig)
+
+        async def _run(request: ModelRequest[GeminiConfig], ctx: ModelContext) -> ModelResponse:
+            return await _new_gemini(self, name).generate(request, ctx)
+
+        return _model_action(action_name, _run, model_info, GeminiConfig)
+
+    def _resolve_embedder(self, name: str) -> Action:
+        """Create an Action object for a Google AI embedder.
+
+        Args:
+            name: The embedder id without the ``googleai/`` prefix.
+
+        Returns:
+            Action object for the embedder.
+        """
+        return _create_embedder_action(name, self._runtime_client, GOOGLEAI_PLUGIN_NAME)
+
+    async def list_actions(self) -> list[Action | BackgroundAction[Any, Any]]:
+        """Generate a list of available actions or models.
+
+        Returns:
+            list[Action | BackgroundAction[Any, Any]]: Actions and background models.
+        """
+        if self._list_actions_cache is not None:
+            return self._list_actions_cache
+        genai_models = await _list_genai_models(self._runtime_client(), is_vertex=False)
+        actions_list: list[Action | BackgroundAction[Any, Any]] = []
+
+        for name in genai_models.gemini:
+            if (model_action := self._resolve_model(name)) is not None:
+                actions_list.append(model_action)
+
+        for name in genai_models.veo:
+            actions_list.append(
+                _create_veo_background_model(
+                    name,
+                    self._runtime_client,
+                    GOOGLEAI_PLUGIN_NAME,
+                    client_kwargs=self._loop_client_kwargs,
+                )
+            )
+
+        for name in list_known_deep_research_models():
+            actions_list.append(
+                create_deep_research_background_model(
+                    googleai_name(name),
+                    plugin_api_key=self._plugin_api_key(),
+                    client_options=self._interactions_client_options(),
+                )
+            )
+        for name in list_known_antigravity_models():
+            if (model_action := self._resolve_model(name)) is not None:
+                actions_list.append(model_action)
+        for name in list_known_lyria_models():
+            if (model_action := self._resolve_model(name)) is not None:
+                actions_list.append(model_action)
+
+        for name in genai_models.embedders:
+            actions_list.append(_create_embedder_action(name, self._runtime_client, GOOGLEAI_PLUGIN_NAME))
+
+        self._list_actions_cache = actions_list
+        return actions_list
+
+
+class VertexAI(GoogleFamilyRefs, Plugin):
+    """Vertex AI plugin for Genkit with dynamic model discovery.
+
+    This plugin provides access to Google Cloud Vertex AI models including
+    Gemini, Veo, and embedders. Models are discovered dynamically,
+    ensuring new models are available without SDK updates.
+
+    Vertex AI vs Google AI:
+        Vertex AI provides enterprise features including:
+        - VPC Service Controls
+        - Customer-managed encryption keys (CMEK)
+        - Data residency controls
+        - IAM-based access control
+
+    Model Types:
+        | Type | Action Kind | Example |
+        |---|---|---|
+        | Gemini | MODEL | ``vertexai/gemini-2.5-flash`` |
+        | Veo (Video) | BACKGROUND_MODEL | ``vertexai/veo-3.1-generate-001`` |
+        | Virtual Try-On | MODEL | ``vertexai/virtual-try-on-001`` |
+        | Embedders | EMBEDDER | ``vertexai/text-embedding-005`` |
+
+    Example:
+        ```python
+        from genkit import Genkit
+        from genkit_google_genai import VertexAI
+
+        # 1. Initialize Genkit with VertexAI plugin
+        ai = Genkit(plugins=[VertexAI(project='my-project', location='us-central1')])
+
+        # 2. Generate text using Gemini on Vertex AI
+        res = await ai.generate(
+            model=VertexAI.gemini('gemini-2.5-flash'),
+            prompt='Explain quantum computing in one sentence.',
+        )
+
+        # 3. Inspect output text directly
+        print(res.text)
+        # => Quantum computing utilizes quantum bits to solve complex problems faster...
+        ```
+
+    Attributes:
+        name: The plugin name ('vertexai').
+        _vertexai: Internal flag, always True for VertexAI.
+
+    See Also:
+        - https://cloud.google.com/vertex-ai/generative-ai/docs
+    """
+
+    _vertexai = True
+
+    name = VERTEXAI_PLUGIN_NAME
+
+    @classmethod
+    def gemini(cls, name: KnownVertexAIGemini | str, *, config: GeminiConfig | None = None) -> ModelRef[GeminiConfig]:
+        """Typed ref for a Gemini text model, e.g. ``VertexAI.gemini('gemini-2.5-flash')``.
+
+        Unknown ids are allowed so a brand-new Gemini release works before
+        this plugin learns its name; ids from other families are refused.
+        """
+        return family_model_ref(
+            name,
+            namespace=cls.name,
+            plugin_class=cls.__name__,
+            family='gemini',
+            method='gemini',
+            config_schema=GeminiConfig,
+            config=config,
+        )
+
+    @classmethod
+    def gemma(cls, name: str, *, config: GemmaConfig | None = None) -> ModelRef[GemmaConfig]:
+        """Typed ref for a Gemma open model (``gemma-…``); Vertex AI serves none through generate_content."""
+        return family_model_ref(
+            name,
+            namespace=cls.name,
+            plugin_class=cls.__name__,
+            family='gemma',
+            method='gemma',
+            config_schema=GemmaConfig,
+            config=config,
+        )
+
+    @classmethod
+    def veo(cls, name: KnownVertexAIVeo | str, *, config: VeoConfig | None = None) -> ModelRef[VeoConfig]:
+        """Typed ref for a Veo video model (``veo-…``)."""
+        return family_model_ref(
+            name,
+            namespace=cls.name,
+            plugin_class=cls.__name__,
+            family='veo',
+            method='veo',
+            config_schema=VeoConfig,
+            config=config,
+        )
+
+    @classmethod
+    def virtual_try_on(
+        cls, name: KnownVirtualTryOn | str, *, config: VirtualTryOnConfig | None = None
+    ) -> ModelRef[VirtualTryOnConfig]:
+        """Typed ref for a Virtual Try-On model (``virtual-try-on-…``)."""
+        return family_model_ref(
+            name,
+            namespace=cls.name,
+            plugin_class=cls.__name__,
+            family='virtual-try-on',
+            method='virtual_try_on',
+            config_schema=VirtualTryOnConfig,
+            config=config,
+        )
+
+    def __init__(
+        self,
+        *,
+        credentials: Credentials | None = None,
+        project: str | None = None,
+        location: str | None = None,
+        api_key: str | None = None,
+        api_version: str | None = None,
+        base_url: str | None = None,
+        headers: Mapping[str, str] | None = None,
+        timeout: float | None = None,
+        max_retries: int | None = None,
+        http_client_factory: Callable[[], httpx.AsyncClient] | None = None,
+        legacy_response_schema: bool = False,
+    ) -> None:
+        """Initializes the VertexAI plugin.
+
+        Args:
+            credentials: Google Cloud credentials for authentication.
+                Defaults to None, in which case the client uses default authentication
+                mechanisms (e.g., application default credentials or API key).
+            project: Name of the Google Cloud project.
+            location: Location of the Google Cloud project. Accepts regions
+                (e.g. 'us-central1'), multi-regions ('us', 'eu'), or 'global'.
+                Falls back to the GOOGLE_CLOUD_LOCATION or GCLOUD_LOCATION
+                environment variable, then 'us-central1'.
+            api_key: The API key for authenticating with the Google AI service.
+                If not provided, it defaults to reading from the 'GEMINI_API_KEY'
+                environment variable.
+            api_version: The API version to use. Defaults to None.
+            base_url: The base URL for the API. Defaults to None.
+            headers: Extra HTTP headers sent on every request. Genkit appends
+                its client attribution to ``x-goog-api-client`` and ``user-agent``.
+            timeout: Per-request timeout in **seconds**, as a float. Must be
+                positive and finite. Defaults to no timeout. A model config's
+                ``timeout`` overrides it for a single call. A timeout set on
+                the client from ``http_client_factory`` is not used.
+
+                Seconds is the Python convention for an argument named
+                ``timeout``: the standard library (``asyncio.wait_for``,
+                ``socket.settimeout``, ``subprocess.run``), ``requests``,
+                ``httpx``, ``aiohttp`` and the OpenAI and Anthropic SDKs all
+                use it. google-genai's ``HttpOptions.timeout`` is in
+                **milliseconds**, so divide by 1000 when migrating:
+                ``HttpOptions(timeout=30000)`` becomes ``timeout=30``. Passing
+                ``timeout=30000`` waits over 8 hours.
+            max_retries: How many times to retry a failed request after the
+                first attempt. Defaults to None: no retries, which is
+                google-genai's default. Same name and meaning as
+                ``max_retries`` in the OpenAI and Anthropic SDKs, which
+                Genkit's plugins for them take through ``client_options``
+                (those SDKs default to 2 retries).
+                Retries use google-genai's backoff (about 1, 2, 4 seconds,
+                doubling up to 60, with jitter) on HTTP 408, 429, 500, 502,
+                503 and 504 and on connection errors and timeouts, so each
+                attempt gets its own ``timeout``. Covers Gemini, Veo
+                (including operation polling), Virtual Try-On, embedders and
+                model listing.
+
+                ``genkit_middleware.Retry`` also retries model calls; with
+                both on, attempts multiply. Use ``max_retries`` for
+                embeddings, polling and listing, and ``Retry`` when you need
+                per-status control over model calls.
+
+                Migrating from ``http_options``: ``HttpRetryOptions`` counts
+                the first attempt, so ``HttpRetryOptions(attempts=5)``
+                becomes ``max_retries=4``.
+            http_client_factory: A function with no arguments that returns an
+                ``httpx.AsyncClient``, for proxies, mTLS, or a custom
+                transport. Genkit calls it once per event loop and reuses that
+                client for every model call on the loop. An ``AsyncClient``
+                only works on the loop that first used it, and Genkit runs on
+                more than one: ``genkit start`` serves the Dev UI from its own
+                thread and loop. Genkit never closes these clients.
+                OAuth token refresh, Vertex evaluators and downloads of media
+                URLs in prompts don't use them.
+
+                ```python
+                VertexAI(http_client_factory=lambda: httpx.AsyncClient(proxy='http://proxy.internal:3128'))
+                ```
+            legacy_response_schema: Send JSON output schemas as Gemini's
+                ``responseSchema`` field instead of ``responseJsonSchema``,
+                converted to its format; a schema that cannot be converted
+                raises ``INVALID_ARGUMENT``. Defaults to False.
+        """
+        # Store project and location on the plugin for evaluator registration
+        # and multi-region routing. This avoids reaching into client internals.
+        self._project = project or os.getenv(const.GCLOUD_PROJECT) or os.getenv(const.GOOGLE_CLOUD_PROJECT)
+        self._location = (
+            location
+            or os.getenv(const.GOOGLE_CLOUD_LOCATION)
+            or os.getenv(const.GCLOUD_LOCATION)
+            or const.DEFAULT_REGION
+        )
+
+        opts = _plugin_http_options(
+            base_url=base_url,
+            api_version=api_version,
+            headers=headers,
+            timeout=timeout,
+            max_retries=max_retries,
+        )
+        self._http_client_factory = _loop_local_http_client(http_client_factory)
+        self._base_url_pinned = bool(opts.base_url)
+        self._legacy_response_schema = legacy_response_schema
+        multi_region = const.is_multi_regional_location(self._location)
+        if multi_region and not self._base_url_pinned:
+            # Multi-regions ('us', 'eu') are served from dedicated endpoints
+            # that the google-genai SDK does not derive itself.
+            opts.base_url = const.multi_regional_base_url(self._location)
+
+        # Resolve the project here rather than leaving it to the SDK: with any
+        # base_url set the SDK skips its own ADC lookup, evaluator registration
+        # needs a concrete project, and doing it now keeps the blocking ADC IO
+        # off the event loop. Express mode (api_key) needs no project, so it
+        # only pays for the probe where a multi-region demands one.
+        if not self._project and (api_key is None or multi_region):
+            if credentials is not None:
+                self._project = getattr(credentials, 'project_id', None)
+            if not self._project:
+                try:
+                    _, self._project = google_auth_default()
+                except DefaultCredentialsError:
+                    self._project = None
+
+        if multi_region and not self._project:
+            raise ValueError(
+                'VertexAI plugin requires a project when using a multi-region location. '
+                'Set the project parameter or GOOGLE_CLOUD_PROJECT environment variable.'
+            )
+
+        self._client_kwargs: dict[str, Any] = {
+            'vertexai': self._vertexai,
+            'api_key': api_key,
+            'credentials': credentials,
+            'project': self._project,
+            'location': self._location,
+            'http_options': opts,
+        }
+        self._list_actions_cache: list[Action | BackgroundAction[Any, Any]] | None = None
+
+    @loop_local_client
+    def _runtime_client(self) -> genai.Client:
+        # One client per event loop, used everywhere in plugin runtime paths.
+        return _plugin_client(self._loop_client_kwargs())
+
+    def _loop_client_kwargs(self) -> dict[str, Any]:
+        """Client kwargs carrying this loop's client from ``http_client_factory``, if one was given."""
+        return _with_loop_http_client(self._client_kwargs, self._http_client_factory)
+
+    async def init(self) -> list[Action | BackgroundAction[Any, Any]]:
+        """Initialize the plugin.
+
+        Returns:
+            Actions and background models for known/supported models.
+        """
+        genai_models = await _list_genai_models(self._runtime_client(), is_vertex=True)
+        actions: list[Action | BackgroundAction[Any, Any]] = []
+
+        for name in genai_models.gemini:
+            if action := self._resolve_model(name):
+                actions.append(action)
+
+        # Veo Models (background models)
+        for name in genai_models.veo:
+            actions.append(self._resolve_veo_model(name))
+
+        for name in VERTEX_KNOWN_VIRTUAL_TRY_ON:
+            if action := self._resolve_model(name):
+                actions.append(action)
+
+        for name in VERTEX_KNOWN_EMBEDDERS:
+            actions.append(self._resolve_embedder(name))
+
+        # Vertex evaluators talk to a project-scoped Evaluation API. Express
+        # mode (api_key, no project) can still start the app; those evaluators
+        # simply are not registered.
+        if not self._project:
+            logger.debug('VertexAI has no project; skipping Vertex evaluator registration')
+        else:
+            actions.extend(
+                create_vertex_evaluators(
+                    list(VertexAIEvaluationMetricType),
+                    project=self._project,
+                    location=self._location,
+                )
+            )
+
+        return actions
+
+    def _list_known_embedders(self) -> list[Action]:
+        """List known embedders as Action objects.
+
+        Vertex embedders are advertised from a curated list rather than
+        discovered from the catalog, which over-lists embedders that are not
+        callable. See VERTEX_KNOWN_EMBEDDERS.
+        """
+        actions = []
+        for name in VERTEX_KNOWN_EMBEDDERS:
+            actions.append(self._resolve_embedder(name))
+        return actions
+
+    async def resolve(self, action_type: ActionKind, name: str) -> Action | BackgroundAction[Any, Any] | None:
+        """Resolve an action by creating and returning an Action object.
+
+        Args:
+            action_type: The kind of action to resolve.
+            name: The id without the ``vertexai/`` prefix.
+
+        Returns:
+            Action or BackgroundModel if found, None otherwise. Genkit
+            registers a BackgroundModel's check action with it.
+        """
+        if action_type == ActionKind.MODEL:
+            return self._resolve_model(name)
+        elif action_type == ActionKind.BACKGROUND_MODEL:
+            if is_veo_model(name):
+                return self._resolve_veo_model(name)
+            return None
+        elif action_type == ActionKind.EMBEDDER:
+            return self._resolve_embedder(name)
+        elif action_type == ActionKind.EVALUATOR:
+            return self._resolve_evaluator(name)
+        return None
+
+    def _resolve_veo_model(self, name: str) -> BackgroundModel:
+        """Create a BackgroundModel for a Veo video generation model.
+
+        Args:
+            name: The model id without the ``vertexai/`` prefix.
+
+        Returns:
+            BackgroundModel for the Veo model.
+        """
+        return _create_veo_background_model(name, self._runtime_client, VERTEXAI_PLUGIN_NAME, self._loop_client_kwargs)
+
+    def _resolve_evaluator(self, name: str) -> Action | None:
+        """Create an Action object for a Vertex AI evaluator.
+
+        Args:
+            name: The evaluator id without the ``vertexai/`` prefix.
+
+        Returns:
+            Action object for the evaluator.
+        """
+        # Iterate instead of calling VertexAIEvaluationMetricType(value): on
+        # Python 3.10 StrEnum comes from `strenum`, whose stub types __new__
+        # as returning the base StrEnum, so the constructor loses the subtype.
+        value = name.upper()
+        metric_type = next((m for m in VertexAIEvaluationMetricType if m.value == value), None)
+        if metric_type is None:
+            return None
+
+        # The name is a real Vertex metric, so "not found" would send people
+        # hunting for a typo. Say what's actually missing instead. The
+        # evaluators authenticate with ADC only (api_key and credentials are
+        # not used), so name both requirements.
+        if not self._project:
+            raise GenkitError(
+                message=(
+                    'Vertex evaluators need a project and Application Default Credentials; '
+                    'pass VertexAI(project=...) or set GOOGLE_CLOUD_PROJECT, '
+                    'and run `gcloud auth application-default login`'
+                ),
+                status='FAILED_PRECONDITION',
+            )
+
+        [action] = create_vertex_evaluators(
+            [metric_type],
+            project=self._project,
+            location=self._location,
+        )
+        return action
+
+    def _resolve_model(self, name: str) -> Action | None:
+        """Create an Action object for a Vertex AI model.
+
+        Args:
+            name: The model id without the ``vertexai/`` prefix.
+
+        Returns:
+            Action object for the model, or None if this id has no generate
+            path here (Veo runs as a background model, embedders are
+            EMBEDDER actions, and retired/unimplemented ids fail closed
+            instead of defaulting to Gemini).
+        """
+        # Virtual Try-On before the shared fail-closed table so Google AI can
+        # keep the family unroutable while Vertex actually serves it.
+        if is_virtual_try_on_model(name):
+
+            async def _run_try_on(request: ModelRequest[VirtualTryOnConfig], ctx: ModelContext) -> ModelResponse:
+                model = VirtualTryOnModel(
+                    name,
+                    self._runtime_client(),
+                    client_kwargs=self._loop_client_kwargs(),
+                    base_url_pinned=self._base_url_pinned,
+                )
+                return await model.generate(request, ctx)
+
+            return _model_action(vertexai_name(name), _run_try_on, virtual_try_on_model_info(name), VirtualTryOnConfig)
+
+        if is_unroutable_model_id(name):
+            return None
+
+        # One annotated closure per family. Action validates request.config
+        # from the fn annotation; a single _run cannot switch schemas at runtime.
+        # Tuned Gemini endpoints (endpoints/ID or projects/.../endpoints/ID)
+        # route through GeminiModel with the standard Gemini config schema.
+        action_name = vertexai_name(name)
+        if is_tuned_gemini_name(name):
+            model_info = ModelInfo(
+                label=f'{PLUGIN_DISPLAY_NAME[VERTEXAI_PLUGIN_NAME]} - {name}',
+                supports=google_model_info('gemini').supports,
+            )
+
+            async def _run_tuned(request: ModelRequest[GeminiConfig], ctx: ModelContext) -> ModelResponse:
+                return await _new_gemini(self, name).generate(request, ctx)
+
+            return _model_action(action_name, _run_tuned, model_info, GeminiConfig)
+
+        model_info = google_model_info(name)
+        SUPPORTED_MODELS[name] = model_info
+
+        if is_tts_model(name):
+
+            async def _run_tts(request: ModelRequest[GeminiTtsConfig], ctx: ModelContext) -> ModelResponse:
+                return await _new_gemini(self, name).generate(request, ctx)
+
+            return _model_action(action_name, _run_tts, model_info, GeminiTtsConfig)
+
+        if is_image_model(name):
+
+            async def _run_image(request: ModelRequest[GeminiImageConfig], ctx: ModelContext) -> ModelResponse:
+                return await _new_gemini(self, name).generate(request, ctx)
+
+            return _model_action(action_name, _run_image, model_info, GeminiImageConfig)
+
+        if is_gemma_model(name):
+
+            async def _run_gemma(request: ModelRequest[GemmaConfig], ctx: ModelContext) -> ModelResponse:
+                return await _new_gemini(self, name).generate(request, ctx)
+
+            return _model_action(action_name, _run_gemma, model_info, GemmaConfig)
+
+        async def _run(request: ModelRequest[GeminiConfig], ctx: ModelContext) -> ModelResponse:
+            return await _new_gemini(self, name).generate(request, ctx)
+
+        return _model_action(action_name, _run, model_info, GeminiConfig)
+
+    def _resolve_embedder(self, name: str) -> Action:
+        """Create an Action object for a Vertex AI embedder.
+
+        Args:
+            name: The embedder id without the ``vertexai/`` prefix.
+
+        Returns:
+            Action object for the embedder.
+        """
+        return _create_embedder_action(name, self._runtime_client, VERTEXAI_PLUGIN_NAME)
+
+    async def list_actions(self) -> list[Action | BackgroundAction[Any, Any]]:
+        """Generate a list of available actions or models.
+
+        Returns:
+            list[Action | BackgroundAction[Any, Any]]: Actions and background models.
+        """
+        if self._list_actions_cache is not None:
+            return self._list_actions_cache
+        genai_models = await _list_genai_models(self._runtime_client(), is_vertex=True)
+        actions_list: list[Action | BackgroundAction[Any, Any]] = []
+
+        for name in genai_models.gemini:
+            if (model_action := self._resolve_model(name)) is not None:
+                actions_list.append(model_action)
+
+        for name in genai_models.veo:
+            actions_list.append(
+                _create_veo_background_model(
+                    name,
+                    self._runtime_client,
+                    VERTEXAI_PLUGIN_NAME,
+                    client_kwargs=self._loop_client_kwargs,
+                )
+            )
+
+        for name in VERTEX_KNOWN_VIRTUAL_TRY_ON:
+            if (action := self._resolve_model(name)) is not None:
+                actions_list.append(action)
+
+        for name in VERTEX_KNOWN_EMBEDDERS:
+            actions_list.append(_create_embedder_action(name, self._runtime_client, VERTEXAI_PLUGIN_NAME))
+
+        if self._project:
+            actions_list.extend(
+                create_vertex_evaluators(
+                    list(VertexAIEvaluationMetricType),
+                    project=self._project,
+                    location=self._location,
+                )
+            )
+
+        self._list_actions_cache = actions_list
+        return actions_list
+
+
+def _loop_local_http_client(
+    http_client_factory: Callable[[], httpx.AsyncClient] | None,
+) -> Callable[[], httpx.AsyncClient] | None:
+    """Wrap the caller's ``http_client_factory`` so each event loop gets its own client.
+
+    An ``httpx.AsyncClient`` binds its connection pool to the loop that first
+    uses it. Genkit runs actions on more than one loop (the Dev UI reflection
+    server has its own thread and loop), so one shared client fails or hangs
+    there, sometimes after the request already reached the server.
+    """
+    if http_client_factory is None:
+        return None
+    if isinstance(http_client_factory, (httpx.AsyncClient, httpx.Client)) or not callable(http_client_factory):
+        raise TypeError(
+            'http_client_factory takes a function that returns an httpx.AsyncClient, '
+            f'got {type(http_client_factory).__name__}. Pass http_client_factory=lambda: httpx.AsyncClient(...). '
+            'Genkit builds one client per event loop because an AsyncClient only works '
+            'on the loop that first used it.'
+        )
+    factory = http_client_factory
+
+    def _build() -> httpx.AsyncClient:
+        client: object = factory()
+        if not isinstance(client, httpx.AsyncClient):
+            raise TypeError(
+                f'http_client_factory must return an httpx.AsyncClient, got {type(client).__name__}. '
+                'Genkit calls models asynchronously.'
+            )
+        return client
+
+    return loop_local_client(_build)
+
+
+def _with_loop_http_client(
+    client_kwargs: dict[str, Any],
+    http_client_factory: Callable[[], httpx.AsyncClient] | None,
+) -> dict[str, Any]:
+    """Return ``client_kwargs`` with the running loop's httpx client attached.
+
+    The plugin's own kwargs never hold a client. Every SDK client, including
+    the temporary ones built for per-call overrides, gets this loop's httpx
+    client here at call time.
+    """
+    if http_client_factory is None:
+        return client_kwargs
+    opts: HttpOptions = client_kwargs['http_options']
+    return {**client_kwargs, 'http_options': opts.model_copy(update={'httpx_async_client': http_client_factory()})}
+
+
+def _plugin_http_options(
+    *,
+    base_url: str | None = None,
+    api_version: str | None = None,
+    headers: Mapping[str, str] | None = None,
+    timeout: float | None = None,
+    max_retries: int | None = None,
+) -> HttpOptions:
+    """Build the SDK's HttpOptions from the plugin's network arguments.
+
+    ``timeout`` is in seconds because that is what Python callers expect from
+    an argument named ``timeout``. The standard library (``asyncio.wait_for``,
+    ``asyncio.timeout``, ``socket.settimeout``, ``subprocess.run``,
+    ``urllib.request.urlopen``), ``requests``, ``httpx``, ``aiohttp``, the
+    OpenAI and Anthropic SDKs, grpc-python and Genkit's Ollama plugin all take
+    float seconds. google-genai's ``HttpOptions.timeout`` (milliseconds) is the
+    outlier, so seconds convert to milliseconds through
+    ``timeout_seconds_to_ms``.
+
+    ``max_retries`` follows the OpenAI and Anthropic SDKs (retries after the
+    first attempt) and maps onto ``HttpRetryOptions.attempts``, which counts
+    the first attempt. google-genai's backoff and status codes are kept.
+    """
+    checked_timeout = check_timeout_seconds(timeout)
+    if max_retries is not None and (
+        isinstance(max_retries, bool) or not isinstance(max_retries, int) or max_retries < 0
+    ):
+        raise ValueError(f'max_retries must be a non-negative integer, got {max_retries!r}')
+
+    merged = dict(headers or {})
+    for name in ('x-goog-api-client', 'user-agent'):
+        # The SDK adds its own tag under the lowercase name, so a caller's
+        # User-Agent has to move there or the request carries two of them.
+        caller = ' '.join(s for k in list(merged) if k.lower() == name if (s := merged.pop(k).strip()))
+        if not caller:
+            merged[name] = GENKIT_USER_AGENT
+        elif GENKIT_USER_AGENT not in caller:
+            merged[name] = f'{caller} {GENKIT_USER_AGENT}'
+        else:
+            merged[name] = caller
+
+    return HttpOptions(
+        base_url=base_url or None,
+        api_version=api_version or None,
+        headers=merged,
+        timeout=timeout_seconds_to_ms(checked_timeout) if checked_timeout is not None else None,
+        retry_options=HttpRetryOptions(attempts=max_retries + 1) if max_retries else None,
+    )

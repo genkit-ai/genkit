@@ -10,25 +10,25 @@ import warnings
 import pytest
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from genkit import (
-    FinishReason,
-    Message,
-    ModelRequest,
-    ModelResponse,
-    ModelResponseChunk,
-    ModelUsage,
-    Part,
-    Role,
-)
+from genkit import FinishReason, Message, ModelResponse, ModelResponseChunk, Part, Role
 from genkit._ai._model import text_from_content
-from genkit._core._error import RuntimeErrorReason
-from genkit._core._model import OutputConfig
+from genkit._core import _typing as wire
+from genkit._core._action import ActionRunContext
+from genkit._core._error import ErrorReason, GenkitError
+from genkit._core._model import ABNORMAL_FINISH_REASONS, OutputConfig, SessionState, chunk_for_stream
 from genkit._core._schema import InvalidOutputSchemaError, to_json_schema
 from genkit._core._typing import (
     ActionMetadata,
     ToolRequest,
 )
-from genkit.model import get_basic_usage_stats, model_action_metadata
+from genkit.model import (
+    ConstrainedSupport,
+    GenerationUsage,
+    Model,
+    ModelInfo,
+    ModelRequest,
+    ModelSupports,
+)
 
 
 class PluginConfig(BaseModel):
@@ -63,7 +63,20 @@ def test_response_wrapper_text() -> None:
 
 
 def test_response_wrapper_output() -> None:
-    """Test output property of ModelResponse."""
+    """A finished reply split across parts as `{"foo":` + `"bar"}` reads back as the dict."""
+    wrapper = ModelResponse(
+        message=Message(
+            role='model',
+            content=[Part.from_text('{"foo":'), Part.from_text('"bar"}')],
+        ),
+    )
+    wrapper.request = ModelRequest(messages=[])
+
+    assert wrapper.output == {'foo': 'bar'}
+
+
+def test_response_output_cut_off_reply_is_none() -> None:
+    """A finished reply cut off at `{"foo": "bar` gives `output is None`."""
     wrapper = ModelResponse(
         message=Message(
             role='model',
@@ -72,7 +85,7 @@ def test_response_wrapper_output() -> None:
     )
     wrapper.request = ModelRequest(messages=[])
 
-    assert wrapper.output == {'foo': 'bar'}
+    assert wrapper.output is None
 
 
 def test_response_wrapper_messages() -> None:
@@ -126,9 +139,19 @@ def test_response_wrapper_output_uses_parser() -> None:
     assert wrapper.output == 'banana'
 
 
+def test_stream_chunk_stamps_index_and_parser_on_a_copy() -> None:
+    """chunk_for_stream stamps index/parser on a copy."""
+    source: ModelResponseChunk[str] = ModelResponseChunk(content=[Part.from_text('hi')])
+    wrapped = chunk_for_stream(source, index=0, previous_chunks=[], chunk_parser=lambda _c: 'parsed')
+    assert wrapped is not source
+    assert wrapped.index == 0
+    assert wrapped.text == 'hi'
+    assert wrapped.output == 'parsed'
+
+
 def test_chunk_wrapper_text() -> None:
     """Test text property of ModelResponseChunk."""
-    wrapper = ModelResponseChunk(
+    wrapper = chunk_for_stream(
         ModelResponseChunk(content=[Part.from_text('hello'), Part.from_text(' world')]),
         index=0,
         previous_chunks=[],
@@ -139,7 +162,7 @@ def test_chunk_wrapper_text() -> None:
 
 def test_chunk_wrapper_accumulated_text() -> None:
     """Test accumulated_text property of ModelResponseChunk."""
-    wrapper = ModelResponseChunk(
+    wrapper = chunk_for_stream(
         ModelResponseChunk(content=[Part.from_text(' PS: aliens')]),
         index=0,
         previous_chunks=[
@@ -153,7 +176,7 @@ def test_chunk_wrapper_accumulated_text() -> None:
 
 def test_chunk_wrapper_output() -> None:
     """Test output property of ModelResponseChunk."""
-    wrapper = ModelResponseChunk(
+    wrapper = chunk_for_stream(
         ModelResponseChunk(content=[Part.from_text(', "baz":[1,2,')]),
         index=0,
         previous_chunks=[
@@ -167,7 +190,7 @@ def test_chunk_wrapper_output() -> None:
 
 def test_chunk_wrapper_output_uses_parser() -> None:
     """Test that ModelResponseChunk uses the provided chunk_parser."""
-    wrapper = ModelResponseChunk(
+    wrapper = chunk_for_stream(
         ModelResponseChunk(content=[Part.from_text(', "baz":[1,2,')]),
         index=0,
         previous_chunks=[
@@ -186,7 +209,7 @@ def test_chunk_wrapper_output_uses_parser() -> None:
         [
             [],
             Message(role='model', content=[]),
-            ModelUsage(
+            GenerationUsage(
                 input_images=0,
                 input_videos=0,
                 input_characters=0,
@@ -230,7 +253,7 @@ def test_chunk_wrapper_output_uses_parser() -> None:
                     Part.from_media('data:video'),
                 ],
             ),
-            ModelUsage(
+            GenerationUsage(
                 input_images=2,
                 input_videos=2,
                 input_characters=2,
@@ -243,13 +266,40 @@ def test_chunk_wrapper_output_uses_parser() -> None:
         ],
     ),
 )
-def test_get_basic_usage_stats(
+def test_generation_usage_from_messages(
     test_input: list[Message],
     test_response: Message,
-    expected_output: ModelUsage,
+    expected_output: GenerationUsage,
 ) -> None:
-    """Test get_basic_usage_stats utility."""
-    assert get_basic_usage_stats(input_=test_input, response=test_response) == expected_output
+    """Test GenerationUsage.from_messages utility."""
+    assert GenerationUsage.from_messages(test_input, test_response) == expected_output
+    assert GenerationUsage.from_messages(messages=test_input, response=test_response) == expected_output
+
+
+def test_generation_usage_is_one_class_across_wire_and_public_types() -> None:
+    """A usage built from the wire module is the public GenerationUsage, so SessionState accepts it."""
+    usage = wire.GenerationUsage(input_tokens=1)
+
+    assert isinstance(usage, GenerationUsage)
+    assert SessionState(usage=usage).usage is usage
+
+
+def test_abnormal_finish_reasons_match_is_abnormal() -> None:
+    """Core output validation and FinishReason.is_abnormal agree on every reason."""
+    assert ABNORMAL_FINISH_REASONS == {reason for reason in FinishReason if reason.is_abnormal()}
+
+
+def test_finish_reason_is_abnormal() -> None:
+    """Test FinishReason.is_abnormal()."""
+    abnormal = {
+        FinishReason.BLOCKED,
+        FinishReason.ABORTED,
+        FinishReason.FAILED,
+        FinishReason.INTERRUPTED,
+        FinishReason.OTHER,
+    }
+    for reason in FinishReason:
+        assert reason.is_abnormal() == (reason in abnormal)
 
 
 def test_response_wrapper_tool_requests() -> None:
@@ -341,17 +391,72 @@ def test_response_wrapper_interrupts() -> None:
 
 
 def test_model_action_metadata() -> None:
-    """Test for model_action_metadata."""
-    action_metadata = model_action_metadata(
-        name='test_model',
-        info={'label': 'test_label'},
+    """Test for Model(...)._action_metadata()."""
+
+    async def fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
+
+    action_metadata = Model(
+        'test_model',
+        fn,
+        info=ModelInfo(label='test_label'),
         config_schema=None,
-    )
+    )._action_metadata()
 
     assert isinstance(action_metadata, ActionMetadata)
-    assert action_metadata.input_json_schema is not None
-    assert action_metadata.output_json_schema is not None
-    assert action_metadata.metadata == {'model': {'customOptions': None, 'label': 'test_label'}}
+    assert action_metadata.input_schema is not None
+    assert action_metadata.output_schema is not None
+    assert action_metadata.metadata == {'model': {'label': 'test_label'}}
+
+
+def test_model_action_metadata_label_defaults_to_name() -> None:
+    """With no label, the listed model shows its action name."""
+
+    async def fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
+
+    action_metadata = Model('bistro/menu-writer', fn)._action_metadata()
+
+    assert action_metadata.metadata == {'model': {'label': 'bistro/menu-writer'}}
+
+
+@pytest.mark.parametrize(
+    'info',
+    [
+        None,
+        ModelInfo(),
+        ModelInfo(label='Menu Writer'),
+        ModelInfo(
+            label='Menu Writer',
+            versions=['001'],
+            supports=ModelSupports(multiturn=True, tools=True, constrained=ConstrainedSupport.NO_TOOLS),
+        ),
+    ],
+)
+@pytest.mark.parametrize('config_schema', [None, PluginConfig])
+def test_model_action_metadata_matches_model(info: ModelInfo | None, config_schema: type[BaseModel] | None) -> None:
+    """Model(...)._action_metadata() carries identical metadata and schemas to the Model instance."""
+
+    async def menu_writer(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('Smoked Salmon Tartine')]))
+
+    resolved = Model('bistro/menu-writer', menu_writer, info=info, config_schema=config_schema)
+    listed = resolved._action_metadata()
+
+    assert isinstance(resolved, Model)
+    assert listed.metadata == {'model': resolved.metadata['model']}
+    assert listed.input_schema == resolved.input_schema
+    assert listed.output_schema == resolved.output_schema
+
+
+def test_model_rejects_long_running() -> None:
+    """A model action can't claim longRunning; that's a background model."""
+
+    async def fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
+
+    with pytest.raises(GenkitError, match='longRunning'):
+        Model('bistro/video', fn, info=ModelInfo(supports=ModelSupports(long_running=True)))
 
 
 def test_text_from_content_with_parts() -> None:
@@ -384,7 +489,7 @@ def test_text_from_content_skips_thoughts() -> None:
     assert text_from_content(content) == 'hello'
 
 
-def test_assert_valid_schema_marks_error_when_output_does_not_conform() -> None:
+def test_schema_check_marks_error_when_output_does_not_conform() -> None:
     """Structured output that is the wrong shape stays on the response as error."""
 
     class Person(BaseModel):
@@ -401,16 +506,16 @@ def test_assert_valid_schema_marks_error_when_output_does_not_conform() -> None:
     )
     response._schema_type = Person
 
-    response.assert_valid_schema()
+    response._assert_valid_schema()
     assert response.finish_reason == FinishReason.STOP
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
-    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert response.error.reason is ErrorReason.INVALID_OUTPUT
     assert response.output is None
     assert response.text == '{"name": "John", "age": "30"}'
 
 
-def test_assert_valid_schema_passes_when_output_conforms() -> None:
+def test_schema_check_passes_when_output_conforms() -> None:
     """Structured output that matches the schema is a usable reply."""
 
     class Person(BaseModel):
@@ -427,13 +532,13 @@ def test_assert_valid_schema_passes_when_output_conforms() -> None:
     )
     response._schema_type = Person
 
-    response.assert_valid_schema()
+    response._assert_valid_schema()
     assert response.output is not None
     assert response.output.name == 'John'
     assert response.output.age == 30
 
 
-def test_assert_valid_schema_names_non_json_output() -> None:
+def test_schema_check_names_non_json_output() -> None:
     """A raw echo string is a schema miss, not a json5 column error."""
     response = ModelResponse(
         message=Message(role=Role.MODEL, content=[Part.from_text('[ECHO] hi')]),
@@ -441,7 +546,7 @@ def test_assert_valid_schema_names_non_json_output() -> None:
     )
     response.request = ModelRequest(messages=[], output=OutputConfig(json_schema={'type': 'object'}))
 
-    response.assert_valid_schema()
+    response._assert_valid_schema()
     assert response.finish_reason == FinishReason.STOP
     assert response.output is None
     assert response.finish_message is None
@@ -449,7 +554,7 @@ def test_assert_valid_schema_names_non_json_output() -> None:
     assert 'not valid JSON' in response.error.message
 
 
-def test_assert_valid_schema_keeps_blocked_finish() -> None:
+def test_schema_check_keeps_blocked_finish() -> None:
     """A safety refusal keeps finish_reason=blocked; the text stays on .text."""
     response = ModelResponse(
         finish_reason=FinishReason.BLOCKED,
@@ -458,13 +563,13 @@ def test_assert_valid_schema_keeps_blocked_finish() -> None:
     )
     response.request = ModelRequest(messages=[], output=OutputConfig(json_schema={'type': 'object'}))
 
-    response.assert_valid_schema()
+    response._assert_valid_schema()
     assert response.finish_reason == FinishReason.BLOCKED
     assert response.text == 'nope'
     assert response.output is None
 
 
-def test_assert_valid_schema_keeps_length_on_truncated_json() -> None:
+def test_schema_check_keeps_length_on_truncated_json() -> None:
     """Hit the token cap — output validation does not replace the model's reason."""
     response = ModelResponse(
         finish_reason=FinishReason.LENGTH,
@@ -472,7 +577,7 @@ def test_assert_valid_schema_keeps_length_on_truncated_json() -> None:
     )
     response.request = ModelRequest(messages=[], output=OutputConfig(json_schema={'type': 'object'}))
 
-    response.assert_valid_schema()
+    response._assert_valid_schema()
     assert response.finish_reason == FinishReason.LENGTH
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
@@ -493,13 +598,13 @@ def test_length_finish_still_parses_complete_json() -> None:
     response.request = ModelRequest(messages=[], output=OutputConfig(json_schema=Recipe.model_json_schema()))
     response._schema_type = Recipe
 
-    response.assert_valid_schema()
+    response._assert_valid_schema()
     assert response.finish_reason == FinishReason.LENGTH
     assert response.output is not None
     assert response.output.title == 'Soup'
 
 
-def test_assert_valid_schema_marks_error_when_output_is_empty() -> None:
+def test_schema_check_marks_error_when_output_is_empty() -> None:
     """An empty reply is a miss when a schema was requested."""
     response = ModelResponse(
         message=Message(role=Role.MODEL, content=[Part.from_text('')]),
@@ -507,14 +612,14 @@ def test_assert_valid_schema_marks_error_when_output_is_empty() -> None:
     )
     response.request = ModelRequest(messages=[], output=OutputConfig(json_schema={'type': 'object'}))
 
-    response.assert_valid_schema()
+    response._assert_valid_schema()
     assert response.finish_reason == FinishReason.STOP
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
     assert response.output is None
 
 
-def test_assert_valid_schema_keeps_other_finish() -> None:
+def test_schema_check_keeps_other_finish() -> None:
     """No-image / unspecified image stop is other, not a schema miss."""
     response = ModelResponse(
         finish_reason=FinishReason.OTHER,
@@ -522,12 +627,12 @@ def test_assert_valid_schema_keeps_other_finish() -> None:
     )
     response.request = ModelRequest(messages=[], output=OutputConfig(json_schema={'type': 'object'}))
 
-    response.assert_valid_schema()
+    response._assert_valid_schema()
     assert response.finish_reason == FinishReason.OTHER
     assert response.output is None
 
 
-def test_assert_valid_schema_broken_schema_still_throws() -> None:
+def test_schema_check_broken_schema_still_throws() -> None:
     """A caller-broken schema is not stamped as a model miss."""
     response = ModelResponse(
         finish_reason=FinishReason.STOP,
@@ -539,7 +644,7 @@ def test_assert_valid_schema_broken_schema_still_throws() -> None:
     )
 
     with pytest.raises(InvalidOutputSchemaError):
-        response.assert_valid_schema()
+        response._assert_valid_schema()
     assert response.finish_reason == FinishReason.STOP
 
 
@@ -635,23 +740,23 @@ def test_output_returns_none_on_unparseable_text_with_json_format_no_schema() ->
     assert response.output is None
 
 
-def test_assert_valid_schema_marks_invalid_output_when_json_format_no_schema_unparseable() -> None:
+def test_schema_check_marks_invalid_output_when_json_format_no_schema_unparseable() -> None:
     """Unparseable text with format='json' (no schema) records INVALID_OUTPUT."""
     response = ModelResponse(
         message=Message(role=Role.MODEL, content=[Part.from_text('plain unparseable text')]),
         finish_reason=FinishReason.STOP,
         request=ModelRequest(messages=[], output=OutputConfig(format='json')),
     )
-    response.assert_valid_schema()
+    response._assert_valid_schema()
     assert response.finish_reason == FinishReason.STOP
     assert response.output is None
     assert response.text == 'plain unparseable text'
     assert response.error is not None
-    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert response.error.reason is ErrorReason.INVALID_OUTPUT
     assert 'not valid JSON' in response.error.message
 
 
-def test_assert_valid_schema_marks_invalid_output_when_array_format_no_schema_unparseable() -> None:
+def test_schema_check_marks_invalid_output_when_array_format_no_schema_unparseable() -> None:
     """Unparseable text with format='array' (no schema) records INVALID_OUTPUT."""
     from genkit._ai._formats._array import ArrayFormat
 
@@ -663,22 +768,52 @@ def test_assert_valid_schema_marks_invalid_output_when_array_format_no_schema_un
         request=ModelRequest(messages=[], output=OutputConfig(format='array')),
     )
     response._message_parser = formatter.parse_message
-    response.assert_valid_schema()
+    response._assert_valid_schema()
     assert response.finish_reason == FinishReason.STOP
     assert response.output is None
     assert response.text == 'plain unparseable text'
     assert response.error is not None
-    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert response.error.reason is ErrorReason.INVALID_OUTPUT
 
 
-def test_assert_valid_schema_passes_when_json_format_no_schema_valid() -> None:
+def test_schema_check_passes_when_json_format_no_schema_valid() -> None:
     """Valid JSON with format='json' (no schema) parses cleanly without error."""
     response = ModelResponse(
         message=Message(role=Role.MODEL, content=[Part.from_text('{"item": "bread"}')]),
         finish_reason=FinishReason.STOP,
         request=ModelRequest(messages=[], output=OutputConfig(format='json')),
     )
-    response.assert_valid_schema()
+    response._assert_valid_schema()
     assert response.finish_reason == FinishReason.STOP
     assert response.error is None
     assert response.output == {'item': 'bread'}
+
+
+def test_candidates_only_response_promotes_candidate_zero() -> None:
+    """A legacy or JS-shaped payload with only candidates keeps candidate 0's reply."""
+    response = ModelResponse.model_validate({
+        'candidates': [
+            {'index': 1, 'message': {'role': 'model', 'content': [{'text': 'second'}]}, 'finishReason': 'length'},
+            {
+                'index': 0,
+                'message': {'role': 'model', 'content': [{'text': 'Smoked Salmon Tartine'}]},
+                'finishReason': 'stop',
+                'finishMessage': 'done',
+            },
+        ]
+    })
+
+    assert response.text == 'Smoked Salmon Tartine'
+    assert response.finish_reason == FinishReason.STOP
+    assert response.finish_message == 'done'
+
+
+def test_candidates_are_dropped_when_the_top_level_reply_is_set() -> None:
+    """The top-level message wins; candidates are only a fallback."""
+    response = ModelResponse.model_validate({
+        'message': {'role': 'model', 'content': [{'text': 'top'}]},
+        'finishReason': 'stop',
+        'candidates': [{'index': 0, 'message': {'role': 'model', 'content': [{'text': 'cand'}]}}],
+    })
+
+    assert response.text == 'top'

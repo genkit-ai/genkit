@@ -18,7 +18,7 @@
 
 # git clone git@github.com:firebase/genkit.git
 # cd genkit
-# pnpm i
+# pnpm i && pnpm pnpm-install-workspaces
 # pnpm build
 # pnpm test:all
 # Run from root: scripts/release_main.sh
@@ -66,6 +66,7 @@ JS_PACKAGES=(
   js/plugins/middleware
   js/plugins/vercel-ai
   js/plugins/a2ui
+  js/plugins/otel
 )
 
 # CLI tooling packages to publish, relative to the repo root.

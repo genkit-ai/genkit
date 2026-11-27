@@ -22,7 +22,6 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
-	"go.opentelemetry.io/otel/trace"
 
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
@@ -290,8 +289,10 @@ func NewEvaluatorAction[Config any](
 				}
 				_, err := tracing.RunInNewSpan(ctx, spanMetadata, datapoint,
 					func(ctx context.Context, input *Example) (*EvaluatorCallbackResponse, error) {
-						traceId := trace.SpanContextFromContext(ctx).TraceID().String()
-						spanId := trace.SpanContextFromContext(ctx).SpanID().String()
+						// Genkit's ids, which the Dev UI stores the trace under;
+						// the OTel span context is empty without an SDK.
+						ti := tracing.SpanTraceInfo(ctx)
+						traceId, spanId := ti.TraceID, ti.SpanID
 
 						callbackRequest := EvaluatorCallbackRequest{
 							Input:   *input,

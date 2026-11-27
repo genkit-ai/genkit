@@ -30,6 +30,7 @@ import (
 
 	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/core/status"
+	"github.com/firebase/genkit/go/internal/base"
 )
 
 // AugmentWithContextOptions configures how a request is augmented with context.
@@ -102,6 +103,51 @@ func addAutomaticTelemetry() ModelMiddleware {
 
 			return resp, nil
 		}
+	}
+}
+
+// reportUsage reports each response's usage to the context's usage sink (see
+// [base.WithUsageSink]), so every route to a model action counts: the
+// generate loop, a hook that calls another model directly, a nested generate.
+// It wraps the telemetry middleware so the usage it reports carries the
+// character and media counts.
+func reportUsage() ModelMiddleware {
+	return func(fn ModelFunc) ModelFunc {
+		return func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+			resp, err := fn(ctx, req, cb)
+			if resp != nil && resp.Usage != nil {
+				if sink := base.UsageSinkFromContext(ctx); sink != nil {
+					sink(resp.Usage)
+				}
+			}
+			return resp, err
+		}
+	}
+}
+
+// fillRequest sets the response's Request, when the model left it unset, to
+// the request the model action received. Generate wraps the model action with
+// it, outside the wrappers that rewrite the request (a simulated system
+// prompt, injected context), so [ModelResponse.History] gives back the
+// caller's conversation, not the rewritten one, and agrees with the request
+// an observer reports. The model action's own output does not carry the
+// request, so its trace and wire form do not repeat the input.
+func fillRequest() ModelMiddleware {
+	return func(fn ModelFunc) ModelFunc {
+		return func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+			resp, err := fn(ctx, req, cb)
+			if resp != nil && resp.Request == nil {
+				resp.Request = req
+			}
+			return resp, err
+		}
+	}
+}
+
+func init() {
+	base.FailedModelResponse = func(ctx context.Context, req any, err error) any {
+		r, _ := req.(*ModelRequest)
+		return failurePartial(ctx, nil, r, err)
 	}
 }
 

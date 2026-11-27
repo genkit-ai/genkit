@@ -35,6 +35,7 @@ import (
 	aix "github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/ai/exp/localstore"
 	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/genkit/exp"
 )
@@ -232,6 +233,43 @@ func TestHandlerAgent(t *testing.T) {
 		}
 	})
 
+	t.Run("served failure hides internal error text", func(t *testing.T) {
+		// Dev keeps the full text for the Dev UI; this pins production.
+		t.Setenv("GENKIT_ENV", "prod")
+		code, body := post(t, "agentServer", turn("fail"), false)
+		if code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body = %s", code, body)
+		}
+		res := parseResult(t, body)
+		if res.Error == nil || res.Error.Status != "RESOURCE_EXHAUSTED" {
+			t.Fatalf("error = %+v, want RESOURCE_EXHAUSTED", res.Error)
+		}
+		if strings.Contains(res.Error.Message, "model on fire") {
+			t.Errorf("served output error = %q, leaks the internal text", res.Error.Message)
+		}
+
+		// The failed turn's snapshot, read through the getSnapshot route.
+		snapAction := genkit.LookupAction(g, api.KeyFromName(api.ActionTypeAgentSnapshot, "agentServer"))
+		req := httptest.NewRequest("POST", "/", strings.NewReader(`{"data":{"snapshotId":"`+res.SnapshotID+`"}}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		genkit.Handler(snapAction)(w, req)
+		snapBody, _ := io.ReadAll(w.Result().Body)
+		if strings.Contains(string(snapBody), "model on fire") || !strings.Contains(string(snapBody), "RESOURCE_EXHAUSTED") {
+			t.Errorf("served snapshot = %s, want the status without the internal text", snapBody)
+		}
+
+		// The redaction belongs to the wire: a caller in this process keeps
+		// the full text.
+		out, err := exp.LookupAgent(g, "agentServer").RunText(context.Background(), "fail")
+		if err != nil {
+			t.Fatalf("RunText: %v", err)
+		}
+		if out.Error == nil || !strings.Contains(out.Error.Message, "model on fire") {
+			t.Errorf("in-process output error = %+v, want the full text", out.Error)
+		}
+	})
+
 	t.Run("missing turn message fails before model invocation", func(t *testing.T) {
 		before := modelCalls.Load()
 		code, body := post(t, "agentClient", `{"data":{}}`, false)
@@ -280,6 +318,23 @@ func TestHandlerAgent(t *testing.T) {
 		}
 		if !strings.Contains(body, "streaming session") {
 			t.Errorf("init without data: body should point the caller at streaming sessions; body = %s", body)
+		}
+	})
+
+	t.Run("served refusals name the caller's input, not the agent's setup", func(t *testing.T) {
+		t.Setenv("GENKIT_ENV", "prod")
+		_, body := post(t, "agentServer", turnWithInit("hi", `{"state":{"messages":[]}}`), false)
+		if !strings.Contains(body, "FAILED_PRECONDITION") || strings.Contains(body, "session store") {
+			t.Errorf("state on server-managed: body = %s, want the status without the store setup", body)
+		}
+
+		snapAction := genkit.LookupAction(g, api.KeyFromName(api.ActionTypeAgentSnapshot, "agentServer"))
+		req := httptest.NewRequest("POST", "/", strings.NewReader(`{"data":{}}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		genkit.Handler(snapAction)(w, req)
+		if b, _ := io.ReadAll(w.Result().Body); !strings.Contains(string(b), "snapshotId or sessionId is required") {
+			t.Errorf("getSnapshot without an ID: body = %s, want the missing field named", b)
 		}
 	})
 

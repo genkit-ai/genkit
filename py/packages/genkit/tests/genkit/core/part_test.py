@@ -16,13 +16,13 @@
 
 """Unit tests for Part factory methods and property getters."""
 
-import importlib
+import json
 from collections.abc import Callable
 
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from genkit import Document, Media, Message, Part, ToolRequest, ToolResponse, respond_to_interrupt, restart_tool
+from genkit import Document, Media, Message, Part
 from genkit._ai._agents._client import (
     SessionSnapshot as ClientSessionSnapshot,
     SessionState as ClientSessionState,
@@ -39,7 +39,6 @@ from genkit._core._model import (
     AgentResult,
     AgentStreamChunk,
     Artifact,
-    Candidate,
     EmbedRequest,
     GenerateActionOptions,
     ModelRequest,
@@ -49,16 +48,20 @@ from genkit._core._model import (
     SessionSnapshot,
     SessionState,
     as_artifact,
-    as_candidate,
     as_document,
     as_message,
     as_model_request,
     as_model_response_chunk,
     as_part,
+    chunk_for_stream,
 )
 from genkit._core._typing import (
+    AgentInit as AgentInitData,
+    AgentInput as AgentInputData,
+    AgentOutput as AgentOutputData,
+    AgentResult as AgentResultData,
+    AgentStreamChunk as AgentStreamChunkData,
     Artifact as ArtifactData,
-    Candidate as CandidateData,
     DocumentData,
     EmbedRequest as EmbedRequestData,
     FinishReason,
@@ -68,19 +71,12 @@ from genkit._core._typing import (
     PartData,
     Resource,
     Resume as ResumeData,
+    SessionSnapshot as SessionSnapshotData,
+    SessionState as SessionStateData,
     TextPart,
 )
 from genkit.middleware import ToolHookParams
-from genkit.model import Document as ModelDocument
-
-
-def _from_import(module: str, name: str) -> object:
-    """``from module import name`` — ImportError if the name is gone."""
-    try:
-        return getattr(importlib.import_module(module), name)
-    except AttributeError as exc:
-        raise ImportError(f'cannot import name {name!r} from {module!r}') from exc
-
+from genkit.model import ToolRequest, ToolResponse
 
 _GETTERS = ('text', 'media', 'tool_request', 'tool_response', 'data', 'reasoning', 'custom')
 
@@ -404,40 +400,15 @@ def test_document_from_another_document_raises() -> None:
         Document(doc)  # type: ignore[arg-type]
 
 
-def test_text_part_is_not_exported_from_genkit() -> None:
-    with pytest.raises(ImportError, match='TextPart'):
-        _from_import('genkit', 'TextPart')
-
-
-def test_media_part_is_not_exported_from_genkit() -> None:
-    with pytest.raises(ImportError, match='MediaPart'):
-        _from_import('genkit', 'MediaPart')
-
-
-def test_document_imports_from_genkit_model() -> None:
-    doc = ModelDocument.from_text('hi')
+def test_document_from_text() -> None:
+    doc = Document.from_text('hi')
     assert type(doc) is Document
     assert doc.text == 'hi'
 
 
-def test_reasoning_part_is_not_exported_from_genkit() -> None:
-    with pytest.raises(ImportError, match='ReasoningPart'):
-        _from_import('genkit', 'ReasoningPart')
-
-
-def test_tool_request_part_is_not_exported_from_genkit() -> None:
-    with pytest.raises(ImportError, match='ToolRequestPart'):
-        _from_import('genkit', 'ToolRequestPart')
-
-
-def test_tool_response_part_is_not_exported_from_genkit() -> None:
-    with pytest.raises(ImportError, match='ToolResponsePart'):
-        _from_import('genkit', 'ToolResponsePart')
-
-
-def test_respond_to_interrupt_returns_part() -> None:
+def test_part_respond_returns_part() -> None:
     interrupt = Part.from_tool_request(name='ask', input={'q': 'ok?'}, ref='r1')
-    reply = respond_to_interrupt('yes', interrupt=interrupt)
+    reply = interrupt.respond('yes')
     assert type(reply) is Part
     assert reply.tool_response is not None
     assert reply.tool_response.name == 'ask'
@@ -445,9 +416,9 @@ def test_respond_to_interrupt_returns_part() -> None:
     assert reply.metadata == {'interruptResponse': True}
 
 
-def test_restart_tool_returns_part() -> None:
+def test_part_restart_returns_part() -> None:
     interrupt = Part.from_tool_request(name='pay', input={'amount': 10}, ref='r1')
-    restart = restart_tool(interrupt=interrupt, resumed_metadata={'k': 'v'})
+    restart = interrupt.restart(resumed_metadata={'k': 'v'})
     assert type(restart) is Part
     assert restart.tool_request is not None
     assert restart.tool_request.name == 'pay'
@@ -473,15 +444,17 @@ def test_agent_stream_chunk_model_chunk_is_veneer() -> None:
     assert chunk.model_chunk.content[0].text == 'hi'
 
 
-def test_candidate_message_is_message() -> None:
-    cand = Candidate(
-        index=0,
-        message=Message(role='model', content=[Part.from_text('hi')]),
-        finish_reason=FinishReason.STOP,
+def test_agent_stream_chunk_keeps_model_chunk_index_and_output() -> None:
+    """AgentStreamChunk keeps the streamed chunk's index and parsed output."""
+    streamed = chunk_for_stream(
+        ModelResponseChunk(content=[Part.from_text('hi')]),
+        index=2,
+        chunk_parser=lambda _c: 'parsed',
     )
-    assert type(cand.message) is Message
-    assert type(cand.message.content[0]) is Part
-    assert cand.message.text == 'hi'
+    wrap = AgentStreamChunk(model_chunk=streamed)
+    assert wrap.model_chunk is not None
+    assert wrap.model_chunk.index == 2
+    assert wrap.model_chunk.output == 'parsed'
 
 
 def test_part_from_text_round_trip() -> None:
@@ -575,7 +548,7 @@ def _two_kind_on_resume() -> Resume:
 
 _MESSAGE_WRAPS: dict[str, Callable[[Message], object]] = {
     'as_message': as_message,
-    'GenerateActionOptions': lambda m: GenerateActionOptions(model='programmableModel', messages=[m]),
+    'GenerateActionOptions': lambda m: GenerateActionOptions(model='scriptedModel', messages=[m]),
     'AgentInput': lambda m: AgentInput(message=m),
     'AgentOutput': lambda m: AgentOutput(message=m),
     'AgentResult': lambda m: AgentResult(message=m),
@@ -590,7 +563,7 @@ _ARTIFACT_WRAPS: dict[str, Callable[[Artifact], object]] = {
 }
 
 _RESUME_WRAPS: dict[str, Callable[[Resume], object]] = {
-    'GenerateActionOptions.resume': lambda r: GenerateActionOptions(model='programmableModel', messages=[], resume=r),
+    'GenerateActionOptions.resume': lambda r: GenerateActionOptions(model='scriptedModel', messages=[], resume=r),
     'AgentInput.resume': lambda r: AgentInput(resume=r),
 }
 
@@ -679,19 +652,29 @@ def test_model_response_chunk_ctor_keeps_index_zero() -> None:
     assert as_model_response_chunk({'content': [{'text': 'hi'}], 'index': 0}).index == 0
 
 
-def test_model_response_rejects_a_two_kind_part_already_on_candidate() -> None:
-    cand = Candidate(
-        index=0,
-        message=Message(role='model', content=[Part.from_text('hi')]),
-        finish_reason=FinishReason.STOP,
-    )
-    cand.message.content[0] = Part.model_construct(text='caption', media=Media(url='https://y'))
-    with pytest.raises(ValidationError, match='exactly one'):
-        ModelResponse(
-            message=Message(role='model', content=[Part.from_text('ok')]),
-            finish_reason=FinishReason.STOP,
-            candidates=[cand],
-        )
+def test_model_response_drops_legacy_candidates_on_load() -> None:
+    """A JS response, stored trace or snapshot that still has candidates loads; the list is dropped."""
+    wire = {
+        'message': {'role': 'model', 'content': [{'text': 'Smoked Salmon Tartine'}]},
+        'finishReason': 'stop',
+        'candidates': [
+            {
+                'index': 0,
+                'message': {'role': 'model', 'content': [{'text': 'Smoked Salmon Tartine'}]},
+                'finishReason': 'stop',
+            }
+        ],
+    }
+    resp = ModelResponse.model_validate(wire)
+    assert resp.text == 'Smoked Salmon Tartine'
+    assert 'candidates' not in resp.model_dump(by_alias=True)
+    assert ModelResponse.model_validate_json(json.dumps(wire)).text == 'Smoked Salmon Tartine'
+
+
+def test_model_response_still_rejects_other_unknown_keys() -> None:
+    """Only candidates is tolerated; other unknown keys still fail extra='forbid'."""
+    with pytest.raises(ValidationError):
+        ModelResponse.model_validate({'finishReason': 'stop', 'choices': []})
 
 
 def test_model_response_rejects_a_two_kind_part_already_on_request() -> None:
@@ -710,18 +693,7 @@ def test_require_model_response_rejects_a_two_kind_part_already_on_message() -> 
     assert resp.message is not None
     resp.message.content[0] = Part.model_construct(text='caption', media=Media(url='https://y'))
     with pytest.raises(ValidationError, match='exactly one'):
-        require_model_response(raw=resp, name='programmableModel')
-
-
-def test_as_candidate_rebuilds_and_keeps_message_text() -> None:
-    cand = Candidate(
-        index=0,
-        message=Message(role='model', content=[Part.from_text('hi')]),
-        finish_reason=FinishReason.STOP,
-    )
-    walked = as_candidate(cand)
-    assert walked is not cand
-    assert walked.message.content[0].text == 'hi'
+        require_model_response(raw=resp, name='scriptedModel')
 
 
 def test_as_model_request_rebuilds_and_keeps_message_text() -> None:
@@ -733,7 +705,7 @@ def test_as_model_request_rebuilds_and_keeps_message_text() -> None:
 
 def test_require_model_response_rebuilds_and_keeps_message_text() -> None:
     resp = ModelResponse(message=Message(role='model', content=[Part.from_text('ok')]), finish_reason=FinishReason.STOP)
-    walked = require_model_response(raw=resp, name='programmableModel')
+    walked = require_model_response(raw=resp, name='scriptedModel')
     assert walked is not resp
     assert walked.message is not None
     assert walked.message.content[0].text == 'ok'
@@ -867,14 +839,14 @@ def test_response_request_keeps_typed_config() -> None:
 def test_generate_options_without_messages_raises() -> None:
     """A /generate payload with no messages fails before it hits the model."""
     with pytest.raises(ValidationError, match='messages'):
-        GenerateActionOptions.model_validate({'model': 'programmableModel'})
+        GenerateActionOptions.model_validate({'model': 'scriptedModel'})
 
 
 def test_pending_content_reports_the_kind_rule() -> None:
     """A bad pending part names the kind rule, not just 'must be a part'."""
     with pytest.raises(GenkitError, match='exactly one') as ei:
         normalize_pending_content([{}], tool_name='screenshot')
-    assert 'pendingContent[0]' in ei.value.original_message
+    assert 'pendingContent[0]' in ei.value.message
 
 
 def test_veneer_has_every_generated_field() -> None:
@@ -884,10 +856,16 @@ def test_veneer_has_every_generated_field() -> None:
         (Message, MessageData),
         (Document, DocumentData),
         (Artifact, ArtifactData),
-        (Candidate, CandidateData),
         (ModelResponseChunk, ModelResponseChunkData),
         (Resume, ResumeData),
         (EmbedRequest, EmbedRequestData),
+        (SessionState, SessionStateData),
+        (SessionSnapshot, SessionSnapshotData),
+        (AgentInit, AgentInitData),
+        (AgentInput, AgentInputData),
+        (AgentOutput, AgentOutputData),
+        (AgentResult, AgentResultData),
+        (AgentStreamChunk, AgentStreamChunkData),
     )
     for veneer, wire in twins:
         missing = set(wire.model_fields) - set(veneer.model_fields)

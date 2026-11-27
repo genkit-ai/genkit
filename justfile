@@ -32,7 +32,7 @@ mod py
 default:
     @just --list --unsorted
 
-# Format all code (Python, TOML).
+# Format all code (Python, Go).
 fmt:
     ./bin/fmt
 
@@ -47,10 +47,6 @@ add-license:
 # Check license headers and compliance.
 check-license:
     ./bin/check_license
-
-# Format all pyproject.toml files.
-format-toml:
-    ./bin/format_toml_files
 
 # Kill processes on common development ports.
 killports:
