@@ -15,16 +15,17 @@
  */
 
 import { BackgroundActionRunOptions, Operation } from '@genkit-ai/core';
+import { logger } from '@genkit-ai/core/logging';
 import { initNodeFeatures } from '@genkit-ai/core/node';
 import { Registry } from '@genkit-ai/core/registry';
 import { enableTelemetry } from '@genkit-ai/core/tracing';
 import { SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import * as assert from 'assert';
-import { beforeEach, describe, it } from 'node:test';
+import { beforeEach, describe, it, mock } from 'node:test';
 import { TestSpanExporter } from '../../../core/tests/utils.js';
 import { GenkitAI } from '../../src/genkit-ai.js';
 import { GenerateResponseData } from '../../src/model-types.js';
-import { defineBackgroundModel } from '../../src/model.js';
+import { defineBackgroundModel, resolveModel } from '../../src/model.js';
 
 initNodeFeatures();
 const spanExporter = new TestSpanExporter();
@@ -135,6 +136,37 @@ describe('background model', () => {
     assert.ok(
       startOptionsReceived?.trace?.traceId,
       'start should receive trace info'
+    );
+  });
+
+  it('keeps stage in metadata and warns when deprecated', async () => {
+    defineBackgroundModel(registry, {
+      name: 'old-background-model',
+      stage: 'deprecated',
+      start: async () => ({ id: 'op' }),
+      check: async (op) => op,
+    });
+    const warn = mock.method(logger, 'warn', () => {});
+    let resolved;
+    try {
+      resolved = await resolveModel(registry, 'old-background-model', {
+        warnDeprecated: true,
+      });
+    } finally {
+      warn.mock.restore();
+    }
+
+    assert.strictEqual(
+      resolved.modelAction.__action.metadata?.model?.stage,
+      'deprecated'
+    );
+    assert.deepStrictEqual(
+      warn.mock.calls.map((c) => c.arguments),
+      [
+        [
+          "Model 'old-background-model' is deprecated and may be removed in a future release.",
+        ],
+      ]
     );
   });
 });
