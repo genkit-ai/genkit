@@ -817,12 +817,13 @@ export function toOpenAIRequestBody(
   }
   const bodyRecord = body as unknown as Record<string, unknown>;
   for (const key in bodyRecord) {
-    // Only drop unset values and empty arrays: falsy values such as
-    // `temperature: 0`, `presence_penalty: 0` or `logprobs: false` are real
-    // settings.
+    // `0` and `false` are real settings: drop only unset values and empty arrays.
+    const value = bodyRecord[key];
     if (
-      bodyRecord[key] == null ||
-      (Array.isArray(bodyRecord[key]) && !(bodyRecord[key] as unknown[]).length)
+      value == null ||
+      value === '' ||
+      Number.isNaN(value) ||
+      (Array.isArray(value) && !value.length)
     )
       delete bodyRecord[key];
   }
@@ -913,7 +914,6 @@ export function toGenkitError(
       status = 'PERMISSION_DENIED';
       break;
     case 400:
-    // Request validation errors, e.g. an unknown or out-of-range field.
     case 422:
       status = 'INVALID_ARGUMENT';
       break;

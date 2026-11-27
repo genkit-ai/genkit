@@ -208,11 +208,11 @@ async function listMistralActions(
  * and keeps the info of each listed model outside the known list. A model
  * resolved before the models were listed (the usual case outside the Dev UI)
  * then gets the same capabilities as a listed one. A failed listing is not
- * kept, so the next call tries again. A model resolved while the listing
- * fails gets no `supports` at all, instead of the text-only default.
+ * kept, so the next call tries again. A model resolved while its
+ * capabilities can't be found out (the listing fails, or there is no key to
+ * list with) gets no `supports` at all, instead of the text-only default.
  *
  * @param canList Whether the plugin has a default API key to list with.
- *   Without one (`apiKey: false`), unknown models get the text-only default.
  */
 function createModelCatalog(canList: boolean) {
   const listedModelInfo = new Map<string, ModelInfo>();
@@ -228,16 +228,13 @@ function createModelCatalog(canList: boolean) {
     client: OpenAI,
     name: string
   ): Promise<ModelInfo | undefined> => {
-    if (!listedModelInfo.has(name) && canList) {
-      try {
-        await list(client);
-      } catch {
-        // The capabilities are unknown, so claim none. With `supports` unset,
-        // Genkit doesn't warn that the model lacks tools, and the Dev UI
-        // doesn't show the model as text only. The registry keeps this action
-        // until restart, so a text-only default would stick.
-        return {};
-      }
+    if (listedModelInfo.has(name)) return listedModelInfo.get(name);
+    // Capabilities are unknown: leave `supports` unset, since the registry keeps this action until restart.
+    if (!canList) return {};
+    try {
+      await list(client);
+    } catch {
+      return {};
     }
     return listedModelInfo.get(name);
   };

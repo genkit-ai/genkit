@@ -1844,9 +1844,7 @@ describe('mistral plugin', () => {
           '/model/mistral/devstral-medium-latest'
         );
 
-        expect(action?.__action.metadata?.model.supports).toEqual(
-          UNKNOWN_MODEL_SUPPORTS
-        );
+        expect(action?.__action.metadata?.model.supports).toBeUndefined();
         expect(server.requests).toHaveLength(0);
       } finally {
         if (saved !== undefined) process.env.MISTRAL_API_KEY = saved;

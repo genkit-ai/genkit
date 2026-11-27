@@ -1830,6 +1830,8 @@ describe('toOpenAiRequestBody', () => {
         logProbs: false,
         parallel_tool_calls: false,
         topP: undefined,
+        reasoning_effort: '',
+        top_logprobs: NaN,
       },
       tools: [],
     } as unknown as GenerateRequest;
@@ -1842,6 +1844,8 @@ describe('toOpenAiRequestBody', () => {
     expect(actualOutput.logprobs).toBe(false);
     expect(actualOutput.parallel_tool_calls).toBe(false);
     expect(actualOutput).not.toHaveProperty('top_p');
+    expect(actualOutput).not.toHaveProperty('reasoning_effort');
+    expect(actualOutput).not.toHaveProperty('top_logprobs');
     expect(actualOutput).not.toHaveProperty('stop');
     expect(actualOutput).not.toHaveProperty('tools');
   });

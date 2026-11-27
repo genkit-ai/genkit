@@ -133,8 +133,7 @@ const MISTRAL_REQUEST_FIELDS = Object.keys(
  * are left out: Mistral's request schema declares `top_k`, `logprobs` and
  * `top_logprobs`, but its models reject them ("top_k sampling is not enabled
  * for this model", "Logprobs are not enabled for this model"). Bounds follow
- * Mistral's request schema, so out of range values are caught before the
- * request goes out.
+ * Mistral's request schema.
  */
 export const MistralChatCompletionConfigSchema =
   ChatCompletionCommonConfigSchema.omit({
@@ -257,7 +256,7 @@ function refuseNonImageMedia(messages: ChatCompletionMessageParam[]) {
  * Marks reasoning parts read from Mistral replies, in
  * `metadata.reasoningSource`. Only reasoning with this mark is sent back to
  * Mistral: a history can hold reasoning from other models, whose text and
- * signatures Mistral can't use. The Python plugin uses the same mark.
+ * signatures Mistral can't use.
  */
 export const MISTRAL_REASONING_SOURCE = 'mistral';
 
