@@ -102,6 +102,73 @@ func TestToGeminiSchema(t *testing.T) {
 			},
 		},
 		{
+			name: "object with an unconstrained property",
+			genkitSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"value": map[string]any{"title": "Value"},
+				},
+			},
+			want: &genai.Schema{
+				Type: genai.TypeObject,
+				Properties: map[string]*genai.Schema{
+					"value": {Title: "Value"},
+				},
+			},
+		},
+		{
+			name: "object with an enum-only property",
+			genkitSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"mode": map[string]any{"enum": []any{"a", "b"}},
+				},
+			},
+			want: &genai.Schema{
+				Type: genai.TypeObject,
+				Properties: map[string]*genai.Schema{
+					"mode": {Type: genai.TypeString, Enum: []string{"a", "b"}},
+				},
+			},
+		},
+		{
+			name: "properties imply an object type",
+			genkitSchema: map[string]any{
+				"properties": map[string]any{"name": map[string]any{"type": "string"}},
+			},
+			want: &genai.Schema{
+				Type: genai.TypeObject,
+				Properties: map[string]*genai.Schema{
+					"name": {Type: genai.TypeString},
+				},
+			},
+		},
+		{
+			name: "items imply an array type",
+			genkitSchema: map[string]any{
+				"items": map[string]any{"type": "integer"},
+			},
+			want: &genai.Schema{
+				Type:  genai.TypeArray,
+				Items: &genai.Schema{Type: genai.TypeInteger},
+			},
+		},
+		{
+			name:         "string const implies a string enum",
+			genkitSchema: map[string]any{"const": "fixed"},
+			want:         &genai.Schema{Type: genai.TypeString, Enum: []string{"fixed"}},
+		},
+		{
+			name:         "explicit string type retains const",
+			genkitSchema: map[string]any{"type": "string", "const": "fixed"},
+			want:         &genai.Schema{Type: genai.TypeString, Enum: []string{"fixed"}},
+		},
+		{
+			name:         "non-string enum without type is rejected",
+			genkitSchema: map[string]any{"enum": []any{"valid", 42}},
+			wantErr:      true,
+		},
+		{
 			name: "anyOf with []any (as decoded by json.Unmarshal)",
 			genkitSchema: map[string]any{
 				"anyOf": []any{
@@ -113,6 +180,7 @@ func TestToGeminiSchema(t *testing.T) {
 			},
 			want: &genai.Schema{
 				Type:        genai.TypeString,
+				Nullable:    genai.Ptr(true),
 				Title:       "Domain",
 				Description: "A domain",
 			},
@@ -129,8 +197,22 @@ func TestToGeminiSchema(t *testing.T) {
 			},
 			want: &genai.Schema{
 				Type:        genai.TypeString,
+				Nullable:    genai.Ptr(true),
 				Title:       "Domain",
 				Description: "A domain",
+			},
+		},
+		{
+			name: "anyOf with null before the concrete type",
+			genkitSchema: map[string]any{
+				"anyOf": []any{
+					map[string]any{"type": "null"},
+					map[string]any{"type": "string"},
+				},
+			},
+			want: &genai.Schema{
+				Type:     genai.TypeString,
+				Nullable: genai.Ptr(true),
 			},
 		},
 		{

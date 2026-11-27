@@ -49,6 +49,8 @@ func toGeminiSchema(originalSchema map[string]any, genkitSchema map[string]any) 
 				}
 			}
 		}
+		var selected *genai.Schema
+		var nullable bool
 		for _, subSchema := range anyOfList {
 			if title, ok := genkitSchema["title"]; ok {
 				subSchema["title"] = title
@@ -57,16 +59,57 @@ func toGeminiSchema(originalSchema map[string]any, genkitSchema map[string]any) 
 				subSchema["description"] = description
 			}
 			res, err := toGeminiSchema(originalSchema, subSchema)
-			if err == nil && res != nil && res.Type != "" {
-				return res, nil
+			if err != nil || res == nil {
+				continue
 			}
+			if res.Nullable != nil && *res.Nullable && res.Type == "" {
+				nullable = true
+			}
+			if selected == nil && res.Type != "" {
+				selected = res
+			}
+		}
+		if selected != nil {
+			if nullable {
+				selected.Nullable = genai.Ptr(true)
+			}
+			return selected, nil
 		}
 	}
 
 	schema := &genai.Schema{}
 	typeVal, ok := genkitSchema["type"]
 	if !ok {
-		return nil, status.Errorf(status.ErrInvalidSchema, "schema is missing the 'type' field: %#v", genkitSchema)
+		switch {
+		case genkitSchema["properties"] != nil:
+			typeVal = "object"
+		case genkitSchema["items"] != nil:
+			typeVal = "array"
+		case genkitSchema["enum"] != nil:
+			var count int
+			switch values := genkitSchema["enum"].(type) {
+			case []any:
+				count = len(values)
+			case []string:
+				count = len(values)
+			}
+			if count == 0 || len(castToStringArray(genkitSchema["enum"])) != count {
+				return nil, status.Errorf(status.ErrInvalidSchema, "schema enum without a type must contain only non-empty strings: %#v", genkitSchema["enum"])
+			}
+			typeVal = "string"
+		case genkitSchema["const"] != nil:
+			_, ok := genkitSchema["const"].(string)
+			if !ok {
+				return nil, status.Errorf(status.ErrInvalidSchema, "schema const without a type must be a string: %#v", genkitSchema["const"])
+			}
+			typeVal = "string"
+		default:
+			// A schema with only annotations leaves the type unconstrained.
+			typeVal = ""
+		}
+	}
+	if value, ok := genkitSchema["const"].(string); ok {
+		schema.Enum = []string{value}
 	}
 
 	// JSON Schema 2020-12 allows "type" to be an array of types, e.g.
@@ -105,7 +148,9 @@ func toGeminiSchema(originalSchema map[string]any, genkitSchema map[string]any) 
 
 	switch typeStr {
 	case "":
-		// Only "null" was specified (or similar); leave Type unset and rely on Nullable.
+		// An unconstrained schema has no Gemini type.
+	case "null":
+		schema.Nullable = genai.Ptr(true)
 	case "string":
 		schema.Type = genai.TypeString
 	case "float64", "number":
