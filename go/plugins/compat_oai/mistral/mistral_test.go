@@ -536,6 +536,70 @@ func TestReasoningGoesBackAsThinkingChunk(t *testing.T) {
 	}
 }
 
+// TestStreamedReasoningKeepsSignedBlocks pins that a streamed reply with two
+// signed thinking blocks goes back as two thinking chunks, each with its own
+// signature, as a complete reply does. Fragments of a block are joined until
+// one carries a signature.
+func TestStreamedReasoningKeepsSignedBlocks(t *testing.T) {
+	var mu sync.Mutex
+	var requests int
+	var assistant map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requests++
+		reqNum := requests
+		mu.Unlock()
+		body := decodeChatRequest(t, r)
+		if reqNum == 1 {
+			writeSSE(w,
+				`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"mistral-large-4","choices":[{"index":0,"delta":{"role":"assistant","content":[{"type":"thinking","thinking":[{"type":"text","text":"A1 "}]}]},"finish_reason":null}]}`,
+				`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"mistral-large-4","choices":[{"index":0,"delta":{"content":[{"type":"thinking","thinking":[{"type":"text","text":"A2"}],"signature":"sigA"}]},"finish_reason":null}]}`,
+				`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"mistral-large-4","choices":[{"index":0,"delta":{"content":[{"type":"thinking","thinking":[{"type":"text","text":"B"}],"signature":"sigB"}]},"finish_reason":null}]}`,
+				`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"mistral-large-4","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call1","type":"function","function":{"name":"lookup","arguments":"{\"value\":\"q\"}"}}]},"finish_reason":"tool_calls"}]}`,
+			)
+			return
+		}
+		messages, _ := body["messages"].([]any)
+		for _, m := range messages {
+			if msg, _ := m.(map[string]any); msg["role"] == "assistant" {
+				mu.Lock()
+				assistant = msg
+				mu.Unlock()
+			}
+		}
+		writeSSE(w, `{"id":"c2","object":"chat.completion.chunk","created":1,"model":"mistral-large-4","choices":[{"index":0,"delta":{"role":"assistant","content":"done"},"finish_reason":"stop"}]}`)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	g := genkit.Init(ctx, genkit.WithPlugins(newPlugin(server)), genkit.WithDefaultModel("mistral/mistral-large-4"))
+	lookup := genkit.DefineTool(g, "lookup", "Looks up a value.",
+		func(_ *ai.ToolContext, input struct {
+			Value string `json:"value"`
+		}) (string, error) {
+			return "result", nil
+		},
+	)
+
+	_, err := genkit.Generate(ctx, g, ai.WithPrompt("Use the lookup tool."), ai.WithTools(lookup),
+		ai.WithStreaming(func(context.Context, *ai.ModelResponseChunk) error { return nil }))
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	want := []any{
+		map[string]any{"type": "thinking", "thinking": []any{map[string]any{"type": "text", "text": "A1 A2"}}, "signature": "sigA"},
+		map[string]any{"type": "thinking", "thinking": []any{map[string]any{"type": "text", "text": "B"}}, "signature": "sigB"},
+	}
+	if assistant == nil {
+		t.Fatal("second request has no assistant message")
+	}
+	if got := assistant["content"]; !reflect.DeepEqual(got, want) {
+		t.Errorf("assistant content = %#v, want one thinking chunk per signed block %#v", got, want)
+	}
+}
+
 // TestStructuredOutputRequest pins how a constrained JSON request reaches
 // Mistral. Without tools the output schema rides as a json_schema
 // response_format. With tools no response_format is sent at all, since
@@ -778,7 +842,10 @@ func TestDynamicListingAndResolution(t *testing.T) {
 			_, _ = io.WriteString(w, `{"object":"list","data":[
 				{"id":"mistral-brand-new","object":"model","created":1,"owned_by":"mistralai","capabilities":{"completion_chat":true,"function_calling":true}},
 				{"id":"mistral-embed","object":"model","created":1,"owned_by":"mistralai","capabilities":{"completion_chat":false}},
-				{"id":"mistral-ocr-latest","object":"model","created":1,"owned_by":"mistralai","capabilities":{"completion_chat":false,"ocr":true}}
+				{"id":"mistral-ocr-latest","object":"model","created":1,"owned_by":"mistralai","capabilities":{"completion_chat":false,"ocr":true}},
+				{"id":"gateway-chat","object":"model","created":1,"owned_by":"gateway"},
+				{"id":"gateway-embed","object":"model","created":1,"owned_by":"gateway"},
+				{"id":"gateway-ocr","object":"model","created":1,"owned_by":"gateway"}
 			]}`)
 			return
 		}
@@ -802,8 +869,8 @@ func TestDynamicListingAndResolution(t *testing.T) {
 			listed = &desc
 		}
 	}
-	if !slices.Equal(names, []string{"mistral/mistral-brand-new"}) {
-		t.Fatalf("ListActions() = %v, want the one chat model", names)
+	if !slices.Equal(names, []string{"mistral/mistral-brand-new", "mistral/gateway-chat"}) {
+		t.Fatalf("ListActions() = %v, want the two chat models", names)
 	}
 	model := listed.Metadata["model"].(map[string]any)
 	schema, _ := model["customOptions"].(map[string]any)
@@ -811,11 +878,11 @@ func TestDynamicListingAndResolution(t *testing.T) {
 	if props["safePrompt"] == nil {
 		t.Error("listed model schema is missing the plugin's safePrompt property")
 	}
-	// Mistral documents structured output on every model it serves, so an
-	// uncurated model takes the curated constrained support.
+	// An uncurated model takes tools and images from its capabilities, and
+	// no constrained output.
 	supports, _ := model["supports"].(map[string]any)
-	if got := supports["constrained"]; got != ai.ConstrainedSupportNoTools {
-		t.Errorf("listed model constrained = %v, want %q", got, ai.ConstrainedSupportNoTools)
+	if supports["tools"] != true || supports["media"] != false || supports["constrained"] != ai.ConstrainedSupport("") {
+		t.Errorf("listed model supports = %v, want tools, no media, no constrained output", supports)
 	}
 
 	resp, err := genkit.Generate(ctx, g, ai.WithModelName("mistral/mistral-brand-new"), ai.WithPrompt("hi"))
@@ -824,6 +891,62 @@ func TestDynamicListingAndResolution(t *testing.T) {
 	}
 	if got := resp.Text(); got != "resolved" {
 		t.Fatalf("Text() = %q, want %q", got, "resolved")
+	}
+}
+
+// TestDynamicModelCapabilities pins the capabilities of a model outside the
+// curated list when it is resolved without a listing first: they come from the
+// models endpoint, text only when it doesn't describe the model, and left to
+// Mistral when the endpoint can't be listed.
+func TestDynamicModelCapabilities(t *testing.T) {
+	for _, tc := range []struct {
+		name, models, id string
+		want             map[string]any
+	}{
+		{
+			name:   "described",
+			models: `{"object":"list","data":[{"id":"vision-new","object":"model","created":1,"owned_by":"mistralai","capabilities":{"completion_chat":true,"function_calling":false,"vision":true}}]}`,
+			id:     "vision-new",
+			want:   map[string]any{"tools": false, "media": true, "constrained": ai.ConstrainedSupport("")},
+		},
+		{
+			name:   "not described",
+			models: `{"object":"list","data":[{"id":"gateway-chat","object":"model","created":1,"owned_by":"gateway"}]}`,
+			id:     "gateway-chat",
+			want:   map[string]any{"tools": false, "media": false, "constrained": ai.ConstrainedSupport("")},
+		},
+		{
+			name: "listing fails",
+			id:   "anything-new",
+			want: map[string]any{"tools": true, "media": false, "constrained": ai.ConstrainedSupportNoTools},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if tc.models == "" {
+					w.WriteHeader(http.StatusInternalServerError)
+					_, _ = io.WriteString(w, `{"message":"unavailable"}`)
+					return
+				}
+				_, _ = io.WriteString(w, tc.models)
+			}))
+			defer server.Close()
+			plugin := newPlugin(server)
+			genkit.Init(context.Background(), genkit.WithPlugins(plugin))
+
+			action := plugin.ResolveAction(api.ActionTypeModel, tc.id)
+			if action == nil {
+				t.Fatalf("ResolveAction(%q) = nil", tc.id)
+			}
+			model := action.Desc().Metadata["model"].(map[string]any)
+			supports := model["supports"].(map[string]any)
+			for key, want := range tc.want {
+				if got := supports[key]; got != want {
+					t.Errorf("supports[%q] = %v, want %v", key, got, want)
+				}
+			}
+		})
 	}
 }
 

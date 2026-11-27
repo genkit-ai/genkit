@@ -74,10 +74,10 @@ Mistral has deprecated or retired them.
 The catalog is not a ceiling: any chat model Mistral serves resolves on
 demand, a config `version` pins a dated snapshot such as
 `mistral-small-2603`, and the `Models` field describes or corrects any model,
-curated or not. A model the plugin does not curate is described as text
-only, with the same constrained output as the curated models, since Mistral
-documents structured output on every model it currently serves; a `Models`
-entry turns on image input where the model has it. The model list is at
+curated or not. A model the plugin does not curate takes tool and image
+support from the `capabilities` Mistral's `/v1/models` reports for it
+(`function_calling`, `vision`), with no constrained output; one the endpoint
+doesn't describe is text only. A `Models` entry overrides either. The model list is at
 https://docs.mistral.ai/getting-started/models and the API reference at
 https://docs.mistral.ai/api.
 
@@ -132,10 +132,8 @@ Python and JS plugins use the same tag.
 
 Mistral's request schema has no `stream_options` field, which the plugin
 sends other providers, and rejects fields it does not declare, so streaming
-requests leave it out. Mistral's changelog says streamed usage arrives on the
-final chunk, but its known-limitations page says `stream_options.include_usage`
-must be set to get it; until a live run settles which holds, streamed
-responses may report zero tokens.
+requests leave it out. Mistral reports usage on the final chunk of every
+stream without it.
 
 ## Embedders
 

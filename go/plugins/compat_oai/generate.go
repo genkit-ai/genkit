@@ -781,9 +781,11 @@ func (g *ModelGenerator) generateStream(ctx context.Context, req *ai.ModelReques
 	// Use openai-go's accumulator to collect the complete response
 	acc := &openai.ChatCompletionAccumulator{}
 	var reasoning strings.Builder
-	// signature is the last signature a thinking chunk carried, which the
-	// provider wants back with the reasoning on the next turn.
-	var signature string
+	// Thinking chunks stream as fragments of a block, joined until one carries
+	// a signature, which closes the block. Each block becomes its own reasoning
+	// part, so a signature goes back only with the text it signs.
+	var thinking []thinkingBlock
+	var openThinking strings.Builder
 	// The accumulator drops the reasoning fields, so whether the provider
 	// sent one at all, even empty, is tracked apart from its text.
 	var reasoningSeen bool
@@ -815,8 +817,12 @@ func (g *ModelGenerator) generateStream(ctx context.Context, req *ai.ModelReques
 			if c, ok := contentChunks(chunk.Choices[0].Delta.JSON.Content.Raw()); ok {
 				chunk.Choices[0].Delta.Content = c.text
 				chunked, chunkReasoningSeen = c, c.reasoning != "" || c.signature != ""
-				if c.signature != "" {
-					signature = c.signature
+				for _, b := range c.thinking {
+					openThinking.WriteString(b.text)
+					if b.signature != "" {
+						thinking = append(thinking, thinkingBlock{text: openThinking.String(), signature: b.signature})
+						openThinking.Reset()
+					}
 				}
 			}
 		}
@@ -907,10 +913,21 @@ func (g *ModelGenerator) generateStream(ctx context.Context, req *ai.ModelReques
 		return nil, err
 	}
 	if reasoningSeen && !slices.ContainsFunc(resp.Message.Content, (*ai.Part).IsReasoning) {
-		resp.Message.Content = append(
-			[]*ai.Part{ai.NewReasoningPart(reasoning.String(), []byte(signature))},
-			resp.Message.Content...,
-		)
+		if openThinking.Len() > 0 {
+			thinking = append(thinking, thinkingBlock{text: openThinking.String()})
+		}
+		var parts []*ai.Part
+		for _, b := range thinking {
+			var sig []byte
+			if b.signature != "" {
+				sig = []byte(b.signature)
+			}
+			parts = append(parts, ai.NewReasoningPart(b.text, sig))
+		}
+		if len(parts) == 0 {
+			parts = []*ai.Part{ai.NewReasoningPart(reasoning.String(), nil)}
+		}
+		resp.Message.Content = append(parts, resp.Message.Content...)
 	}
 	// The message the failing upstream sent rode on a chunk's raw choice, so
 	// it is restored here; a refusal, which the accumulator does keep, wins as
@@ -1059,9 +1076,9 @@ type thinkingBlock struct {
 // chunkedContent is what a message content array holds: the joined text
 // chunks, each thinking chunk as a block of its own, the joined reasoning of
 // those blocks, and the signature the last thinking chunk that had one
-// carried. A complete response keeps the blocks apart, so each signature
-// stays with its own reasoning; a stream delta, which carries a fragment of
-// one block, uses the joined fields.
+// carried. Each signature stays with its own reasoning: a complete response
+// keeps the blocks apart, and a stream joins a block's fragments until one
+// carries its signature.
 type chunkedContent struct {
 	text, reasoning, signature string
 	thinking                   []thinkingBlock

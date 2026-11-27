@@ -22,6 +22,8 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
+	"sync"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
@@ -249,12 +251,20 @@ var (
 		Output:      []string{"text", "json", "array", "enum"},
 		Constrained: ai.ConstrainedSupportNoTools,
 	}
-	// dynamicSupports is for a model the plugin knows nothing about. Mistral
-	// documents custom structured outputs on every model it currently serves
-	// except the retired codestral-mamba, so it takes the curated constrained
-	// support; it reads no images unless a Models entry says it does.
-	// See https://docs.mistral.ai/inference/conversations/structured-output/custom.
-	dynamicSupports = textOnly
+	// listedSupports is the base for a model outside supportedModels: text in
+	// and out, with no constrained output. A model the models endpoint
+	// describes adds tools and images from its capabilities; one it lists
+	// without capabilities, or doesn't list, keeps this as is.
+	listedSupports = ai.ModelSupports{
+		Multiturn:  true,
+		SystemRole: true,
+		Output:     []string{"text"},
+	}
+	// unlistedSupports is for a model resolved while the models endpoint
+	// can't be listed. The registry keeps a resolved model until restart, so
+	// the request goes to Mistral to accept or reject, rather than failing in
+	// Genkit for good after a transient error.
+	unlistedSupports = textOnly
 )
 
 // mediaTypes are the media Mistral's chat completions read through the
@@ -265,7 +275,7 @@ var mediaTypes = []string{"image/*"}
 // supportedModels curates capabilities for Mistral's current chat models,
 // by the aliases Mistral moves to each new snapshot. It is not the set of
 // usable models: any chat model Mistral serves resolves on demand and takes
-// [dynamicModelOptions], so an ID absent here still works, and a dated
+// its capabilities from the models endpoint, so an ID absent here still works, and a dated
 // snapshot can be pinned with a config version. No versions are declared,
 // since Mistral serves dated snapshots the plugin cannot enumerate, and an
 // undeclared list leaves version pinning unconstrained.
@@ -294,9 +304,9 @@ var supportedModels = map[string]ai.ModelOptions{
 }
 
 // dynamicModelOptions is advertised for Mistral models that resolve
-// dynamically rather than appearing in supportedModels.
+// dynamically rather than appearing in supportedModels; Supports is filled in
+// per model, see [Mistral.dynamicSupports].
 var dynamicModelOptions = ai.ModelOptions{
-	Supports: &dynamicSupports,
 	Versions: []string{},
 	Stage:    ai.ModelStageStable,
 }
@@ -353,6 +363,14 @@ type Mistral struct {
 	Embedders map[string]ai.EmbedderOptions
 
 	openAICompatible compat_oai.OpenAICompatible
+	// client lists the models for ResolveAction, which has no listing of its
+	// own to read capabilities from.
+	client *openai.Client
+
+	listMu sync.Mutex
+	// listed holds the capabilities of each chat model outside
+	// supportedModels from the last successful listing, nil before one.
+	listed map[string]ai.ModelSupports
 }
 
 // Name implements genkit.Plugin.
@@ -383,7 +401,7 @@ func (m *Mistral) Init(ctx context.Context) []api.Action {
 
 	m.openAICompatible.Provider = provider
 	m.openAICompatible.MediaTypes = mediaTypes
-	m.openAICompatible.ListModels = listChatModels
+	m.openAICompatible.ListModels = m.listChatModels
 	// Mistral's request schema is closed: it rejects stream_options, and it
 	// reports usage on the final chunk of every stream unasked.
 	m.openAICompatible.OmitStreamOptions = true
@@ -393,6 +411,8 @@ func (m *Mistral) Init(ctx context.Context) []api.Action {
 	m.openAICompatible.ClassifyError = classifyError
 	m.openAICompatible.Opts = opts
 	actions := m.openAICompatible.Init(ctx)
+	client := openai.NewClient(opts...)
+	m.client = &client
 
 	for model := range supportedModels {
 		actions = append(actions, m.newModel(model, m.modelOptions(model)))
@@ -451,7 +471,36 @@ func (m *Mistral) newEmbedder(id string, opts ai.EmbedderOptions) *ai.EmbedderAc
 // makes a caller's entry authoritative whether Init, ListActions or
 // ResolveAction gets there first.
 func (m *Mistral) modelOptions(id string) ai.ModelOptions {
-	return compat_oai.ModelOptionsFor(provider, id, supportedModels, dynamicModelOptions, m.Models)
+	dynamic := dynamicModelOptions
+	if _, ok := supportedModels[id]; !ok {
+		dynamic.Supports = m.dynamicSupports(id)
+	}
+	return compat_oai.ModelOptionsFor(provider, id, supportedModels, dynamic, m.Models)
+}
+
+// dynamicSupports returns the capabilities of a model outside
+// supportedModels, as the models endpoint describes it, listing the models
+// first if no listing has succeeded yet.
+func (m *Mistral) dynamicSupports(id string) *ai.ModelSupports {
+	m.listMu.Lock()
+	listed := m.listed
+	m.listMu.Unlock()
+	if listed == nil && m.client != nil {
+		if _, err := m.listChatModels(context.Background(), m.client); err == nil {
+			m.listMu.Lock()
+			listed = m.listed
+			m.listMu.Unlock()
+		}
+	}
+	if listed == nil {
+		s := unlistedSupports
+		return &s
+	}
+	s, ok := listed[id]
+	if !ok {
+		s = listedSupports
+	}
+	return &s
 }
 
 // embedderOptions is [Mistral.modelOptions] for embedders. An unknown ID has
@@ -501,25 +550,47 @@ func (m *Mistral) ResolveAction(atype api.ActionType, id string) api.Action {
 	return compat_oai.ResolveChatAction[ChatConfig](&m.openAICompatible, atype, id, m.modelOptions)
 }
 
-// listChatModels lists the models Mistral serves through chat completions.
+// listChatModels lists the models Mistral serves through chat completions,
+// and keeps the capabilities of each for [Mistral.dynamicSupports].
 // Mistral's models endpoint also lists its embedding, OCR, moderation and
 // transcription models, which a chat model action would only fail on, so a
 // model whose card does not report the completion_chat capability is left
-// out.
-func listChatModels(ctx context.Context, client *openai.Client) ([]string, error) {
+// out. An entry with no capabilities at all, as a gateway serving plain
+// OpenAI model entries sends, counts as a chat model unless its ID names an
+// embedding or OCR model.
+func (m *Mistral) listChatModels(ctx context.Context, client *openai.Client) ([]string, error) {
 	var ids []string
+	listed := map[string]ai.ModelSupports{}
 	iter := client.Models.ListAutoPaging(ctx)
 	for iter.Next() {
 		model := iter.Current()
+		raw := model.JSON.ExtraFields["capabilities"].Raw()
+		if raw == "" || raw == "null" {
+			if !strings.Contains(model.ID, "embed") && !strings.Contains(model.ID, "ocr") {
+				ids = append(ids, model.ID)
+			}
+			continue
+		}
 		var capabilities struct {
-			CompletionChat bool `json:"completion_chat"`
+			CompletionChat  bool `json:"completion_chat"`
+			FunctionCalling bool `json:"function_calling"`
+			Vision          bool `json:"vision"`
 		}
-		if json.Unmarshal([]byte(model.JSON.ExtraFields["capabilities"].Raw()), &capabilities) == nil && capabilities.CompletionChat {
-			ids = append(ids, model.ID)
+		if json.Unmarshal([]byte(raw), &capabilities) != nil || !capabilities.CompletionChat {
+			continue
 		}
+		ids = append(ids, model.ID)
+		s := listedSupports
+		s.Tools = capabilities.FunctionCalling
+		s.ToolChoice = capabilities.FunctionCalling
+		s.Media = capabilities.Vision
+		listed[model.ID] = s
 	}
 	if err := iter.Err(); err != nil {
 		return nil, compat_oai.WrapAPIError(err)
 	}
+	m.listMu.Lock()
+	m.listed = listed
+	m.listMu.Unlock()
 	return ids, nil
 }
