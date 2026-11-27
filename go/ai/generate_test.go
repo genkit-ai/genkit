@@ -2143,6 +2143,41 @@ func TestGenerateDataStream(t *testing.T) {
 		}
 	})
 
+	t.Run("streams scalar roots and prose-prefixed objects", func(t *testing.T) {
+		scalarStreamModel := func(name string, parts ...string) Model {
+			return defineModel(r, name, &ModelOptions{
+				Supports: &ModelSupports{Multiturn: true, Constrained: ConstrainedSupportAll},
+			}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+				for _, p := range parts {
+					if cb != nil {
+						cb(ctx, &ModelResponseChunk{Content: []*Part{NewTextPart(p)}})
+					}
+				}
+				return &ModelResponse{Request: req, Message: NewModelTextMessage(strings.Join(parts, ""))}, nil
+			})
+		}
+
+		t.Run("int", func(t *testing.T) {
+			chunks, final := collectStream[int](t, r, scalarStreamModel("test/streamInt", "4", "2"))
+			if len(chunks) != 0 || final != 42 {
+				t.Errorf("chunks = %v, final = %v; want no chunks and 42", chunks, final)
+			}
+		})
+		t.Run("object after leading prose", func(t *testing.T) {
+			model := scalarStreamModel("test/streamProseObject", "2", " results:\n", "```json\n{\"name\":\"a\",\"value\":1}\n```")
+			_, final := collectStream[streamingTestData](t, r, model)
+			if final.Name != "a" || final.Value != 1 {
+				t.Errorf("final = %+v, want {a 1}", final)
+			}
+		})
+		t.Run("bool", func(t *testing.T) {
+			chunks, final := collectStream[bool](t, r, scalarStreamModel("test/streamBool", "tr", "ue"))
+			if len(chunks) != 0 || !final {
+				t.Errorf("chunks = %v, final = %v; want no chunks and true", chunks, final)
+			}
+		})
+	})
+
 	t.Run("final output is correctly typed", func(t *testing.T) {
 		streamModel := defineModel(r, "test/finalTypedModel", &ModelOptions{
 			Supports: &ModelSupports{
@@ -2457,6 +2492,30 @@ func TestGenerateData(t *testing.T) {
 		}
 		if output.Value != 42 {
 			t.Errorf("output.Value = %d, want 42", output.Value)
+		}
+	})
+
+	t.Run("returns a scalar root", func(t *testing.T) {
+		scalarModel := defineModel(r, "test/scalarDataModel", &ModelOptions{
+			Supports: &ModelSupports{
+				Constrained: ConstrainedSupportAll,
+			},
+		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+			return &ModelResponse{
+				Request: req,
+				Message: NewModelTextMessage(`42`),
+			}, nil
+		})
+
+		output, _, err := GenerateData[int](context.Background(), r,
+			WithModel(scalarModel),
+			WithPrompt("get value"),
+		)
+		if err != nil {
+			t.Fatalf("GenerateData error: %v", err)
+		}
+		if *output != 42 {
+			t.Errorf("output = %d, want 42", *output)
 		}
 	})
 }
@@ -5872,4 +5931,23 @@ func TestGenerateConstrainedFormatInstructions(t *testing.T) {
 			t.Errorf("output instructions = %q, want %q", sent, custom)
 		}
 	})
+}
+
+// collectStream runs GenerateDataStream against model and returns its chunks
+// and final output.
+func collectStream[Out any](t *testing.T, r api.Registry, model Model) ([]Out, Out) {
+	t.Helper()
+	var chunks []Out
+	var final Out
+	for val, err := range GenerateDataStream[Out](context.Background(), r, WithModel(model), WithPrompt("go")) {
+		if err != nil {
+			t.Fatalf("GenerateDataStream error: %v", err)
+		}
+		if val.Done {
+			final = val.Output
+		} else {
+			chunks = append(chunks, val.Chunk)
+		}
+	}
+	return chunks, final
 }

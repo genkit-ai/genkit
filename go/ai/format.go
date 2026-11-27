@@ -308,7 +308,7 @@ type jsonHandler struct{ baseHandler }
 
 // ParseOutput parses the final message and returns the parsed JSON value.
 func (j *jsonHandler) ParseOutput(m *Message) (any, error) {
-	result, err := j.parseJSON(m.Text())
+	result, err := j.parseJSON(m.Text(), hasScalarRoot(j.config.Schema))
 	if err != nil {
 		return nil, err
 	}
@@ -323,8 +323,11 @@ func (j *jsonHandler) ParseOutput(m *Message) (any, error) {
 }
 
 // ParseChunk processes a streaming chunk and returns parsed output.
+//
+// A scalar schema root is held back until the final message: any prefix of a
+// number is itself a number, so a partial scalar cannot be told from a whole one.
 func (j *jsonHandler) ParseChunk(chunk *ModelResponseChunk) (any, error) {
-	return j.parseJSON(j.accumulate(chunk))
+	return j.parseJSON(j.accumulate(chunk), false)
 }
 
 // ParseMessage rewrites the message's text as a single JSON part, validated
@@ -367,7 +370,8 @@ func (j *jsonHandler) ParseMessage(m *Message) (*Message, error) {
 }
 
 // parseJSON is the shared parsing logic used by both ParseOutput and ParseChunk.
-func (j *jsonHandler) parseJSON(text string) (any, error) {
+// With scalar set, text holding no object or array is parsed as one JSON value.
+func (j *jsonHandler) parseJSON(text string, scalar bool) (any, error) {
 	if text == "" {
 		return nil, nil
 	}
@@ -381,8 +385,33 @@ func (j *jsonHandler) parseJSON(text string) (any, error) {
 	if err != nil {
 		return nil, nil
 	}
+	if result == nil && scalar {
+		// A scalar schema root has no object or array to extract, so try the whole text.
+		var value any
+		if json.Unmarshal([]byte(extracted), &value) == nil {
+			return value, nil
+		}
+	}
 
 	return result, nil
+}
+
+// hasScalarRoot reports whether schema's root is a number, boolean or string
+// (enums included) rather than an object or array. A nil schema, or a root with no type
+// (such as a $ref), is not treated as scalar.
+func hasScalarRoot(schema map[string]any) bool {
+	switch t := schema["type"].(type) {
+	case string:
+		return t != "object" && t != "array"
+	case []any:
+		for _, v := range t {
+			if v == "object" || v == "array" {
+				return false
+			}
+		}
+		return len(t) > 0
+	}
+	return false
 }
 
 type jsonlFormatter struct{}

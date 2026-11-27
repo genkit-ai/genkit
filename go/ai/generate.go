@@ -1629,15 +1629,23 @@ func GenerateDataStream[Out any](ctx context.Context, r api.Registry, opts ...Ge
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			var streamValue Out
-			if err := chunk.Output(&streamValue); err != nil {
+			output, err := chunk.parsedOutput()
+			if err != nil {
 				yield(nil, err)
 				done = true
 				return err
 			}
-			// Skip yielding if there's no parseable output yet (e.g., incomplete JSON during streaming).
-			if base.IsNil(streamValue) {
+			// Skip yielding if there's no parseable output yet (e.g., incomplete
+			// JSON during streaming). Checked before decoding, since a nil
+			// decodes into a non-pointer Out as its zero value.
+			if output == nil {
 				return nil
+			}
+			var streamValue Out
+			if err := decodeOutput(output, &streamValue); err != nil {
+				yield(nil, err)
+				done = true
+				return err
 			}
 			if !yield(&StreamValue[Out, Out]{Chunk: streamValue}, nil) {
 				done = true
@@ -2360,18 +2368,27 @@ func (c *ModelResponseChunk) ToolResponses() []*Part {
 // Output parses the chunk using the format handler and unmarshals the result into v.
 // Returns an error if the format handler is not set or does not support parsing chunks.
 func (c *ModelResponseChunk) Output(v any) error {
-	if c == nil {
-		return errors.New("chunk is nil")
-	}
-	if c.formatHandler == nil {
-		return errors.New("output format chosen does not support parsing chunks")
-	}
-
-	output, err := c.formatHandler.ParseChunk(c)
+	output, err := c.parsedOutput()
 	if err != nil {
 		return err
 	}
+	return decodeOutput(output, v)
+}
 
+// parsedOutput returns the chunk's output as its format handler parses it, or
+// nil when there is nothing parseable yet.
+func (c *ModelResponseChunk) parsedOutput() (any, error) {
+	if c == nil {
+		return nil, errors.New("chunk is nil")
+	}
+	if c.formatHandler == nil {
+		return nil, errors.New("output format chosen does not support parsing chunks")
+	}
+	return c.formatHandler.ParseChunk(c)
+}
+
+// decodeOutput converts a parsed chunk output into v.
+func decodeOutput(output, v any) error {
 	b, err := json.Marshal(output)
 	if err != nil {
 		return fmt.Errorf("failed to marshal chunk output: %w", err)

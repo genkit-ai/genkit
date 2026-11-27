@@ -206,6 +206,122 @@ func TestJSONFormatter(t *testing.T) {
 		}
 	})
 
+	t.Run("ParseOutput parses a scalar root", func(t *testing.T) {
+		tests := []struct {
+			desc   string
+			schema map[string]any
+			text   string
+			want   any
+		}{
+			{"integer", map[string]any{"type": "integer"}, "42", float64(42)},
+			{"number in markdown", map[string]any{"type": "number"}, "```json\n3.5\n```", 3.5},
+			{"boolean", map[string]any{"type": "boolean"}, " false\n", false},
+			{"string", map[string]any{"type": "string"}, `"hello"`, "hello"},
+			{"string enum", map[string]any{"type": "string", "enum": []any{"red", "green"}}, `"green"`, "green"},
+			{"string holding braces", map[string]any{"type": "string"}, `"a {b} [c]"`, "a {b} [c]"},
+		}
+		for _, tt := range tests {
+			t.Run(tt.desc, func(t *testing.T) {
+				handler, _ := jsonFormatter{}.Handler(tt.schema)
+				sfh := handler.(StreamingFormatHandler)
+
+				got, err := sfh.ParseOutput(&Message{
+					Role:    RoleModel,
+					Content: []*Part{NewTextPart(tt.text)},
+				})
+				if err != nil {
+					t.Fatalf("ParseOutput() error = %v", err)
+				}
+				if got != tt.want {
+					t.Errorf("ParseOutput() = %#v, want %#v", got, tt.want)
+				}
+			})
+		}
+	})
+
+	t.Run("ParseOutput rejects a scalar that breaks the schema", func(t *testing.T) {
+		handler, _ := jsonFormatter{}.Handler(map[string]any{"type": "string", "enum": []any{"red", "green"}})
+		sfh := handler.(StreamingFormatHandler)
+
+		_, err := sfh.ParseOutput(&Message{
+			Role:    RoleModel,
+			Content: []*Part{NewTextPart(`"blue"`)},
+		})
+		if err == nil {
+			t.Error("ParseOutput() should fail validation for a value outside the enum")
+		}
+	})
+
+	t.Run("ParseOutput leaves prose unparsed", func(t *testing.T) {
+		handler, _ := jsonFormatter{}.Handler(nil)
+		sfh := handler.(StreamingFormatHandler)
+
+		got, err := sfh.ParseOutput(&Message{
+			Role:    RoleModel,
+			Content: []*Part{NewTextPart("The answer is 42.")},
+		})
+		if err != nil {
+			t.Fatalf("ParseOutput() error = %v", err)
+		}
+		if got != nil {
+			t.Errorf("ParseOutput() = %#v, want nil", got)
+		}
+	})
+
+	t.Run("ParseChunk holds a scalar root back", func(t *testing.T) {
+		handler, _ := jsonFormatter{}.Handler(map[string]any{"type": "integer"})
+		sfh := handler.(StreamingFormatHandler)
+
+		for _, part := range []string{"4", "2"} {
+			got, err := sfh.ParseChunk(&ModelResponseChunk{Content: []*Part{NewTextPart(part)}})
+			if err != nil {
+				t.Fatalf("ParseChunk() error = %v", err)
+			}
+			if got != nil {
+				t.Errorf("ParseChunk(%q) = %#v, want nil", part, got)
+			}
+		}
+	})
+
+	t.Run("only a scalar schema root parses the whole text", func(t *testing.T) {
+		tests := []struct {
+			desc   string
+			schema map[string]any
+		}{
+			{"no schema", nil},
+			{"object root", map[string]any{"type": "object"}},
+			{"array root", map[string]any{"type": "array"}},
+			{"root without a type", map[string]any{"$ref": "#/$defs/T"}},
+		}
+		for _, tt := range tests {
+			t.Run(tt.desc, func(t *testing.T) {
+				handler, _ := jsonFormatter{}.Handler(tt.schema)
+				got, err := handler.(*jsonHandler).parseJSON("42", hasScalarRoot(tt.schema))
+				if err != nil {
+					t.Fatalf("parseJSON() error = %v", err)
+				}
+				if got != nil {
+					t.Errorf("parseJSON() = %#v, want nil", got)
+				}
+			})
+		}
+	})
+
+	t.Run("ParseChunk with an object root ignores leading prose", func(t *testing.T) {
+		handler, _ := jsonFormatter{}.Handler(map[string]any{"type": "object"})
+		sfh := handler.(StreamingFormatHandler)
+
+		for _, part := range []string{"2", " results:\n", "```json\n{\"a\": 1}\n```"} {
+			got, err := sfh.ParseChunk(&ModelResponseChunk{Content: []*Part{NewTextPart(part)}})
+			if err != nil {
+				t.Fatalf("ParseChunk() error = %v", err)
+			}
+			if _, isNumber := got.(float64); isNumber {
+				t.Fatalf("ParseChunk(%q) = %#v, want the leading number ignored", part, got)
+			}
+		}
+	})
+
 	t.Run("ParseChunk handles partial JSON", func(t *testing.T) {
 		handler, _ := jsonFormatter{}.Handler(nil)
 		sfh := handler.(StreamingFormatHandler)
