@@ -402,34 +402,40 @@ describe('Anthropic Integration', () => {
     );
   });
 
-  it('should track token usage in responses', async () => {
-    const mockClient = createMockAnthropicClient({
-      messageResponse: {
-        usage: {
-          input_tokens: 25,
-          output_tokens: 50,
-          cache_creation_input_tokens: 5,
-          cache_read_input_tokens: 10,
-          cache_creation: null,
-          server_tool_use: null,
-          service_tier: null,
+  for (const apiVersion of ['stable', 'beta'] as const) {
+    it(`includes cache reads and writes in ${apiVersion} input token usage`, async () => {
+      const mockClient = createMockAnthropicClient({
+        messageResponse: {
+          usage: {
+            input_tokens: 25,
+            output_tokens: 50,
+            cache_creation_input_tokens: 5,
+            cache_read_input_tokens: 10,
+            cache_creation: null,
+            server_tool_use: null,
+            service_tier: null,
+          },
         },
-      },
-    });
+      });
 
-    const ai = genkit({
-      plugins: [anthropic({ [__testClient]: mockClient } as PluginOptions)],
-    });
+      const ai = genkit({
+        plugins: [
+          anthropic({ apiVersion, [__testClient]: mockClient } as PluginOptions),
+        ],
+      });
 
-    const result = await ai.generate({
-      model: 'anthropic/claude-3-5-haiku',
-      prompt: 'Hello',
-    });
+      const result = await ai.generate({
+        model: 'anthropic/claude-3-5-haiku',
+        prompt: 'Hello',
+      });
 
-    assert.ok(result.usage, 'Should have usage information');
-    assert.strictEqual(result.usage.inputTokens, 25);
-    assert.strictEqual(result.usage.outputTokens, 50);
-  });
+      assert.ok(result.usage, 'Should have usage information');
+      assert.strictEqual(result.usage.inputTokens, 40);
+      assert.strictEqual(result.usage.cachedContentTokens, 10);
+      assert.strictEqual(result.usage.cacheWriteTokens, 5);
+      assert.strictEqual(result.usage.outputTokens, 50);
+    });
+  }
 
   it('should route requests through beta surface when plugin default is beta', async () => {
     const mockClient = createMockAnthropicClient();
