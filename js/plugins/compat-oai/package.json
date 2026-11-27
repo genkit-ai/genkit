@@ -80,6 +80,17 @@
         "default": "./lib/xai/index.js"
       },
       "default": "./lib/xai/index.js"
+    },
+    "./mistral": {
+      "import": {
+        "types": "./lib/mistral/index.d.mts",
+        "default": "./lib/mistral/index.mjs"
+      },
+      "require": {
+        "types": "./lib/mistral/index.d.ts",
+        "default": "./lib/mistral/index.js"
+      },
+      "default": "./lib/mistral/index.js"
     }
   },
   "typesVersions": {
@@ -92,6 +103,9 @@
       ],
       "xai": [
         "lib/xai"
+      ],
+      "mistral": [
+        "lib/mistral"
       ]
     }
   },

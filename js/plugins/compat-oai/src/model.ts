@@ -50,6 +50,7 @@ import type {
   ChatCompletionMessageParam,
   ChatCompletionMessageToolCall,
   ChatCompletionRole,
+  ChatCompletionStreamOptions,
   ChatCompletionTool,
 } from 'openai/resources/index.mjs';
 import { PluginOptions } from './index.js';
@@ -325,7 +326,9 @@ export function toOpenAIMessages(
         // Providers with thinking modes (e.g. DeepSeek) expect reasoning from
         // all previous assistant turns to be echoed back when the request
         // carries tools, so it is sent on every assistant message, not only
-        // tool-calling ones. Providers that don't use it ignore the field.
+        // tool-calling ones. Most other providers ignore the field; providers
+        // that reject unknown fields (e.g. Mistral) must remove it in their
+        // request builder.
         const reasoning = msg.reasoning;
         // `reasoning_content` is a provider extension, not part of the
         // OpenAI SDK types.
@@ -415,13 +418,103 @@ function toOpenAIToolResult(
   };
 }
 
+/**
+ * A content chunk in an assistant message or stream delta, in Mistral's
+ * `ContentChunk` shape. OpenAI always sends `content` as a string; Mistral can
+ * send an array of typed chunks, with reasoning in `thinking` chunks.
+ */
+interface ContentChunk {
+  type?: string;
+  text?: string;
+  thinking?: { type?: string; text?: string }[];
+  /** Signature of a `thinking` chunk, for replaying it on later turns. */
+  signature?: string | null;
+}
+
+/** The text of a `thinking` chunk's `text` sub-chunks, joined. */
+function thinkingText(chunk: ContentChunk): string {
+  return (chunk.thinking ?? [])
+    .map((t) => (t.type === 'text' ? (t.text ?? '') : ''))
+    .join('');
+}
+
+/**
+ * Converts an array of Mistral `ContentChunk`s to Genkit parts. `text` chunks
+ * become text parts, with consecutive ones merged. Each `thinking` chunk
+ * becomes its own reasoning part, with the chunk's `signature` (if any) in
+ * `metadata.thoughtSignature`, so a signature only goes back with the text it
+ * signed. Other chunk types (`image_url`, `reference`, `document_url` and so
+ * on) are dropped.
+ */
+function fromContentChunks(chunks: ContentChunk[]): Part[] {
+  const parts: Part[] = [];
+  for (const chunk of chunks) {
+    const last = parts[parts.length - 1];
+    if (chunk.type === 'text') {
+      if (!chunk.text) continue;
+      if (last?.text !== undefined) {
+        last.text += chunk.text;
+      } else {
+        parts.push({ text: chunk.text });
+      }
+    } else if (chunk.type === 'thinking') {
+      const text = thinkingText(chunk);
+      if (!text && !chunk.signature) continue;
+      parts.push(
+        chunk.signature
+          ? { reasoning: text, metadata: { thoughtSignature: chunk.signature } }
+          : { reasoning: text }
+      );
+    }
+  }
+  return parts;
+}
+
+/**
+ * Joins streamed `ContentChunk` fragments back into whole chunks. A streamed
+ * `thinking` chunk arrives as many fragments, so consecutive `thinking`
+ * fragments are joined until one carries a `signature`, which closes the
+ * chunk: the next `thinking` fragment starts a new chunk. Consecutive `text`
+ * fragments are joined too. Other chunk types are kept as they are.
+ */
+function joinStreamedContentChunks(fragments: ContentChunk[]): ContentChunk[] {
+  const chunks: ContentChunk[] = [];
+  // The `thinking` chunk still taking fragments, if any.
+  let open: ContentChunk | undefined;
+  for (const fragment of fragments) {
+    const last = chunks[chunks.length - 1];
+    if (fragment.type === 'thinking') {
+      if (!open) {
+        open = { type: 'thinking', thinking: [] };
+        chunks.push(open);
+      }
+      const text = thinkingText(fragment);
+      if (text) open.thinking!.push({ type: 'text', text });
+      if (fragment.signature) {
+        open.signature = fragment.signature;
+        open = undefined;
+      }
+      continue;
+    }
+    open = undefined;
+    if (fragment.type === 'text' && last?.type === 'text') {
+      last.text = (last.text ?? '') + (fragment.text ?? '');
+    } else {
+      chunks.push({ ...fragment });
+    }
+  }
+  return chunks;
+}
+
 const finishReasonMap: Partial<
   Record<
-    ChatCompletion.Choice['finish_reason'],
+    ChatCompletion.Choice['finish_reason'] | 'model_length',
     GenerateResponseData['finishReason']
   >
 > = {
   length: 'length',
+  // Mistral: generation hit the model's context length.
+  model_length: 'length',
   stop: 'stop',
   tool_calls: 'stop',
   content_filter: 'blocked',
@@ -472,6 +565,9 @@ function parseJsonContent(content: string, unwrapRoot: boolean): unknown {
 
 /**
  * Converts an OpenAI message event to a Genkit GenerateResponseData object.
+ * `message.content` is normally a string. An array is read as Mistral's
+ * `ContentChunk` shape: text and thinking chunks are kept, other chunk types
+ * (`image_url`, `reference` and so on) are dropped.
  * @param choice The OpenAI message event to convert.
  * @param jsonMode Whether the event is a JSON response.
  * @param unwrapRoot Whether to unwrap a schema root wrapped for the host.
@@ -499,8 +595,21 @@ export function fromOpenAIChoice(
   }
 
   // Handle regular content if present. Text that accompanies tool calls is a
-  // preamble, not JSON output, so it is never parsed.
-  if (choice.message.content) {
+  // preamble, not JSON output, so it is never parsed. An array is Mistral's
+  // `ContentChunk` shape; in JSON mode its text chunks are joined and parsed.
+  const messageContent: unknown = choice.message.content;
+  if (Array.isArray(messageContent)) {
+    const chunkParts = fromContentChunks(messageContent);
+    if (jsonMode && !hasToolRequests) {
+      content.push(...chunkParts.filter((p) => p.reasoning !== undefined));
+      const text = chunkParts.map((p) => p.text ?? '').join('');
+      if (text) {
+        content.push({ data: parseJsonContent(text, unwrapRoot) });
+      }
+    } else {
+      content.push(...chunkParts);
+    }
+  } else if (choice.message.content) {
     content.push(
       jsonMode && !hasToolRequests
         ? { data: parseJsonContent(choice.message.content, unwrapRoot) }
@@ -591,7 +700,9 @@ function fromOpenAIToolCallChunk(
 
 /**
  * Converts an OpenAI message stream event to a Genkit GenerateResponseData
- * object.
+ * object. `delta.content` is normally a string. An array is read as Mistral's
+ * `ContentChunk` shape: text and thinking chunks are kept, other chunk types
+ * (`image_url`, `reference` and so on) are dropped.
  * @param choice The OpenAI message stream event to convert.
  * @param _jsonMode Unused; kept for signature compatibility. Streamed content
  *   is always emitted as text, see the comment in the body.
@@ -630,8 +741,12 @@ export function fromOpenAIChunkChoice(
   // `{}` and `[]` as standalone tokens) is still part of a larger document.
   // Emitting it as `data` would drop it from `accumulatedText`, which the
   // JSON format parser uses to build partial output. The final message is
-  // parsed from the complete response.
-  if (choice.delta.content) {
+  // parsed from the complete response. An array is Mistral's `ContentChunk`
+  // shape, see fromContentChunks.
+  const deltaContent: unknown = choice.delta.content;
+  if (Array.isArray(deltaContent)) {
+    content.push(...fromContentChunks(deltaContent));
+  } else if (choice.delta.content) {
     content.push({ text: choice.delta.content });
   }
 
@@ -775,9 +890,13 @@ export function toOpenAIRequestBody(
   }
   const bodyRecord = body as unknown as Record<string, unknown>;
   for (const key in bodyRecord) {
+    // `0` and `false` are real settings: drop only unset values and empty arrays.
+    const value = bodyRecord[key];
     if (
-      !bodyRecord[key] ||
-      (Array.isArray(bodyRecord[key]) && !(bodyRecord[key] as unknown[]).length)
+      value == null ||
+      value === '' ||
+      Number.isNaN(value) ||
+      (Array.isArray(value) && !value.length)
     )
       delete bodyRecord[key];
   }
@@ -801,11 +920,110 @@ function unwrapStreamedText(
   return out;
 }
 
+/** Options that change how {@link openAIModelRunner} calls the API. */
+export interface ModelRunnerOptions {
+  /**
+   * `stream_options` sent with streaming requests. Defaults to
+   * `{ include_usage: true }`. Set to `false` for providers that reject the
+   * field.
+   */
+  streamOptions?: ChatCompletionStreamOptions | false;
+  /**
+   * Set for providers that stream `content` as an array of chunks (Mistral's
+   * `ContentChunk` shape). The runner then keeps the streamed chunks and puts
+   * them on the final completion, because the OpenAI SDK builds the final
+   * message by concatenating `content` as strings. Off by default.
+   */
+  contentChunks?: boolean;
+  /**
+   * When set, every reasoning part the runner returns or streams is marked
+   * with `metadata.reasoningSource` set to this value, so the provider can
+   * tell its own reasoning apart from other models' in a mixed history. The
+   * mark stays with the part through a JSON round trip of the history.
+   */
+  reasoningSource?: string;
+  /**
+   * Classifies API errors before the HTTP status code is used, for providers
+   * whose error bodies say more than the status code, such as an unknown
+   * model reported as HTTP 400.
+   */
+  errorStatus?: ErrorStatusClassifier;
+}
+
+/** Marks the reasoning parts in `parts` with `metadata.reasoningSource`. */
+function markReasoningSource(parts: Part[] | undefined, source?: string) {
+  if (!source || !parts) return;
+  for (const part of parts) {
+    if (part.reasoning !== undefined) {
+      part.metadata = { ...part.metadata, reasoningSource: source };
+    }
+  }
+}
+
+/**
+ * Classifies an API error from a provider, see
+ * {@link ModelRunnerOptions.errorStatus}. Returns `undefined` to use the status
+ * from the HTTP status code.
+ */
+export type ErrorStatusClassifier = (e: APIError) => StatusName | undefined;
+
+/**
+ * Converts an OpenAI SDK API error to a {@link GenkitError}, with a status
+ * from `errorStatus` when it returns one, or else from the HTTP status code.
+ */
+export function toGenkitError(
+  e: APIError,
+  errorStatus?: ErrorStatusClassifier
+): GenkitError {
+  let status: StatusName = 'UNKNOWN';
+  switch (e.status) {
+    case 429:
+      status = 'RESOURCE_EXHAUSTED';
+      break;
+    case 401:
+      status = 'UNAUTHENTICATED';
+      break;
+    case 403:
+      status = 'PERMISSION_DENIED';
+      break;
+    case 400:
+    case 422:
+      status = 'INVALID_ARGUMENT';
+      break;
+    case 500:
+      status = 'INTERNAL';
+      break;
+    case 503:
+      status = 'UNAVAILABLE';
+      break;
+  }
+  // `headers` is a plain object in openai 4.x and a `Headers` in later
+  // versions.
+  const headers = e.headers as any;
+  const retryAfterHeader =
+    headers?.get?.('retry-after') ?? headers?.['retry-after'];
+  const retryAfterMs = retryAfterHeader
+    ? parseRetryAfterMs(retryAfterHeader)
+    : undefined;
+  const responseMetadata: ErrorResponseMetadata | undefined =
+    retryAfterMs !== undefined ? { retryAfterMs } : undefined;
+  const classified = errorStatus?.(e);
+  if (classified) status = classified;
+  return new GenkitError({
+    status,
+    message: e.message,
+    responseMetadata,
+  });
+}
+
 /**
  * Creates the runner used by Genkit to interact with an OpenAI compatible
  * model.
  * @param name The name of the GPT model.
  * @param client The OpenAI client instance.
+ * @param requestBuilder Optional hook to modify the request body.
+ * @param pluginOptions Optional plugin options, used for request scoped clients.
+ * @param runnerOptions Optional options, see {@link ModelRunnerOptions}.
  * @returns The runner that Genkit will call when the model is invoked.
  */
 export function openAIModelRunner(
@@ -813,8 +1031,12 @@ export function openAIModelRunner(
   defaultClient: OpenAI,
   requestBuilder?: ModelRequestBuilder,
   pluginOptions?: Omit<PluginOptions, 'apiKey'> & InternalModelOptions,
+  runnerOptions?: ModelRunnerOptions,
   supportsMedia = false
 ) {
+  const streamOptions = runnerOptions?.streamOptions ?? {
+    include_usage: true,
+  };
   return async (
     request: GenerateRequest,
     options?: {
@@ -843,9 +1065,7 @@ export function openAIModelRunner(
           {
             ...body,
             stream: true,
-            stream_options: {
-              include_usage: true,
-            },
+            ...(streamOptions ? { stream_options: streamOptions } : {}),
           },
           { signal: options?.abortSignal }
         );
@@ -856,14 +1076,40 @@ export function openAIModelRunner(
         // subsequent deltas carry only fragments of the `arguments` JSON string.
         const toolCallAccumulators = new Map<number, ToolCallAccumulator[]>();
         const unwrappers = new Map<number, WrapperStreamUnwrapper>();
+        // Only for providers that opt in with `contentChunks` (Mistral): they
+        // can stream `content` as an array of chunks, which the SDK's final
+        // completion mangles by concatenating content as strings. Keep the
+        // chunks per choice and restore them below.
+        const contentChunks = runnerOptions?.contentChunks
+          ? new Map<number, ContentChunk[]>()
+          : undefined;
+        let streamedContentChunks = false;
         for await (const chunk of stream) {
           chunk.choices?.forEach((chunk) => {
+            if (contentChunks) {
+              const deltaContent: unknown = chunk.delta?.content;
+              let chunks = contentChunks.get(chunk.index);
+              if (!chunks) {
+                chunks = [];
+                contentChunks.set(chunk.index, chunks);
+              }
+              if (Array.isArray(deltaContent)) {
+                streamedContentChunks = true;
+                chunks.push(...deltaContent);
+              } else if (typeof deltaContent === 'string' && deltaContent) {
+                chunks.push({ type: 'text', text: deltaContent });
+              }
+            }
             let accumulators = toolCallAccumulators.get(chunk.index);
             if (!accumulators) {
               accumulators = [];
               toolCallAccumulators.set(chunk.index, accumulators);
             }
             const c = fromOpenAIChunkChoice(chunk, undefined, accumulators);
+            markReasoningSource(
+              c.message?.content,
+              runnerOptions?.reasoningSource
+            );
             let content = c.message?.content ?? [];
             if (unwrapRoot) {
               let unwrapper = unwrappers.get(chunk.index);
@@ -886,6 +1132,15 @@ export function openAIModelRunner(
           }
         }
         response = await stream.finalChatCompletion();
+        if (contentChunks && streamedContentChunks) {
+          for (const choice of response.choices) {
+            const chunks = contentChunks.get(choice.index);
+            if (chunks) {
+              (choice.message as { content: unknown }).content =
+                joinStreamedContentChunks(chunks);
+            }
+          }
+        }
       } else {
         response = await client.chat.completions.create(body, {
           signal: options?.abortSignal,
@@ -903,51 +1158,23 @@ export function openAIModelRunner(
         return standardResponse;
       } else {
         const choice = response.choices[0];
+        const converted = fromOpenAIChoice(
+          choice,
+          request.output?.format === 'json',
+          unwrapRoot
+        );
+        markReasoningSource(
+          converted.message?.content,
+          runnerOptions?.reasoningSource
+        );
         return {
-          ...fromOpenAIChoice(
-            choice,
-            request.output?.format === 'json',
-            unwrapRoot
-          ),
+          ...converted,
           ...standardResponse,
         };
       }
     } catch (e) {
       if (e instanceof APIError) {
-        let status: StatusName = 'UNKNOWN';
-        switch (e.status) {
-          case 429:
-            status = 'RESOURCE_EXHAUSTED';
-            break;
-          case 401:
-            status = 'UNAUTHENTICATED';
-            break;
-          case 403:
-            status = 'PERMISSION_DENIED';
-            break;
-          case 400:
-            status = 'INVALID_ARGUMENT';
-            break;
-          case 500:
-            status = 'INTERNAL';
-            break;
-          case 503:
-            status = 'UNAVAILABLE';
-            break;
-        }
-        const retryAfterHeader =
-          e.headers?.get?.('retry-after') ??
-          (e.headers as any)?.['retry-after'];
-        const retryAfterMs = retryAfterHeader
-          ? parseRetryAfterMs(retryAfterHeader)
-          : undefined;
-        const responseMetadata: ErrorResponseMetadata | undefined =
-          retryAfterMs !== undefined ? { retryAfterMs } : undefined;
-        throw new GenkitError({
-          status,
-          message: e.message,
-          responseMetadata,
-        });
+        throw toGenkitError(e, runnerOptions?.errorStatus);
       }
       throw e;
     }
@@ -967,6 +1194,8 @@ export function openAIModelRunner(
  * @param params.client The OpenAI client instance.
  * @param params.modelRef Optional reference to the model's configuration and
  * custom options.
+ * @param params.runnerOptions Optional options for the model runner, see
+ * {@link ModelRunnerOptions}.
 
  * @returns the created {@link ModelAction}
  */
@@ -978,8 +1207,16 @@ export function defineCompatOpenAIModel<
   modelRef?: ModelReference<CustomOptions>;
   requestBuilder?: ModelRequestBuilder;
   pluginOptions?: PluginOptions;
+  runnerOptions?: ModelRunnerOptions;
 }): ModelAction {
-  const { name, client, pluginOptions, modelRef, requestBuilder } = params;
+  const {
+    name,
+    client,
+    pluginOptions,
+    modelRef,
+    requestBuilder,
+    runnerOptions,
+  } = params;
   const modelName = toModelName(name, pluginOptions?.name);
   const actionName =
     modelRef?.name ?? `${pluginOptions?.name ?? 'compat-oai'}/${modelName}`;
@@ -995,6 +1232,7 @@ export function defineCompatOpenAIModel<
       client,
       requestBuilder,
       pluginOptions,
+      runnerOptions,
       modelRef?.info?.supports?.media === true
     )
   );

@@ -50,6 +50,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -108,8 +109,8 @@ var (
 // shard count grows with the state's size; tune [WithCheckpointInterval] to
 // trade per-save diff reads against checkpoint write amplification.
 //
-// It implements [aix.SessionStore] and [aix.SnapshotSubscriber]; the latter
-// uses Firestore's native real-time listener, so an abort committed by one
+// It implements [aix.SessionStore], [aix.SessionDeleter] and
+// [aix.SnapshotSubscriber]; the last uses Firestore's native real-time listener, so an abort committed by one
 // process is observed by the process running the detached turn even across
 // instances.
 type FirestoreSessionStore[State any] struct {
@@ -249,6 +250,27 @@ type pointerDoc struct {
 	UpdatedAt            time.Time `firestore:"updatedAt"`
 }
 
+// tombstoneDoc is what DeleteSession leaves behind in place of a session's
+// pointer. It holds no session content, only the IDs of the deleted chain, so
+// a late writer that continues that chain can be told apart from a fresh
+// session reusing the ID. It outlives the new pointer a fresh root snapshot
+// creates, so the check keeps working after the session starts again.
+type tombstoneDoc struct {
+	DeletedAt time.Time `firestore:"deletedAt"`
+	// ChainIDs is every snapshot ID the pointer named when the session was
+	// deleted (latest, checkpoint, diff segment), accumulated over repeated
+	// deletes of the same session ID.
+	ChainIDs []string `firestore:"chainIds"`
+	// Checkpoints maps each of those checkpoints to its shard count, so an
+	// interrupted delete can still find the shards.
+	Checkpoints map[string]int `firestore:"checkpoints"`
+}
+
+// has reports whether id is a snapshot of a deleted chain.
+func (t *tombstoneDoc) has(id string) bool {
+	return t != nil && slices.Contains(t.ChainIDs, id)
+}
+
 // chainMeta is a parent snapshot's reconstruction metadata, resolved without
 // materializing its (potentially large) state, so SaveSnapshot can decide
 // diff-vs-checkpoint before paying for a full reconstruction.
@@ -304,6 +326,10 @@ func (s *FirestoreSessionStore[State]) shardRef(prefix, checkpointID string, i i
 
 func (s *FirestoreSessionStore[State]) pointerRef(prefix, sessionID string) *firestore.DocumentRef {
 	return s.client.Collection(s.collection + "-pointers").Doc(prefix).Collection("pointers").Doc(sessionID)
+}
+
+func (s *FirestoreSessionStore[State]) tombstoneRef(prefix, sessionID string) *firestore.DocumentRef {
+	return s.client.Collection(s.collection + "-pointers").Doc(prefix).Collection("tombstones").Doc(sessionID)
 }
 
 // --- Reads ---
@@ -598,6 +624,26 @@ func (s *FirestoreSessionStore[State]) readPointer(get docGetter, prefix, sessio
 	return &p, nil
 }
 
+// readTombstone reads the tombstone DeleteSession left for a session. Returns
+// nil when the session was never deleted.
+func (s *FirestoreSessionStore[State]) readTombstone(get docGetter, prefix, sessionID string) (*tombstoneDoc, error) {
+	snap, err := get(s.tombstoneRef(prefix, sessionID))
+	if err != nil {
+		if isNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if !snap.Exists() {
+		return nil, nil
+	}
+	var t tombstoneDoc
+	if err := snap.DataTo(&t); err != nil {
+		return nil, fmt.Errorf("decode tombstone %q: %w", sessionID, err)
+	}
+	return &t, nil
+}
+
 // --- Writes ---
 
 // SaveSnapshot atomically reads the snapshot at id (if any), applies fn, and
@@ -671,6 +717,36 @@ func (s *FirestoreSessionStore[State]) SaveSnapshot(
 		if err != nil {
 			return err
 		}
+		// A session that was deleted may start again with a fresh root snapshot,
+		// but a late writer continuing the deleted chain (or rewriting one of its
+		// rows) must not bring it back. The tombstone records that chain. It is
+		// read only when this write is not the plain extension of the live
+		// pointer, which is the hot path and cannot touch a deleted row.
+		if !s.extendsPointer(pointer, id, next.ParentID, existingOK) {
+			tomb, err := s.readTombstone(tx.Get, prefix, sessionID)
+			if err != nil {
+				return err
+			}
+			if tomb != nil {
+				// A row of the deleted chain, whether it still exists or was already
+				// swept, is never written again.
+				gone := tomb.has(id)
+				if !gone && !existingOK && next.ParentID != "" {
+					gone = tomb.has(next.ParentID)
+					if !gone {
+						// A parent that is no longer there was swept by the delete.
+						_, parentOK, err := s.readDoc(tx.Get, prefix, next.ParentID)
+						if err != nil {
+							return err
+						}
+						gone = !parentOK
+					}
+				}
+				if gone {
+					return status.Errorf(aix.ErrSessionDeleted, "session %q was deleted", sessionID)
+				}
+			}
+		}
 
 		// Reads phase 3 + decision: resolve diff-vs-checkpoint, reconstructing the
 		// parent state only when a diff is actually a candidate.
@@ -695,6 +771,20 @@ func (s *FirestoreSessionStore[State]) SaveSnapshot(
 		return nil, fmt.Errorf("firebase: FirestoreSessionStore.SaveSnapshot: %w", err)
 	}
 	return persisted, nil
+}
+
+// extendsPointer reports whether a write is the plain continuation of the live
+// pointer: a rewrite of its current row, or a new row whose parent is that row.
+// Such a write cannot involve a row of a deleted chain, because deleting a
+// session removes its pointer.
+func (s *FirestoreSessionStore[State]) extendsPointer(pointer *pointerDoc, id, parentID string, existing bool) bool {
+	if pointer == nil {
+		return false
+	}
+	if existing {
+		return pointer.CurrentSnapshotID == id
+	}
+	return parentID != "" && pointer.CurrentSnapshotID == parentID
 }
 
 // planWrite decides how to persist next and computes the document metadata. It
@@ -955,7 +1045,10 @@ func (s *FirestoreSessionStore[State]) OnSnapshotStatusChange(ctx context.Contex
 				}
 			}
 			if !exists {
-				continue // deleted after we began watching; keep listening.
+				// Deleted after we began watching (its session was deleted):
+				// report it as aborted so the run watching it stops, then end.
+				coalesceSend(ch, aix.SnapshotStatusAborted)
+				return
 			}
 			var sd struct {
 				Status string `firestore:"status"`
@@ -975,6 +1068,192 @@ func (s *FirestoreSessionStore[State]) OnSnapshotStatusChange(ctx context.Contex
 		}
 	}()
 	return ch
+}
+
+// --- Delete ---
+
+// DeleteSession permanently removes every snapshot and checkpoint shard of a
+// session, per [aix.SessionDeleter]. A session can be larger than one
+// transaction can write, so the delete is a sequence of steps that is safe to
+// retry and never strands data:
+//
+//  1. In a transaction, replace the live pointer with a tombstone that records
+//     the chain the pointer named (latest row, checkpoint, diff segment, shard
+//     counts). Every save reads the pointer in its own transaction, so this
+//     serializes the delete against concurrent saves, and the tombstone makes
+//     writers that continue the old chain fail with [aix.ErrSessionDeleted]
+//     even after a fresh root snapshot starts the session again.
+//  2. Find the session's snapshots: the tombstone's chain, which covers rows
+//     written before snapshot rows carried a sessionId and an interrupted
+//     earlier delete, plus an equality query on sessionId. The query is
+//     limited to rows created at or before the delete, so a fresh session that
+//     reuses the ID right after the delete is not swept away with the old one.
+//  3. Delete the checkpoint shards. Their IDs are only discoverable from the
+//     snapshot documents, so these go first.
+//  4. Delete the snapshot documents last, so an interrupted delete can be run
+//     again and still finds everything left over.
+//
+// The tombstone stays afterwards: it holds no session content, one small
+// document per deleted session ID. Rows outside the chain the pointer named
+// that predate the sessionId field are not found. Subscribers of a deleted
+// snapshot see [aix.SnapshotStatusAborted].
+func (s *FirestoreSessionStore[State]) DeleteSession(ctx context.Context, sessionID string) (bool, error) {
+	if sessionID == "" {
+		return false, status.Errorf(aix.ErrSessionIDRequired, "FirestoreSessionStore requires a session ID to delete")
+	}
+	prefix, err := s.prefixFor(ctx)
+	if err != nil {
+		return false, fmt.Errorf("firebase: FirestoreSessionStore.DeleteSession: %w", err)
+	}
+
+	// Step 1: tombstone the pointer, remembering the chain it named.
+	var tomb *tombstoneDoc
+	var hadPointer bool
+	err = s.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		tomb, hadPointer = nil, false
+		prev, err := s.readTombstone(tx.Get, prefix, sessionID)
+		if err != nil {
+			return err
+		}
+		p, err := s.readPointer(tx.Get, prefix, sessionID)
+		if err != nil {
+			return err
+		}
+		if p == nil {
+			// No live pointer: nothing new to protect. An existing tombstone is
+			// from an earlier delete that may have been interrupted, and its
+			// chain is swept again below. A session that never existed gets no
+			// tombstone at all.
+			tomb = prev
+			return nil
+		}
+		hadPointer = true
+		next := &tombstoneDoc{DeletedAt: time.Now(), Checkpoints: map[string]int{}}
+		if prev != nil {
+			next.ChainIDs = slices.Clone(prev.ChainIDs)
+			for id, n := range prev.Checkpoints {
+				next.Checkpoints[id] = n
+			}
+		}
+		for _, id := range append([]string{p.CurrentSnapshotID, p.CheckpointID}, p.SegmentPath...) {
+			if id != "" && !slices.Contains(next.ChainIDs, id) {
+				next.ChainIDs = append(next.ChainIDs, id)
+			}
+		}
+		next.Checkpoints[p.CheckpointID] = max(next.Checkpoints[p.CheckpointID], p.CheckpointShardCount)
+		if err := tx.Set(s.tombstoneRef(prefix, sessionID), next); err != nil {
+			return err
+		}
+		if err := tx.Delete(s.pointerRef(prefix, sessionID)); err != nil {
+			return err
+		}
+		tomb = next
+		return nil
+	})
+	if err != nil {
+		return false, fmt.Errorf("firebase: FirestoreSessionStore.DeleteSession: %w", err)
+	}
+
+	// Step 2: collect what to delete.
+	snapshotRefs := map[string]*firestore.DocumentRef{}
+	shardCounts := map[string]int{}
+	if tomb != nil {
+		for _, id := range tomb.ChainIDs {
+			snapshotRefs[id] = s.snapshotRef(prefix, id)
+		}
+		for id, n := range tomb.Checkpoints {
+			shardCounts[id] = n
+		}
+	}
+	owned, err := s.client.Collection(s.collection).Doc(prefix).Collection("snapshots").
+		Where("sessionId", "==", sessionID).
+		Select("createdAt", "checkpointId", "checkpointShardCount").
+		Documents(ctx).GetAll()
+	if err != nil {
+		return false, fmt.Errorf("firebase: FirestoreSessionStore.DeleteSession: list snapshots: %w", err)
+	}
+	found := 0
+	for _, d := range owned {
+		var meta struct {
+			CreatedAt            time.Time `firestore:"createdAt"`
+			CheckpointID         string    `firestore:"checkpointId"`
+			CheckpointShardCount int       `firestore:"checkpointShardCount"`
+		}
+		if err := d.DataTo(&meta); err != nil {
+			continue
+		}
+		// A row written after the delete belongs to a session that reused the ID,
+		// not to the one being deleted.
+		if tomb != nil && meta.CreatedAt.After(tomb.DeletedAt) && !tomb.has(d.Ref.ID) {
+			continue
+		}
+		found++
+		snapshotRefs[d.Ref.ID] = d.Ref
+		if meta.CheckpointID != "" {
+			shardCounts[meta.CheckpointID] = max(shardCounts[meta.CheckpointID], meta.CheckpointShardCount)
+		}
+	}
+	// Second guard against a fresh session that raced the query: whatever the
+	// live pointer names now is not part of the deleted session.
+	live, err := s.readPointer(directGet(ctx), prefix, sessionID)
+	if err != nil {
+		return false, fmt.Errorf("firebase: FirestoreSessionStore.DeleteSession: %w", err)
+	}
+	if live != nil {
+		for _, id := range append([]string{live.CurrentSnapshotID, live.CheckpointID}, live.SegmentPath...) {
+			if tomb == nil || !tomb.has(id) {
+				delete(snapshotRefs, id)
+			}
+		}
+		if tomb == nil || !tomb.has(live.CheckpointID) {
+			delete(shardCounts, live.CheckpointID)
+		}
+	}
+
+	// Steps 3 and 4: shards, then snapshot documents.
+	var shardRefs []*firestore.DocumentRef
+	for checkpointID, count := range shardCounts {
+		for i := range count {
+			shardRefs = append(shardRefs, s.shardRef(prefix, checkpointID, i))
+		}
+	}
+	if err := s.deleteAll(ctx, shardRefs); err != nil {
+		return false, fmt.Errorf("firebase: FirestoreSessionStore.DeleteSession: delete shards: %w", err)
+	}
+	refs := make([]*firestore.DocumentRef, 0, len(snapshotRefs))
+	for _, ref := range snapshotRefs {
+		refs = append(refs, ref)
+	}
+	if err := s.deleteAll(ctx, refs); err != nil {
+		return false, fmt.Errorf("firebase: FirestoreSessionStore.DeleteSession: delete snapshots: %w", err)
+	}
+	return hadPointer || found > 0, nil
+}
+
+// deleteAll deletes the documents through a bulk writer, which batches them
+// under Firestore's write limits, and reports the first failure. Deleting a
+// document that does not exist is not an error.
+func (s *FirestoreSessionStore[State]) deleteAll(ctx context.Context, refs []*firestore.DocumentRef) error {
+	if len(refs) == 0 {
+		return nil
+	}
+	bw := s.client.BulkWriter(ctx)
+	jobs := make([]*firestore.BulkWriterJob, 0, len(refs))
+	for _, ref := range refs {
+		job, err := bw.Delete(ref)
+		if err != nil {
+			bw.End()
+			return err
+		}
+		jobs = append(jobs, job)
+	}
+	bw.End()
+	for _, job := range jobs {
+		if _, err := job.Results(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // --- Conversions ---
