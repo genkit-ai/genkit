@@ -89,15 +89,15 @@ var jsonMarshalerType = reflect.TypeOf((*json.Marshaler)(nil)).Elem()
 //
 // Recursion is detected by stack: while a struct type T is being reflected, T
 // is marked in-progress. Any nested encounter of T (a self-reference) returns
-// an "any" schema; T is unmarked when its reflection completes. Each top-level
-// occurrence of T (siblings, repeats) gets its own full reflection — so a
-// struct used in multiple fields produces the correct schema each time.
+// a "$ref" to a top-level "$defs" entry for T; T is unmarked when its
+// reflection completes. Each top-level occurrence of T (siblings, repeats) gets
+// its own full reflection — so a struct used in multiple fields produces the correct schema each time, keeping it closed (additionalProperties: false) for strict-mode providers such as OpenAI.
 //
 // We can't observe reflection completion through the library's Mapper hook
 // alone, so each struct type is reflected via a sub-Reflector. The Mapper's
 // defer fires when the sub-Reflector returns, which is the exit point.
 func InferJSONSchema(x any) *jsonschema.Schema {
-	inProgress := make(map[reflect.Type]bool)
+	inProgress, recursive := make(map[reflect.Type]bool), make(map[reflect.Type]bool)
 	var mapper func(reflect.Type) *jsonschema.Schema
 	mapper = func(t reflect.Type) *jsonschema.Schema {
 		// []any reflects to `{ type: "array", items: true }` which is not valid JSON schema.
@@ -115,7 +115,7 @@ func InferJSONSchema(x any) *jsonschema.Schema {
 			return nil
 		}
 		if inProgress[baseType] {
-			return anyStructSchema(baseType)
+			return recursiveRef(baseType, recursive)
 		}
 
 		inProgress[baseType] = true
@@ -143,7 +143,7 @@ func InferJSONSchema(x any) *jsonschema.Schema {
 	}
 
 	r := jsonschema.Reflector{DoNotReference: true, Anonymous: true, Mapper: mapper}
-	s := r.Reflect(x)
+	s := reflectAndHoist(r, x, mapper, recursive)
 	s.Version = ""
 	return s
 }
@@ -313,9 +313,9 @@ func ConvertTo[T any](v any) (T, bool) {
 	return result, err == nil
 }
 
-// anyStructSchema returns the "any" schema used to break recursion. Types
-// that implement json.Marshaler may serialize to a non-object, so we omit
-// `type: object` for them.
+// anyStructSchema returns the "any" schema used as a fallback for recursive
+// types that cannot be referenced (anonymous structs) or that implement
+// json.Marshaler and may serialize to a non-object, so we omit `type: object` for them.
 func anyStructSchema(t reflect.Type) *jsonschema.Schema {
 	if t.Implements(jsonMarshalerType) || reflect.PointerTo(t).Implements(jsonMarshalerType) {
 		return &jsonschema.Schema{AdditionalProperties: jsonschema.TrueSchema}
@@ -448,4 +448,53 @@ func GetJSONObjectLines(text string) []string {
 
 	// Return the slice containing the filtered and trimmed lines.
 	return result
+}
+
+// recursiveRef returns the schema for a struct type encountered recursively
+// (while it is already in progress). Named struct types are recorded in
+// recursive and referenced via "$ref" to a top-level "$defs" entry, which
+// InferJSONSchema hoists there once. Anonymous structs have no name to
+// reference, and types implementing json.Marshaler have no known JSON shape,
+// so those keep the previous open-object fallback from anyStructSchema.
+func recursiveRef(t reflect.Type, recursive map[reflect.Type]bool) *jsonschema.Schema {
+	if t.Name() == "" || t.Implements(jsonMarshalerType) || reflect.PointerTo(t).Implements(jsonMarshalerType) {
+		return anyStructSchema(t)
+	}
+	recursive[t] = true
+	return &jsonschema.Schema{Ref: "#/$defs/" + t.Name()}
+}
+
+// reflectAndHoist reflects x with r and then hoists any recursive struct
+// types recorded during reflection into top-level "$defs" entries on the
+// resulting schema, keeping it closed for strict-mode providers.
+func reflectAndHoist(r jsonschema.Reflector, x any, mapper func(reflect.Type) *jsonschema.Schema, recursive map[reflect.Type]bool) *jsonschema.Schema {
+	s := r.Reflect(x)
+	hoistRecursiveDefinitions(s, mapper, recursive)
+	return s
+}
+
+// hoistRecursiveDefinitions generates, once per type recorded in recursive,
+// the full schema for that type (with further recursive occurrences as
+// "$ref"s) and attaches it to s as a top-level "$defs" entry. Types
+// discovered while generating a definition are hoisted in turn.
+func hoistRecursiveDefinitions(s *jsonschema.Schema, mapper func(reflect.Type) *jsonschema.Schema, recursive map[reflect.Type]bool) {
+	if s == nil || len(recursive) == 0 {
+		return
+	}
+	if s.Definitions == nil {
+		s.Definitions = jsonschema.Definitions{}
+	}
+	for {
+		pending := false
+		for t := range recursive {
+			if _, ok := s.Definitions[t.Name()]; ok {
+				continue
+			}
+			pending = true
+			s.Definitions[t.Name()] = mapper(t)
+		}
+		if !pending {
+			return
+		}
+	}
 }
