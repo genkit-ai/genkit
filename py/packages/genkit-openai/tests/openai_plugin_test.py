@@ -119,6 +119,7 @@ def test_gpt_6_astra_catalog_entry() -> None:
         ('gpt-4.1', ConstrainedSupport.ALL),
         ('o3-mini', ConstrainedSupport.ALL),
         ('gpt-5', ConstrainedSupport.ALL),
+        ('gpt-4o-2024-05-13', None),
         ('gpt-4-turbo', None),
         ('gpt-4', None),
         ('gpt-3.5-turbo', None),
