@@ -15,7 +15,7 @@
  */
 
 import type { ChildProcess } from 'child_process';
-import { spawn } from 'child_process';
+import { execFile, spawn } from 'child_process';
 import terminate from 'terminate';
 import { logger } from '../utils/index.js';
 
@@ -40,6 +40,7 @@ export class ProcessManager {
 
   private _status: ProcessStatus = 'stopped';
   private manualRestart = false;
+  private stopping = false;
 
   constructor(
     private readonly command: string,
@@ -92,6 +93,11 @@ export class ProcessManager {
           resolve();
           return;
         }
+        if (this.stopping) {
+          this.stopping = false;
+          resolve();
+          return;
+        }
         // If the process was killed by a signal, it's not an error in this context.
         if (code === 0 || signal) {
           resolve();
@@ -124,7 +130,7 @@ export class ProcessManager {
    * Kills the currently-running process.
    */
   kill(): Promise<void> {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       if (!this.appProcess || !this.appProcess.pid || this.appProcess.killed) {
         this._status = 'stopped';
         resolve();
@@ -136,14 +142,41 @@ export class ProcessManager {
         resolve();
       });
 
-      terminate(this.appProcess.pid, 'SIGTERM', (err) => {
+      const pid = this.appProcess.pid;
+      this.stopping = true;
+      const onTerminated = (err: Error | null) => {
         if (err) {
-          // This can happen if the process is already gone, which is fine.
           logger.debug(`Error during process termination: ${err.message}`);
+          // A child may exit before Node delivers its 'exit' event. Only fail
+          // shutdown if the target PID is still running after the kill error.
+          if (
+            this.appProcess &&
+            this.appProcess.exitCode === null &&
+            this.appProcess.signalCode === null &&
+            isProcessAlive(pid)
+          ) {
+            this.stopping = false;
+            reject(err);
+            return;
+          }
         }
         resolve();
-      });
+      };
+      this.terminateProcess(pid, onTerminated);
     });
+  }
+
+  private terminateProcess(
+    pid: number,
+    callback: (error: Error | null) => void
+  ): void {
+    if (process.platform === 'win32') {
+      // terminate relies on wmic.exe, which is absent on current Windows.
+      // taskkill targets only the process tree rooted at our own child PID.
+      execFile('taskkill.exe', ['/PID', String(pid), '/T', '/F'], callback);
+    } else {
+      terminate(pid, 'SIGTERM', callback);
+    }
   }
 
   status(): AppProcessStatus {
@@ -159,5 +192,14 @@ export class ProcessManager {
     }
     this.appProcess = undefined;
     this._status = 'stopped';
+  }
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ESRCH';
   }
 }

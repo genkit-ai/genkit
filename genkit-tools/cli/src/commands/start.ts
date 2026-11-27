@@ -32,6 +32,7 @@ import {
   startManager,
 } from '../utils/manager-utils.js';
 import { parsePort } from '../utils/option-parsers.js';
+import { waitForRuntimeShutdown } from '../utils/runtime-shutdown.js';
 
 interface RunOptions {
   /** --experimental-auth. */
@@ -220,5 +221,5 @@ export const start = new Command('start')
         );
       }
     }
-    await processPromise;
+    await waitForRuntimeShutdown(manager, processPromise);
   });

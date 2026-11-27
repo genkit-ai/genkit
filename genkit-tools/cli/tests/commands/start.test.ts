@@ -62,12 +62,12 @@ describe('start command', () => {
     startDevProcessManagerSpy = vi
       .spyOn(managerUtils, 'startDevProcessManager')
       .mockResolvedValue({
-        manager: {} as any,
+        manager: { stopOnce: vi.fn(async () => {}) } as any,
         processPromise: Promise.resolve(),
       });
     startManagerSpy = vi
       .spyOn(managerUtils, 'startManager')
-      .mockResolvedValue({} as any);
+      .mockResolvedValue({ stopOnce: vi.fn(async () => {}) } as any);
     startServerSpy = startServer as unknown as Mock;
 
     // Reset args and options; commander keeps them across parseAsync calls.
