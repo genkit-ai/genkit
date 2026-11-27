@@ -277,13 +277,13 @@ export function toAnthropicRequest(
   if (input.config?.stopSequences) {
     request.stop_sequences = input.config?.stopSequences;
   }
-  if (input.config?.temperature) {
+  if (input.config?.temperature !== undefined) {
     request.temperature = input.config?.temperature;
   }
-  if (input.config?.topK) {
+  if (input.config?.topK !== undefined) {
     request.top_k = input.config?.topK;
   }
-  if (input.config?.topP) {
+  if (input.config?.topP !== undefined) {
     request.top_p = input.config?.topP;
   }
   return request;

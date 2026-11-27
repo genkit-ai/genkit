@@ -226,7 +226,7 @@ export function toMistralRequest(
     messages,
     maxTokens: input.config?.maxOutputTokens ?? 1024,
     temperature: input.config?.temperature ?? 0.7,
-    ...(input.config?.topP && { topP: input.config.topP }),
+    ...(input.config?.topP !== undefined && { topP: input.config.topP }),
     ...(input.config?.stopSequences && { stop: input.config.stopSequences }),
     ...(input.tools && {
       tools: input.tools.map((tool) => ({

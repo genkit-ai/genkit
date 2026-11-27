@@ -145,5 +145,18 @@ describe('Llama request conversion', () => {
         content: '{"results":["cat1.jpg","cat2.jpg"]}',
       },
     ]);
+    
+  });
+  it('should retain zero config values', () => {
+    const genkitRequest: GenerateRequest<typeof LlamaConfigSchema> = {
+      messages: [{ role: 'user', content: [{ text: 'Hello' }] }],
+      config: { temperature: 0, topP: 0, seed: 0 },
+    };
+
+    const openAIRequest = toRequestBody(fakeModel, genkitRequest);
+
+    assert.deepStrictEqual(openAIRequest.temperature, 0);
+    assert.deepStrictEqual(openAIRequest.top_p, 0);
+    assert.deepStrictEqual(openAIRequest.seed, 0);
   });
 });

@@ -122,6 +122,35 @@ describe('toAnthropicRequest', () => {
         ],
       },
     },
+    {
+      should: 'should retain zero config values',
+      input: {
+        messages: [
+          {
+            role: 'user',
+            content: [{ text: 'Tell a joke about dogs.' }],
+          },
+        ],
+        config: {
+          temperature: 0,
+          topK: 0,
+          topP: 0,
+        },
+      },
+      expectedOutput: {
+        max_tokens: 4096,
+        model: MODEL_ID,
+        messages: [
+          {
+            role: 'user',
+            content: [{ type: 'text', text: 'Tell a joke about dogs.' }],
+          },
+        ],
+        temperature: 0,
+        top_k: 0,
+        top_p: 0,
+      },
+    },
   ];
   for (const test of testCases) {
     it(test.should, () => {
