@@ -633,7 +633,7 @@ async function generateActionTurn(
     );
   }
 
-  const parseChunk = format?.handler(request.output?.schema).parseChunk;
+  let parseChunk: ReturnType<Formatter['handler']>['parseChunk'] | null = null;
   let chunkRole: Role = 'model';
   // convenience method to create a full chunk from role and data, append the chunk
   // to the sharedPreviousChunks array, and increment the message index as needed
@@ -647,6 +647,9 @@ async function generateActionTurn(
     const prevToSend = [...sharedPreviousChunks];
     sharedPreviousChunks.push(chunk);
 
+    if (parseChunk === null) {
+      parseChunk = format?.handler(request.output?.schema).parseChunk;
+    }
     return new GenerateResponseChunk(chunk, {
       index: messageIndex,
       role,

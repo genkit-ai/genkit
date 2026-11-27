@@ -22,7 +22,11 @@ import JSON5 from 'json5';
 import { describe, it } from 'node:test';
 import { defineFormat } from '../../src/formats/index.js';
 import { jsonlFormatter } from '../../src/formats/jsonl.js';
-import { GenerateResponseChunk, generateStream } from '../../src/generate.js';
+import {
+  GenerateResponseChunk,
+  generate,
+  generateStream,
+} from '../../src/generate.js';
 import { Message } from '../../src/message.js';
 import type {
   GenerateResponseChunkData,
@@ -376,6 +380,44 @@ describe('jsonlFormat', () => {
 });
 
 describe('jsonlFormat e2e', () => {
+  it('does not look up the direct chunk parser without a chunk', async () => {
+    const registry = new Registry();
+    let chunkParserReads = 0;
+    defineFormat(
+      registry,
+      { name: 'test-jsonl', ...jsonlFormatter.config },
+      (schema) => {
+        const handler = jsonlFormatter.handler(schema);
+        return {
+          ...handler,
+          get parseChunk() {
+            chunkParserReads++;
+            return handler.parseChunk;
+          },
+        };
+      }
+    );
+
+    const pm = defineProgrammableModel(registry);
+    pm.handleResponse = async () => ({
+      message: { role: 'model', content: [{ text: '{id: 1}\n' }] },
+    });
+
+    const response = await generate(registry, {
+      model: 'programmableModel',
+      prompt: 'Return one object',
+      output: {
+        format: 'test-jsonl',
+        schema: z.array(z.object({ id: z.number() })),
+      },
+    });
+
+    assert.deepStrictEqual(response.output, [{ id: 1 }]);
+    // The generate hook chain looks up its own parser. The direct model path
+    // should do no further lookups if it receives no chunks.
+    assert.strictEqual(chunkParserReads, 1);
+  });
+
   it('keeps one parser per concurrent generation', async () => {
     const registry = new Registry();
     let nextParserId = 0;
