@@ -31,7 +31,10 @@ export {
   type SpeechRequestBuilder,
   type TranscriptionRequestBuilder,
 } from './audio.js';
-export { defineCompatOpenAIEmbedder } from './embedder.js';
+export {
+  defineCompatOpenAIEmbedder,
+  type EmbedderRequestBuilder,
+} from './embedder.js';
 export {
   ImageGenerationCommonConfigSchema,
   compatOaiImageModelRef,
@@ -43,7 +46,9 @@ export {
   compatOaiModelRef,
   defineCompatOpenAIModel,
   openAIModelRunner,
+  type ErrorStatusClassifier,
   type ModelRequestBuilder,
+  type ModelRunnerOptions,
 } from './model.js';
 export {
   TranslationConfigSchema,
