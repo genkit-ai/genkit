@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // This sample demonstrates typed output: the Go type you ask for is the schema
-// the model is held to, so the answer comes back as a struct, not a string.
+// the model is held to, so the answer is decoded into that type.
 //
 //   - simpleJokesFlow streams plain text with WithStreaming.
 //   - structuredJokesFlow streams a typed Joke with GenerateDataStream.

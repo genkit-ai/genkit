@@ -1312,14 +1312,14 @@ func (dp *DataPrompt[In, Out]) ExecuteStream(ctx context.Context, input In, opts
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			streamValue, err := extractTypedOutput[Out](chunk)
+			streamValue, ok, err := promptChunkOutput[Out](chunk)
 			if err != nil {
 				yield(nil, err)
 				done = true
 				return err
 			}
 			// Skip yielding if there's no parseable output yet (e.g., incomplete JSON during streaming).
-			if base.IsNil(streamValue) {
+			if !ok {
 				return nil
 			}
 			if !yield(&StreamValue[Out, Out]{Chunk: streamValue}, nil) {
