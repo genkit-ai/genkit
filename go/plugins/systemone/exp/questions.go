@@ -235,10 +235,12 @@ type GuidedYesNo interface {
 
 // NoulOf is the answer to a yes/no question whose criteria come from C:
 // the probability that the statement is true. A value near 0.5 means the
-// model could not tell, not that the answer is "somewhat". There is no
-// separate confidence; the probability is the whole answer.
+// model could not tell, not that the answer is "somewhat". Confidence,
+// from 0 to 1, is set by a server that sends one, such as the Gemini API,
+// and is 0 from any other, where the probability is the whole answer.
 type NoulOf[C YesNo] struct {
 	Probability float64 `json:"noul"`
+	Confidence  float64 `json:"confidence,omitzero"`
 }
 
 // Noul is a [NoulOf] with no criteria: the question is its description
@@ -262,6 +264,7 @@ func (NoulOf[C]) JSONSchema() *jsonschema.Schema {
 func noulSchema(yes, no string, yesGuidance, noGuidance any) *jsonschema.Schema {
 	props := jsonschema.NewProperties()
 	props.Set("noul", &jsonschema.Schema{Type: "number", Minimum: "0", Maximum: "1"})
+	props.Set("confidence", &jsonschema.Schema{Type: "number"})
 	s := answerSchema(systemone.KindNoul, &jsonschema.Schema{Properties: props}, "noul")
 	if yes != "" || no != "" {
 		s.Extras[systemone.TrueKeyword] = yes
@@ -449,7 +452,8 @@ func Schema(questions map[string]Question) map[string]any {
 // Answer is the answer to a question of a [Schema], with the fields of its
 // kind set. Type names the kind: "choice" sets Choice, Probabilities over
 // the options, and Confidence; "score" sets Score, Probabilities keyed by
-// level number, Confidence, and Legend; "noul" sets Probability alone.
+// level number, Confidence, and Legend; "noul" sets Probability, and
+// Confidence where the server sends one.
 // They mean what the same fields of [Choice], [Score], and [NoulOf] mean.
 // Decoding an answer sets Type from the field that names the kind, so a
 // response's answers need no discriminator.
@@ -487,8 +491,9 @@ func (a *Answer) UnmarshalJSON(data []byte) error {
 
 // MarshalJSON implements [json.Marshaler]. It writes the fields of the
 // answer's kind, zeros included, so a score of 0 or a flat distribution's
-// confidence of 0 survives a round trip, and none of another kind's. An
-// answer with no Type writes its non-zero fields.
+// confidence of 0 survives a round trip, and none of another kind's. A
+// noul's confidence is written only when set, since most servers send
+// none. An answer with no Type writes its non-zero fields.
 func (a Answer) MarshalJSON() ([]byte, error) {
 	type plain Answer
 	out := map[string]any{"type": a.Type}
@@ -508,6 +513,9 @@ func (a Answer) MarshalJSON() ([]byte, error) {
 		}
 	case systemone.KindNoul:
 		out["noul"] = a.Probability
+		if a.Confidence != 0 {
+			out["confidence"] = a.Confidence
+		}
 	default:
 		return json.Marshal(plain(a))
 	}

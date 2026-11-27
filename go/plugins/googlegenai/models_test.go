@@ -4,6 +4,9 @@
 package googlegenai
 
 import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -137,5 +140,22 @@ func TestNewlyRegisteredModels(t *testing.T) {
 		if !slices.Contains(googleAIModels, name) {
 			t.Errorf("googleAIModels missing %q", name)
 		}
+	}
+}
+
+// A decision model is listed by the API but served by the Decisions API, so
+// the listing leaves it out rather than offering it as a chat model.
+func TestListGenaiModelsSkipsDecisionModels(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"models":[{"name":"models/gemini-decision-1"},{"name":"gemini-decision-2"},{"name":"models/gemini-flash-latest"}]}`)
+	}))
+	defer srv.Close()
+	models, err := listGenaiModels(t.Context(), newTestClient(t, srv.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(models.gemini, []string{"gemini-flash-latest"}) {
+		t.Errorf("gemini models = %v, want gemini-flash-latest alone", models.gemini)
 	}
 }

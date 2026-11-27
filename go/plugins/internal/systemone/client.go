@@ -57,14 +57,58 @@ type Endpoint struct {
 	// none: the server answered with a success code, so neither the request
 	// nor the server is known to be at fault.
 	Unwrap func(body []byte) ([]byte, error)
+	// Transport, when set, sends every request in place of the native
+	// HTTP wire, such as on a vendor's SDK; the paths, Route, and Unwrap do
+	// not apply.
+	Transport Transport
+}
+
+// Transport sends one request on a server's own client and reads its
+// answers. A response that names a block is returned with Blocked set and
+// no answers: a refused input is a response, not an error, so the caller
+// can tell it from a broken request.
+type Transport interface {
+	Decide(ctx context.Context, model string, r *Request) (*Response, error)
+	// Wire is what the transport's wire carries.
+	Wire() Wire
+}
+
+// Wire says what a wire carries beside the state, the questions, and
+// images, audio, and video given inline, so a request it cannot carry is
+// refused before it is sent.
+type Wire struct {
+	// Documents is PDF files, and URLs media given as an HTTPS URL that
+	// the server fetches.
+	Documents, URLs bool
+	// MediaResolution is the resolution images and video are read at.
+	MediaResolution bool
+	// Extra is extra top-level request fields.
+	Extra bool
+}
+
+// Wire is what the endpoint's wire carries: the transport's, or the
+// native wire's, which takes extra fields and nothing else.
+func (e *Endpoint) Wire() Wire {
+	if e.Transport != nil {
+		return e.Transport.Wire()
+	}
+	return Wire{Extra: true}
+}
+
+// Block is why a server refused to answer for the input: a reason code,
+// such as safety, and the server's message, when it sent one.
+type Block struct {
+	Reason  string
+	Message string
 }
 
 // Request is the native request body, before the endpoint's envelope.
 type Request struct {
 	State any
-	// Media is sent in the images, audio, and videos fields, which the
-	// servers place before the state. Each field is sent only when it has
-	// media, since a server that does not read a kind can refuse its field.
+	// Media is sent in the images, audio, and videos fields as data URLs,
+	// which the servers place before the state. Each field is sent only
+	// when it has media, since a server that does not read a kind can
+	// refuse its field.
 	Media     Media
 	Questions map[string]Question
 	// Extra is merged into the top-level fields, which is the escape hatch
@@ -72,6 +116,9 @@ type Request struct {
 	// the request builds itself: model, state, questions, images, audio, or
 	// videos.
 	Extra map[string]any
+	// MediaResolution is the resolution images and video are read at, for
+	// a wire that takes one.
+	MediaResolution string
 }
 
 // Body builds the native JSON body.
@@ -84,9 +131,11 @@ func (r *Request) Body(model string) map[string]any {
 		delete(body, field)
 	}
 	body["model"], body["state"], body["questions"] = model, r.State, r.Questions
-	for field, media := range map[string][]string{"images": r.Media.Images, "audio": r.Media.Audio, "videos": r.Media.Videos} {
-		if len(media) > 0 {
-			body[field] = media
+	fields := map[string]string{MediaImage: "images", MediaAudio: "audio", MediaVideo: "videos"}
+	for _, part := range r.Media {
+		if field := fields[part.Kind]; field != "" && part.Data != "" {
+			urls, _ := body[field].([]string)
+			body[field] = append(urls, "data:"+part.ContentType+";base64,"+part.Data)
 		}
 	}
 	return body
@@ -96,11 +145,20 @@ func (r *Request) Body(model string) map[string]any {
 // gateway additions, absent from a model vendor's own responses.
 type Response struct {
 	Info
-	Usage struct {
-		InputTokens  int      `json:"input_tokens"`
-		OutputTokens int      `json:"output_tokens"`
-		Cost         *float64 `json:"cost,omitempty"`
-	} `json:"usage"`
+	Usage Usage `json:"usage"`
+	// Blocked is set, and the answers absent, when the server refused to
+	// answer for the input.
+	Blocked *Block `json:"-"`
+}
+
+// Usage is what a response reports it used.
+type Usage struct {
+	InputTokens  int      `json:"input_tokens"`
+	OutputTokens int      `json:"output_tokens"`
+	Cost         *float64 `json:"cost,omitempty"`
+	// InputByModality is the input tokens per modality, such as image,
+	// for a server that reports them.
+	InputByModality map[string]int `json:"-"`
 }
 
 // ModelInfo is one entry of the models listing. A listing names a model
@@ -148,6 +206,9 @@ const RequestTimeout = 30 * time.Second
 
 // Decide posts one request and decodes the answers.
 func (c *Client) Decide(ctx context.Context, model string, req *Request) (*Response, error) {
+	if t := c.Endpoint.Transport; t != nil {
+		return t.Decide(ctx, model, req)
+	}
 	var suffix string
 	native := req.Body(model)
 	var body any = native

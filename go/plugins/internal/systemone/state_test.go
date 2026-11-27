@@ -55,14 +55,28 @@ func TestMedia(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Each kind keeps its order, messages first, and leaves the state.
-	want := Media{
-		Images: []string{png, "data:image/jpeg;base64,/9j/4AAQ", "data:image/webp;base64,UklGRg=="},
-		Audio:  []string{wav},
-		Videos: []string{mp4},
+	// On the native wire, each kind keeps its order, messages first, and
+	// leaves the state.
+	body := (&Request{Media: media}).Body("m")
+	for field, want := range map[string][]string{
+		"images": {png, "data:image/jpeg;base64,/9j/4AAQ", "data:image/webp;base64,UklGRg=="},
+		"audio":  {wav},
+		"videos": {mp4},
+	} {
+		if !reflect.DeepEqual(body[field], want) {
+			t.Errorf("%s = %v, want %v", field, body[field], want)
+		}
 	}
-	if !reflect.DeepEqual(media, want) {
-		t.Errorf("media = %+v, want %+v", media, want)
+	// The media keeps the order across kinds, for a wire of typed blocks.
+	wantParts := Media{
+		{Kind: MediaImage, ContentType: "image/png", Data: "iVBORw0KGgo="},
+		{Kind: MediaAudio, ContentType: "audio/wav", Data: "UklGRg=="},
+		{Kind: MediaImage, ContentType: "image/jpeg", Data: "/9j/4AAQ"},
+		{Kind: MediaVideo, ContentType: "video/mp4", Data: "AAAAIGZ0eXA="},
+		{Kind: MediaImage, ContentType: "image/webp", Data: "UklGRg=="},
+	}
+	if !reflect.DeepEqual(media, wantParts) {
+		t.Errorf("media = %+v, want %+v", media, wantParts)
 	}
 	wantState := map[string]any{
 		"messages": []map[string]any{
@@ -78,20 +92,20 @@ func TestMedia(t *testing.T) {
 
 	// An image alone is a request with an empty state.
 	state, media, err = BuildState(&ai.ModelRequest{Messages: []*ai.Message{ai.NewUserMessage(ai.NewMediaPart("image/png", png))}}, false, Reads{Images: true})
-	if err != nil || state != "" || len(media.Images) != 1 {
-		t.Errorf("image alone: state = %q, images = %v, err = %v", state, media.Images, err)
+	if err != nil || state != "" || len(nativeImages(media)) != 1 {
+		t.Errorf("image alone: state = %q, images = %v, err = %v", state, nativeImages(media), err)
 	}
 
 	// A data URL that is not base64 is encoded; the part's type names it.
 	_, media, err = BuildState(&ai.ModelRequest{Messages: []*ai.Message{ai.NewUserMessage(ai.NewMediaPart("image/svg+xml", "data:,<svg/>"))}}, false, Reads{Images: true})
-	if err != nil || len(media.Images) != 1 || media.Images[0] != "data:image/svg+xml;base64,PHN2Zy8+" {
-		t.Errorf("plain data URL: images = %v, err = %v", media.Images, err)
+	if err != nil || len(nativeImages(media)) != 1 || nativeImages(media)[0] != "data:image/svg+xml;base64,PHN2Zy8+" {
+		t.Errorf("plain data URL: images = %v, err = %v", nativeImages(media), err)
 	}
 
 	// A payload that is not base64 is percent-decoded first.
 	_, media, err = BuildState(&ai.ModelRequest{Messages: []*ai.Message{ai.NewUserMessage(ai.NewMediaPart("", "data:image/png,%89PNG%0D%0A%1A%0A"))}}, false, Reads{Images: true})
-	if err != nil || len(media.Images) != 1 || media.Images[0] != png {
-		t.Errorf("percent-encoded data URL: images = %v, err = %v", media.Images, err)
+	if err != nil || len(nativeImages(media)) != 1 || nativeImages(media)[0] != png {
+		t.Errorf("percent-encoded data URL: images = %v, err = %v", nativeImages(media), err)
 	}
 
 	// A message of images alone is still a turn, so another message is
@@ -107,14 +121,14 @@ func TestMedia(t *testing.T) {
 	// The base64 token is read without regard to case, and the payload
 	// goes out as it is.
 	_, media, err = BuildState(&ai.ModelRequest{Messages: []*ai.Message{ai.NewUserMessage(ai.NewMediaPart("image/png", "data:image/png;BASE64,iVBORw0KGgo="))}}, false, Reads{Images: true})
-	if err != nil || len(media.Images) != 1 || media.Images[0] != png {
-		t.Errorf("upper-case base64 token: images = %v, err = %v", media.Images, err)
+	if err != nil || len(nativeImages(media)) != 1 || nativeImages(media)[0] != png {
+		t.Errorf("upper-case base64 token: images = %v, err = %v", nativeImages(media), err)
 	}
 
 	// The scheme and the media type are read without regard to case.
 	_, media, err = BuildState(&ai.ModelRequest{Messages: []*ai.Message{ai.NewUserMessage(ai.NewMediaPart("", "DATA:Image/PNG;base64,iVBORw0KGgo="))}}, false, Reads{Images: true})
-	if err != nil || len(media.Images) != 1 || media.Images[0] != png {
-		t.Errorf("upper-case data URL: images = %v, err = %v", media.Images, err)
+	if err != nil || len(nativeImages(media)) != 1 || nativeImages(media)[0] != png {
+		t.Errorf("upper-case data URL: images = %v, err = %v", nativeImages(media), err)
 	}
 }
 
@@ -126,6 +140,27 @@ func TestNoStateRefused(t *testing.T) {
 	}, false, Reads{Images: true})
 	if err == nil || !strings.Contains(err.Error(), "no state") {
 		t.Errorf("error = %v, want a request without messages refused", err)
+	}
+}
+
+func TestDocumentsAndURLs(t *testing.T) {
+	// A model that reads documents and URLs takes a PDF and a fetched
+	// image as parts, and neither as a native field.
+	req := &ai.ModelRequest{Messages: []*ai.Message{ai.NewUserMessage(
+		ai.NewTextPart("The contract and the signature."),
+		ai.NewMediaPart("application/pdf", "data:application/pdf;base64,JVBERi0="),
+		ai.NewMediaPart("Image/PNG", "https://example.com/sig.png"),
+	)}}
+	_, media, err := BuildState(req, false, Reads{Images: true, Documents: true, URLs: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Media{
+		{Kind: MediaDocument, ContentType: "application/pdf", Data: "JVBERi0="},
+		{Kind: MediaImage, ContentType: "image/png", URI: "https://example.com/sig.png"},
+	}
+	if !reflect.DeepEqual(media, want) || len(nativeImages(media)) != 0 {
+		t.Errorf("media = %+v, want parts %+v and no native images", media, want)
 	}
 }
 
@@ -143,6 +178,10 @@ func TestMediaRefused(t *testing.T) {
 		{"remote URL", ai.NewMediaPart("image/png", "https://example.com/cat.png"), images, "DownloadRequestMedia"},
 		{"upper-case remote URL", ai.NewMediaPart("image/png", "HTTPS://example.com/cat.png"), images, "DownloadRequestMedia"},
 		{"not an image, audio, or video", ai.NewMediaPart("application/pdf", "data:application/pdf;base64,JVBERi0="), Reads{Images: true, Audio: true, Video: true}, "not an image, audio, or video"},
+		{"not a PDF", ai.NewMediaPart("text/csv", "data:text/csv;base64,YQ=="), Reads{Documents: true}, "not an image, audio, video, or PDF"},
+		{"plain HTTP to a URL reader", ai.NewMediaPart("image/png", "http://example.com/cat.png"), Reads{Images: true, URLs: true}, "not an HTTPS URL"},
+		{"Cloud Storage to a URL reader", ai.NewMediaPart("image/png", "gs://bucket/cat.png"), Reads{Images: true, URLs: true}, "not an HTTPS URL"},
+		{"URL without a content type", ai.NewMediaPart("", "https://example.com/cat.png"), Reads{Images: true, URLs: true}, "no content type"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			_, _, err := BuildState(&ai.ModelRequest{Messages: []*ai.Message{ai.NewUserMessage(ai.NewTextPart("hi"), tt.part)}}, false, tt.reads)
@@ -151,4 +190,10 @@ func TestMediaRefused(t *testing.T) {
 			}
 		})
 	}
+}
+
+// nativeImages is the images field the native wire sends for the media.
+func nativeImages(media Media) []string {
+	images, _ := (&Request{Media: media}).Body("m")["images"].([]string)
+	return images
 }

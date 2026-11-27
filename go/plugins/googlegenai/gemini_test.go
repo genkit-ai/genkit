@@ -29,6 +29,7 @@ import (
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/base"
 	"google.golang.org/genai"
 )
@@ -2308,5 +2309,25 @@ func TestToGeminiRequestResponseModalities(t *testing.T) {
 				t.Errorf("ResponseModalities = %v, want %v", gcc.ResponseModalities, tt.want)
 			}
 		})
+	}
+}
+
+// A decision model named on this plugin, by its ID or its resource name,
+// fails before any request, the media download included, with an error
+// that names the plugin that serves it.
+func TestDecisionModelRefused(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected request to %s", r.URL.Path)
+	}))
+	defer srv.Close()
+	client := newTestClient(t, srv.URL)
+	req := &ai.ModelRequest{Messages: []*ai.Message{ai.NewUserMessage(
+		ai.NewTextPart("Is it damaged?"), ai.NewMediaPart("image/png", srv.URL+"/photo.png"))}}
+	for _, id := range []string{"gemini-decision-1", "models/gemini-decision-1"} {
+		m := newModel(client, id, GetModelOptions(id, googleAIProvider))
+		_, err := m.Generate(t.Context(), req, nil)
+		if !errors.Is(err, status.ErrInvalidArgument) || !strings.Contains(err.Error(), "googleai-decisions/gemini-decision-1") {
+			t.Errorf("%s: error = %v, want INVALID_ARGUMENT naming googleai-decisions/gemini-decision-1", id, err)
+		}
 	}
 }

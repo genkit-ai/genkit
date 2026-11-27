@@ -17,8 +17,10 @@
 package systemone
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
+	"strings"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/logger"
@@ -44,8 +46,16 @@ type Config struct {
 	// Extra is merged into the top-level fields of the request body. It
 	// reaches fields this package does not model, such as a gateway's
 	// session_id or trace. It cannot name a field the request builds
-	// itself: model, state, questions, images, audio, or videos.
-	Extra map[string]any `json:"extra,omitempty" jsonschema_description:"Extra top-level request fields, such as a gateway's session_id. Cannot replace model, state, questions, images, audio, or videos."`
+	// itself: model, state, questions, images, audio, or videos. A server
+	// reached through its own SDK, such as the Gemini API, takes none.
+	Extra map[string]any `json:"extra,omitempty" jsonschema_description:"Extra top-level request fields, such as a gateway's session_id. Cannot replace the fields the request builds itself."`
+
+	// MediaResolution is the resolution images and video are read at:
+	// low, medium, high, or ultra_high, which is for images only and
+	// leaves video at the server's default. Higher resolutions read more
+	// detail for more input tokens. Only a server that takes it accepts
+	// it, such as the Gemini API; any other refuses the request.
+	MediaResolution string `json:"mediaResolution,omitempty" jsonschema:"enum=low,enum=medium,enum=high,enum=ultra_high" jsonschema_description:"Resolution images and video are read at; ultra_high is for images only. Gemini API only."`
 }
 
 // NewModel builds the model action for one model ID under its registered
@@ -60,7 +70,7 @@ func NewModel(c *Client, name, id string, spec Spec) *ai.ModelAction {
 	return ai.NewModelAction(name, &ai.ModelOptions{
 		Label: spec.Label,
 		Supports: &ai.ModelSupports{
-			Media:       spec.Reads.Images || spec.Reads.Audio || spec.Reads.Video,
+			Media:       spec.Reads.Images || spec.Reads.Audio || spec.Reads.Video || spec.Reads.Documents,
 			Multiturn:   true,
 			SystemRole:  true,
 			Context:     true,
@@ -96,10 +106,17 @@ func (m *model) generate(ctx context.Context, req *ai.ModelRequest, cfg *Config,
 	if cfg != nil {
 		opts = *cfg
 	}
+	name, wire := m.client.Endpoint.Name, m.client.Endpoint.Wire()
+	if len(opts.Extra) > 0 && !wire.Extra {
+		return nil, status.Errorf(status.ErrInvalidArgument, "systemone: %s takes no extra fields; its client builds the whole request", name)
+	}
 	for _, field := range reservedFields {
 		if _, ok := opts.Extra[field]; ok {
 			return nil, status.Errorf(status.ErrInvalidArgument, "systemone: extra field %q is one the request builds itself", field)
 		}
+	}
+	if opts.MediaResolution != "" && !wire.MediaResolution {
+		return nil, status.Errorf(status.ErrInvalidArgument, "systemone: %s takes no media resolution", name)
 	}
 	enum := req.Output.Format == ai.OutputFormatEnum
 	preamble, err := SystemPreamble(req.Messages)
@@ -120,9 +137,21 @@ func (m *model) generate(ctx context.Context, req *ai.ModelRequest, cfg *Config,
 		return nil, err
 	}
 
-	resp, err := m.client.Decide(ctx, m.id, &Request{State: state, Media: media, Questions: questions, Extra: opts.Extra})
+	resp, err := m.client.Decide(ctx, m.id, &Request{State: state, Media: media, Questions: questions, Extra: opts.Extra, MediaResolution: opts.MediaResolution})
 	if err != nil {
 		return nil, err
+	}
+	usage := responseUsage(resp.Usage)
+	if resp.Blocked != nil {
+		msg := cmp.Or(resp.Blocked.Message, "input blocked: "+resp.Blocked.Reason)
+		logger.Debug(ctx, "systemone: input blocked", "endpoint", m.client.Endpoint.Name, "model", resp.Model, "reason", resp.Blocked.Reason)
+		return &ai.ModelResponse{
+			Message:       &ai.Message{Role: ai.RoleModel},
+			FinishReason:  ai.FinishReasonBlocked,
+			FinishMessage: msg,
+			Usage:         usage,
+			Raw:           &resp.Info,
+		}, nil
 	}
 	logger.Debug(ctx, "systemone: answered", "endpoint", m.client.Endpoint.Name, "model", resp.Model, "questions", len(questions), "inputTokens", resp.Usage.InputTokens, "outputTokens", resp.Usage.OutputTokens)
 
@@ -135,20 +164,42 @@ func (m *model) generate(ctx context.Context, req *ai.ModelRequest, cfg *Config,
 		part = ai.NewTextPart(text)
 	}
 
-	usage := &ai.GenerationUsage{
-		InputTokens:  resp.Usage.InputTokens,
-		OutputTokens: resp.Usage.OutputTokens,
-		TotalTokens:  resp.Usage.InputTokens + resp.Usage.OutputTokens,
-	}
-	if resp.Usage.Cost != nil {
-		usage.Custom = map[string]float64{"cost": *resp.Usage.Cost}
-	}
 	return &ai.ModelResponse{
 		Message:      ai.NewModelMessage(part),
 		FinishReason: ai.FinishReasonStop,
 		Usage:        usage,
 		Raw:          &resp.Info,
 	}, nil
+}
+
+// responseUsage is a response's usage as Genkit reports it: the cost a
+// gateway reports, and the input tokens per modality a server reports, as
+// inputImageTokens and the like, in Custom.
+func responseUsage(u Usage) *ai.GenerationUsage {
+	usage := &ai.GenerationUsage{
+		InputTokens:  u.InputTokens,
+		OutputTokens: u.OutputTokens,
+		TotalTokens:  u.InputTokens + u.OutputTokens,
+	}
+	if u.Cost != nil || len(u.InputByModality) > 0 {
+		usage.Custom = make(map[string]float64, len(u.InputByModality)+1)
+	}
+	if u.Cost != nil {
+		usage.Custom["cost"] = *u.Cost
+	}
+	for modality, tokens := range u.InputByModality {
+		usage.Custom["input"+modalityName(modality)+"Tokens"] = float64(tokens)
+	}
+	return usage
+}
+
+// modalityName is a modality as it goes into a usage key: image is Image.
+// Usage.InputByModality holds its modalities lower case.
+func modalityName(modality string) string {
+	if modality == "" {
+		return "Unspecified"
+	}
+	return strings.ToUpper(modality[:1]) + modality[1:]
 }
 
 // Info is the raw response of a model built by [NewModel]: the model
@@ -170,7 +221,7 @@ type Info struct {
 var answerFields = map[string][]string{
 	KindChoice: {"choice", "probabilities", "confidence"},
 	KindScore:  {"score", "probabilities", "confidence", "legend"},
-	KindNoul:   {"noul"},
+	KindNoul:   {"noul", "confidence"},
 }
 
 // AnswersText renders the answers as the message text: for the enum

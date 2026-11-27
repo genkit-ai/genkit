@@ -123,6 +123,24 @@ func TestGoogleAIInit_DefaultHTTPClient(t *testing.T) {
 	}
 }
 
+func TestGoogleAIInit_DefaultAPIVersion(t *testing.T) {
+	// The genai SDK defaults the Gemini API to v1, which does not serve
+	// context caching; the plugin keeps v1beta unless the SDK's variable
+	// says otherwise.
+	for _, tt := range []struct{ env, want string }{{"", "v1beta"}, {"v1", "v1"}} {
+		t.Setenv("GOOGLE_GENAI_API_VERSION", tt.env)
+		ga := &googlegenai.GoogleAI{APIKey: "test-api-key"}
+		ga.Init(context.Background())
+		client, err := ga.Client()
+		if err != nil {
+			t.Fatalf("Client: %v", err)
+		}
+		if got := client.ClientConfig().HTTPOptions.APIVersion; got != tt.want {
+			t.Errorf("GOOGLE_GENAI_API_VERSION=%q: APIVersion = %q, want %q", tt.env, got, tt.want)
+		}
+	}
+}
+
 // clearVertexEnv blanks every environment variable that Vertex AI
 // initialization consults, so a test starts from a known state regardless of
 // what the developer or CI has exported.

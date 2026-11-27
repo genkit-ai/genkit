@@ -92,7 +92,7 @@ Each sample runs with `go run .`. Start with the `basic-*` set: together they co
 | [basic](samples/basic/main.go) | Text generation, streaming, and flows |
 | [basic‑structured](samples/basic-structured/main.go) | Typed JSON output with `GenerateData` and `GenerateDataStream` |
 | [basic‑formats](samples/basic-formats/main.go) | Output formats and how each one streams |
-| [basic‑decisions](samples/basic-decisions/main.go) | Typed decisions with calibrated probabilities from TypeSafe jev |
+| [basic‑decisions](samples/basic-decisions/main.go) | Typed decisions with calibrated probabilities from Gemini Decision 1 |
 | [basic‑media](samples/basic-media) | Image input, image generation and editing, and video generation |
 | [basic‑prompts](samples/basic-prompts) | Handlebars templates, `.prompt` files, partials, and helpers |
 | [basic‑prompt‑content](samples/basic-prompt-content/main.go) | Prompt content built in Go from your data |
@@ -804,7 +804,7 @@ Genkit provides a unified interface across all major AI providers. Use whichever
 | **Vertex AI Model Garden** | `modelgarden.Anthropic`, `.Llama`, `.Mistral` | Claude, Llama, and Mistral via Google Cloud |
 | **Ollama** | `ollama.Ollama` | Llama 4, Qwen 3, DeepSeek, and other local models |
 | **OpenAI Compatible** | `compat_oai` | GPT-5.6, Grok, DeepSeek, Qwen, Kimi, GLM, the OpenRouter gateway, and any OpenAI-compatible API |
-| **System One** *(preview)* | `systemonex.SystemOne`, `systemonex.TypeSafe()`, `systemonex.OpenRouter()`, `systemonex.Ollama()`, `systemonex.WorkersAI("")` | Decision models such as TypeSafe's jev, Liquid AI's d1, and Cloudflare's Clef, with calibrated answers ([README](plugins/systemone/exp/README.md)) |
+| **System One** *(preview)* | `systemonex.SystemOne`, `systemonex.TypeSafe()`, `systemonex.OpenRouter()`, `systemonex.Ollama()`, `systemonex.WorkersAI("")`, `systemonex.GoogleAI()` | Decision models such as TypeSafe's jev, Liquid AI's d1, Cloudflare's Clef, and Google's Gemini Decision 1, with calibrated answers ([README](plugins/systemone/exp/README.md)) |
 
 ```go
 // Google AI

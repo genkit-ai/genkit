@@ -14,7 +14,8 @@
 
 // This sample demonstrates decisions: asking a System One model typed
 // questions about a state and getting calibrated answers back, instead of
-// asking a chat model for prose and parsing it. The model is TypeSafe's jev.
+// asking a chat model for prose and parsing it. The model is Google's Gemini
+// Decision 1, through the Gemini API's Decisions API.
 // The Go type you ask for is the question set: each field is one question,
 // its description is the instructions, and the answer lands in the field
 // with a probability for every option.
@@ -28,9 +29,9 @@
 //     probabilities into pass, review, or block.
 //   - rankFlow scores every passage of a shortlist against a query, one call
 //     per passage, and orders the shortlist by the answers.
-//   - askFlow puts a decision in front of two answer models: jev rates how
-//     much reasoning the query needs, and the code sends it to a light
-//     Gemini model or to a heavy one with thinking on.
+//   - askFlow puts a decision in front of two answer models: the decision
+//     model rates how much reasoning the query needs, and the code sends it
+//     to a light Gemini model or to a heavy one with thinking on.
 //   - teamFlow is the built-in enum format on the same model: the system
 //     message is the question, the enum values are the options, and there
 //     is no decision type.
@@ -42,12 +43,18 @@
 // probabilities; what to do at 0.6 is the application's decision, and it
 // differs by how risky the action is.
 //
-// Run it with an OpenRouter key, which serves jev through OpenRouter's
-// Decisions API, and a Gemini key for askFlow:
+// Run it with a Gemini API key, which serves both the decision model and
+// the answer models behind askFlow:
 //
-//	export OPENROUTER_API_KEY=...
 //	export GEMINI_API_KEY=...
 //	go run .
+//
+// The questions are the same on any server that speaks System One. To run
+// them on TypeSafe's jev through OpenRouter instead, add
+// systemonex.OpenRouter() to the plugins, set OPENROUTER_API_KEY, and set
+// model, and the model in prompts/triage.prompt, to
+// openrouter-decisions/~typesafe/jev-latest. Retune the thresholds when you
+// change the model: each model is calibrated on its own.
 //
 // Or with the Dev UI, to call the flows from a browser and read a trace of
 // every run at http://localhost:4000/traces. The trace shows the question
@@ -124,10 +131,11 @@ func (Dept) Criteria() map[Dept]string {
 	}
 }
 
-// Guidance adds structure where a string is not enough. The wire format
-// takes an object per option; this one says what billing does not cover,
-// since a question about a delivery mentions an order and reads as billing
-// otherwise. The criteria string above becomes its "what".
+// Guidance adds structure where a string is not enough. This one says what
+// billing does not cover, since a question about a delivery mentions an
+// order and reads as billing otherwise. The criteria string above becomes
+// its "what". A server that takes an object per option gets the object; the
+// Gemini API takes text, so it gets the object's JSON.
 func (Dept) Guidance() map[Dept]any {
 	return map[Dept]any{
 		Billing: map[string]any{
@@ -172,7 +180,7 @@ type TicketRequest struct {
 type TriageResult struct {
 	Decision Triage `json:"decision"`
 	Route    string `json:"route"`
-	Model    string `json:"model" jsonschema_description:"The model version that answered, which is what thresholds are tuned against"`
+	Model    string `json:"model" jsonschema_description:"The model that answered, which is what thresholds are tuned against: the version a server names, or the model the request named when it names none"`
 }
 
 // Harm is the rubric of the screening score.
@@ -298,10 +306,10 @@ type ToolPick struct {
 //go:embed prompts/*
 var promptsFS embed.FS
 
-// model is the decision model, by name, shared by every flow. Pin a version
-// in production: thresholds tuned against one release do not carry over to
-// the next.
-const model = "openrouter-decisions/~typesafe/jev-latest"
+// model is the decision model, by name, shared by every flow. Thresholds
+// tuned against one model or release do not carry over to another, so
+// retune them when the model changes.
+const model = "googleai-decisions/gemini-decision-1"
 
 // The answer models behind askFlow. The light one is fast and cheap; the
 // heavy one thinks before it answers and costs accordingly, which is what
@@ -318,11 +326,12 @@ var (
 func main() {
 	ctx := context.Background()
 
-	// jev is reached through OpenRouter's Decisions API here. The questions
-	// and the answers are the same on TypeSafe's own API or any other server
-	// that speaks System One; only the plugin and the model name differ.
+	// One Gemini API key serves both plugins: the decision model through the
+	// Decisions API, and the answer models through googlegenai. The
+	// questions and the answers are the same on any other server that speaks
+	// System One; only the plugin and the model name differ.
 	g := genkit.Init(ctx,
-		genkit.WithPlugins(systemonex.OpenRouter(), &googlegenai.GoogleAI{}),
+		genkit.WithPlugins(systemonex.GoogleAI(), &googlegenai.GoogleAI{}),
 		genkit.WithPromptFS(promptsFS),
 	)
 
@@ -498,9 +507,9 @@ func DefineRank(g *genkit.Genkit) {
 // it to spend less; the decision costs a fraction of either answer.
 const heavyLine = 1.5
 
-// DefineAsk puts a decision in front of two answer models. jev rates how
-// much reasoning the query needs, in a few hundred milliseconds, and the
-// code picks the model: most queries go to the light one, and the ones that
+// DefineAsk puts a decision in front of two answer models. The decision
+// model rates how much reasoning the query needs, in a few hundred
+// milliseconds, and the code picks the model: most queries go to the light one, and the ones that
 // need it go to the heavy one with thinking on.
 func DefineAsk(g *genkit.Genkit) {
 	genkit.DefineFlow(g, "askFlow", func(ctx context.Context, input AskRequest) (AskResult, error) {

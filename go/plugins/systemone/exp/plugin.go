@@ -170,13 +170,14 @@ const (
 )
 
 // preset is what a constructor sets for its server beyond the public
-// fields: where its key and base URL come from.
+// fields: where its key and base URL come from, and the wire of a server
+// that does not speak the native one.
 type preset struct {
 	// label names the server in model labels; empty means Provider.
 	label string
-	// apiKeyEnv names the variable the key is read from. A server that
-	// names one requires a key.
-	apiKeyEnv string
+	// apiKeyEnvs names the variables the key is read from, the first set
+	// winning. A server that names one requires a key.
+	apiKeyEnvs []string
 	// baseURL is the default base URL, and baseURLEnv the variable that
 	// overrides it.
 	baseURL    string
@@ -186,6 +187,12 @@ type preset struct {
 	// requires an account while its base URL has that segment.
 	account    string
 	accountEnv string
+	// transport builds the client of a server reached through its own
+	// SDK rather than the native wire, from the key, base URL, headers,
+	// and HTTP client Init resolved.
+	transport func(ctx context.Context, c *systemone.Client) (systemone.Transport, error)
+	// headers are sent on every request, under the caller's Headers.
+	headers http.Header
 }
 
 // Config is the per-request configuration of a decision model: StateJSON
@@ -213,16 +220,21 @@ func (s *SystemOne) Init(ctx context.Context) []api.Action {
 		panic(s.Provider + ": plugin already initialized")
 	}
 	apiKey := s.APIKey
-	if env := s.preset.apiKeyEnv; env != "" {
-		if apiKey = cmp.Or(apiKey, os.Getenv(env)); apiKey == "" {
-			panic(s.Provider + ": set APIKey or the " + env + " environment variable")
+	if envs := s.preset.apiKeyEnvs; len(envs) > 0 {
+		for _, env := range envs {
+			apiKey = cmp.Or(apiKey, os.Getenv(env))
+		}
+		if apiKey == "" {
+			panic(s.Provider + ": set APIKey or the " + strings.Join(envs, " or ") + " environment variable")
 		}
 	}
 	baseURL := cmp.Or(s.BaseURL, s.preset.baseURL)
 	if env := s.preset.baseURLEnv; env != "" && s.BaseURL == "" {
 		baseURL = cmp.Or(os.Getenv(env), baseURL)
 	}
-	if baseURL == "" {
+	// A transport's client has its own default, which an empty BaseURL
+	// keeps along with the SDK's own variables.
+	if baseURL == "" && s.preset.transport == nil {
 		panic(s.Provider + ": set BaseURL, the root of the server's System One API")
 	}
 	if env := s.preset.accountEnv; env != "" && strings.Contains(baseURL, "{account}") {
@@ -245,11 +257,20 @@ func (s *SystemOne) Init(ctx context.Context) []api.Action {
 		}
 		s.models[id] = spec
 	}
-	s.client = &systemone.Client{
+	// The caller's Headers win over the preset's, key by key whatever the
+	// case of the key.
+	headers := s.preset.headers.Clone()
+	if headers == nil {
+		headers = make(http.Header, len(s.Headers))
+	}
+	for key, values := range s.Headers {
+		headers[http.CanonicalHeaderKey(key)] = slices.Clone(values)
+	}
+	client := &systemone.Client{
 		HTTP:    cmp.Or(s.HTTPClient, &http.Client{Timeout: systemone.RequestTimeout}),
 		BaseURL: strings.TrimSuffix(baseURL, "/"),
 		APIKey:  apiKey,
-		Headers: s.Headers.Clone(),
+		Headers: headers,
 		Endpoint: &systemone.Endpoint{
 			Name:       s.Provider,
 			Path:       path,
@@ -258,6 +279,16 @@ func (s *SystemOne) Init(ctx context.Context) []api.Action {
 			Unwrap:     s.Unwrap,
 		},
 	}
+	if newTransport := s.preset.transport; newTransport != nil {
+		transport, err := newTransport(ctx, client)
+		if err != nil {
+			panic(s.Provider + ": " + err.Error())
+		}
+		// The native listing does not apply to a server reached on its
+		// own client, and would send the key over the native wire.
+		client.Endpoint.Transport, client.Endpoint.ModelsPath = transport, ""
+	}
+	s.client = client
 	return nil
 }
 
@@ -377,10 +408,15 @@ func (s *SystemOne) newModel(c *systemone.Client, id string) *ai.ModelAction {
 	reads := func(plugin, model MediaSupport) bool {
 		return cmp.Or(model, plugin) == MediaSupported
 	}
+	// A wire that carries documents and URLs carries them for every model
+	// it serves; the server refuses them for a model that cannot read them.
+	wire := c.Endpoint.Wire()
 	return systemone.NewModel(c, api.NewName(c.Endpoint.Name, id), id, systemone.Spec{Label: label, Reads: systemone.Reads{
-		Images: reads(s.media[0], spec.Images),
-		Audio:  reads(s.media[1], spec.Audio),
-		Video:  reads(s.media[2], spec.Video),
+		Images:    reads(s.media[0], spec.Images),
+		Audio:     reads(s.media[1], spec.Audio),
+		Video:     reads(s.media[2], spec.Video),
+		Documents: wire.Documents,
+		URLs:      wire.URLs,
 	}})
 }
 
@@ -398,7 +434,7 @@ func TypeSafe() *SystemOne {
 		Models:     map[string]ModelSpec{"jev-latest": {}, "jev-1.13.0": {}},
 		preset: preset{
 			label:      "TypeSafe",
-			apiKeyEnv:  "TYPESAFE_API_KEY",
+			apiKeyEnvs: []string{"TYPESAFE_API_KEY"},
 			baseURL:    "https://api.typesafe.ai",
 			baseURLEnv: "TYPESAFE_BASE_URL",
 		},
@@ -431,9 +467,9 @@ func OpenRouter() *SystemOne {
 			"~typesafe/jev-latest":  {},
 		},
 		preset: preset{
-			label:     "OpenRouter",
-			apiKeyEnv: "OPENROUTER_API_KEY",
-			baseURL:   "https://openrouter.ai",
+			label:      "OpenRouter",
+			apiKeyEnvs: []string{"OPENROUTER_API_KEY"},
+			baseURL:    "https://openrouter.ai",
 		},
 	}
 }
