@@ -137,11 +137,49 @@ describe('toAnthropicRequest', () => {
       expectedOutput: {
         max_tokens: 4096,
         model: MODEL_ID,
-        system: 'Talk like a pirate.',
+        system: [{ type: 'text', text: 'Talk like a pirate.' }],
         messages: [
           {
             role: 'user',
             content: [{ type: 'text', text: 'Tell a joke about dogs.' }],
+          },
+        ],
+      },
+    },
+    {
+      should: 'should keep every system text part as its own block',
+      input: {
+        messages: [
+          {
+            role: 'system',
+            content: [
+              { text: 'You are terse.' },
+              { text: '' },
+              { text: 'Output should be in JSON format.' },
+            ],
+          },
+          {
+            role: 'system',
+            content: [{ text: 'Reply in French.' }],
+          },
+          {
+            role: 'user',
+            content: [{ text: 'hi' }],
+          },
+        ],
+      },
+      expectedOutput: {
+        max_tokens: 4096,
+        model: MODEL_ID,
+        system: [
+          { type: 'text', text: 'You are terse.' },
+          { type: 'text', text: 'Output should be in JSON format.' },
+          { type: 'text', text: 'Reply in French.' },
+        ],
+        messages: [
+          {
+            role: 'user',
+            content: [{ type: 'text', text: 'hi' }],
           },
         ],
       },
@@ -222,6 +260,22 @@ describe('toAnthropicRequest', () => {
       );
     });
   }
+
+  it('should reject non text system parts', () => {
+    assert.throws(
+      () =>
+        toAnthropicRequest(MODEL_ID, {
+          messages: [
+            {
+              role: 'system',
+              content: [{ media: { url: 'https://example.com/a.png' } }],
+            },
+            { role: 'user', content: [{ text: 'hi' }] },
+          ],
+        }),
+      /Only text context is supported for system messages/
+    );
+  });
 });
 
 describe('fromAnthropicResponse', () => {

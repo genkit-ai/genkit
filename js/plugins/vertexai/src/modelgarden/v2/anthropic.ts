@@ -252,20 +252,20 @@ export function toAnthropicRequest(
   model: string,
   input: GenerateRequest<typeof AnthropicConfigSchema>
 ): MessageCreateParamsBase {
-  let system: string | undefined = undefined;
+  const system: TextBlockParam[] = [];
   const messages: MessageParam[] = [];
   for (const msg of input.messages) {
     if (msg.role === 'system') {
-      system = msg.content
-        .map((c) => {
-          if (!c.text) {
-            throw new Error(
-              'Only text context is supported for system messages.'
-            );
-          }
-          return c.text;
-        })
-        .join();
+      for (const part of msg.content) {
+        if (part.text === undefined) {
+          throw new Error(
+            'Only text context is supported for system messages.'
+          );
+        }
+        if (part.text) {
+          system.push({ type: 'text', text: part.text });
+        }
+      }
     }
     // If the last message is a tool response, we need to add a user message.
     // https://docs.anthropic.com/en/docs/build-with-claude/tool-use#handling-tool-use-and-tool-result-content-blocks
@@ -302,7 +302,7 @@ export function toAnthropicRequest(
     ...restConfig,
   } as MessageCreateParamsBase & Record<string, any>;
 
-  if (system) {
+  if (system.length) {
     request['system'] = system;
   }
   if (input.tools) {
