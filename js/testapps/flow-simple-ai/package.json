@@ -23,11 +23,9 @@
     "@google/genai": "^1.30.0",
     "firebase-admin": "^13.8.0",
     "genkit": "workspace:*",
-    "partial-json": "^0.1.7",
-    "wav": "^1.0.2"
+    "partial-json": "^0.1.7"
   },
   "devDependencies": {
-    "@types/wav": "^1.0.4",
     "genkit-cli": "link:../../../genkit-tools/cli",
     "rimraf": "^6.0.1",
     "tsx": "^4.21.0",

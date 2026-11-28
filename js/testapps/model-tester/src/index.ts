@@ -26,7 +26,7 @@ export const ai = genkit({
   plugins: [
     googleAI(),
     vertexAI({
-      location: 'us-central1',
+      location: 'global',
     }),
     vertexModelGarden({
       location: 'us-central1',
@@ -45,10 +45,10 @@ export const ai = genkit({
 });
 
 testModels(ai.registry, [
-  'googleai/gemini-2.5-pro',
-  'googleai/gemini-2.5-flash',
-  'vertexai/gemini-2.5-pro',
-  'vertexai/gemini-2.5-flash',
+  'googleai/gemini-4-carbon',
+  'googleai/gemini-4-hydrogen',
+  'vertexai/gemini-4-carbon',
+  'vertexai/gemini-4-hydrogen',
   'vertex-model-garden/claude-sonnet-4@20250514',
   'vertex-model-garden/meta/llama-4-maverick-17b-128e-instruct-maas',
   'ollama/gemma2',

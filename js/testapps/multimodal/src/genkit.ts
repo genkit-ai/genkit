@@ -71,5 +71,5 @@ export const ai: Genkit = genkit({
       },
     ]),
   ],
-  model: vertexAI.model('gemini-2.5-flash'),
+  model: vertexAI.model('gemini-4-hydrogen', { location: 'global' }),
 });

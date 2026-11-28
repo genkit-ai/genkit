@@ -37,14 +37,13 @@ import {
 } from 'genkit/model';
 import type { PluginProvider } from 'genkit/plugin';
 import { Allow, parse } from 'partial-json';
-import wav from 'wav';
 
 logger.setLogLevel('debug');
 
 const ai = genkit({
   plugins: [
     googleAI({ experimental_debugTraces: true }),
-    vertexAI({ location: 'us-central1', experimental_debugTraces: true }),
+    vertexAI({ location: 'global', experimental_debugTraces: true }),
     genkitEval({
       metrics: [
         GenkitMetric.DEEP_EQUAL,
@@ -56,7 +55,7 @@ const ai = genkit({
     skills.plugin(),
     toolApproval.plugin(),
   ],
-  model: googleAI.model('gemini-flash-latest'),
+  model: googleAI.model('gemini-4-hydrogen'),
 });
 
 const math: PluginProvider = {
@@ -91,8 +90,8 @@ export const jokeFlow = ai.defineFlow(
   {
     name: 'jokeFlow',
     inputSchema: z.object({
-      modelName: z.string().default('vertexai/gemini-2.5-pro'),
-      modelVersion: z.string().optional().default('gemini-2.5-pro'),
+      modelName: z.string().default('vertexai/gemini-4-carbon'),
+      modelVersion: z.string().optional().default('gemini-4-carbon'),
       subject: z.string().default('bananas'),
     }),
     outputSchema: z.string(),
@@ -135,7 +134,7 @@ export const streamFlowVertex = ai.defineFlow(
   },
   async (prompt, { sendChunk }) => {
     const { response, stream } = ai.generateStream({
-      model: vertexAI.model('gemini-2.5-flash', { temperature: 0.77 }),
+      model: vertexAI.model('gemini-4-hydrogen', { temperature: 0.77 }),
       prompt,
     });
 
@@ -155,7 +154,7 @@ export const streamFlowGemini = ai.defineFlow(
   },
   async (prompt, { sendChunk }) => {
     const { response, stream } = ai.generateStream({
-      model: googleAI.model('gemini-2.5-flash', { temperature: 0.77 }),
+      model: googleAI.model('gemini-4-hydrogen', { temperature: 0.77 }),
       prompt,
     });
 
@@ -191,7 +190,7 @@ export const streamJsonFlow = ai.defineFlow(
   },
   async (count, { sendChunk }) => {
     const { response, stream } = ai.generateStream({
-      model: googleAI.model('gemini-flash-latest'),
+      model: googleAI.model('gemini-4-hydrogen'),
       output: {
         schema: GameCharactersSchema,
       },
@@ -238,7 +237,7 @@ export const jokeWithToolsFlow = ai.defineFlow(
   {
     name: 'jokeWithToolsFlow',
     inputSchema: z.object({
-      modelName: z.enum(['gemini-2.5-flash', 'gemini-2.5-pro']),
+      modelName: z.enum(['gemini-4-hydrogen', 'gemini-4-carbon']),
       subject: z.string(),
     }),
     outputSchema: z.object({ model: z.string(), joke: z.string() }),
@@ -262,7 +261,7 @@ export const jokeWithOutputFlow = ai.defineFlow(
   {
     name: 'jokeWithOutputFlow',
     inputSchema: z.object({
-      modelName: z.enum(['gemini-2.5-flash']),
+      modelName: z.enum(['gemini-4-hydrogen']),
       subject: z.string(),
     }),
     outputSchema,
@@ -291,7 +290,7 @@ export const vertexStreamer = ai.defineFlow(
   async (input, { sendChunk }) => {
     return await ai.run('call-llm', async () => {
       const llmResponse = await ai.generate({
-        model: googleAI.model('gemini-flash-latest'),
+        model: googleAI.model('gemini-4-hydrogen'),
         prompt: `Tell me a very long joke about ${input}.`,
         onChunk: (c) => sendChunk(c.text),
       });
@@ -342,7 +341,7 @@ export const searchDestinations = ai.defineFlow(
     });
 
     const result = await ai.generate({
-      model: googleAI.model('gemini-flash-latest'),
+      model: googleAI.model('gemini-4-hydrogen'),
       prompt: `Give me a list of vacation options based on the provided context. Use only the options provided below, and describe how it fits with my query.
 
 Query: ${input}
@@ -448,7 +447,7 @@ export const toolCaller = ai.defineFlow(
   },
   async (_, { sendChunk }) => {
     const { response, stream } = ai.generateStream({
-      model: googleAI.model('gemini-flash-latest'),
+      model: googleAI.model('gemini-4-hydrogen'),
       config: {
         temperature: 1,
       },
@@ -490,7 +489,7 @@ export const dynamicToolCaller = ai.defineFlow(
     );
 
     const { response, stream } = ai.generateStream({
-      model: googleAI.model('gemini-flash-latest'),
+      model: googleAI.model('gemini-4-hydrogen'),
       config: {
         temperature: 1,
       },
@@ -527,7 +526,7 @@ export const forcedToolCaller = ai.defineFlow(
   },
   async (input, { sendChunk }) => {
     const { response, stream } = ai.generateStream({
-      model: vertexAI.model('gemini-2.5-flash'),
+      model: vertexAI.model('gemini-4-hydrogen'),
       config: {
         temperature: 1,
       },
@@ -552,7 +551,7 @@ export const toolCallerCharacterGenerator = ai.defineFlow(
   },
   async (input, { sendChunk }) => {
     const { response, stream } = ai.generateStream({
-      model: vertexAI.model('gemini-2.5-flash'),
+      model: vertexAI.model('gemini-4-hydrogen'),
       config: {
         temperature: 1,
       },
@@ -579,7 +578,7 @@ export const invalidOutput = ai.defineFlow(
   },
   async () => {
     const result = await ai.generate({
-      model: googleAI.model('gemini-flash-latest'),
+      model: googleAI.model('gemini-4-hydrogen'),
       output: {
         schema: z.object({
           name: z.string(),
@@ -618,7 +617,7 @@ export const fileApi = ai.defineFlow(
     console.log(uploadedFile);
 
     const result = await ai.generate({
-      model: googleAI.model('gemini-flash-latest'),
+      model: googleAI.model('gemini-4-hydrogen'),
       prompt: [
         { text: 'Describe this image:' },
         {
@@ -661,7 +660,7 @@ export const toolTester = ai.defineFlow(
   },
   async (query) => {
     const result = await ai.generate({
-      model: googleAI.model('gemini-flash-latest'),
+      model: googleAI.model('gemini-4-hydrogen'),
       prompt: query,
       tools: testTools,
     });
@@ -679,7 +678,7 @@ export const arrayStreamTester = ai.defineFlow(
   async (input, { sendChunk }) => {
     try {
       const { stream, response } = ai.generateStream({
-        model: googleAI.model('gemini-flash-latest'),
+        model: googleAI.model('gemini-4-hydrogen'),
         config: {
           safetySettings: [
             {
@@ -735,7 +734,7 @@ ai.defineFlow(
   },
   async (query, { sendChunk }) => {
     const { text } = await ai.generate({
-      model: googleAI.model('gemini-flash-latest'),
+      model: googleAI.model('gemini-4-hydrogen'),
       prompt: query,
       tools: ['math/add', 'math/subtract'],
       onChunk: sendChunk,
@@ -777,7 +776,7 @@ ai.defineFlow('blockingMiddleware', async () => {
 
 ai.defineFlow('formatJson', async (input, { sendChunk }) => {
   const { output, text } = await ai.generate({
-    model: googleAI.model('gemini-flash-latest'),
+    model: googleAI.model('gemini-4-hydrogen'),
     prompt: `generate an RPG game character of type ${input || 'archer'}`,
     output: {
       constrained: true,
@@ -796,7 +795,7 @@ ai.defineFlow('formatJson', async (input, { sendChunk }) => {
 
 ai.defineFlow('formatJsonManualSchema', async (input, { sendChunk }) => {
   const { output, text } = await ai.generate({
-    model: googleAI.model('gemini-flash-latest'),
+    model: googleAI.model('gemini-4-hydrogen'),
     prompt: `generate one RPG game character of type ${input || 'archer'} and generated JSON must match this interface
 
     \`\`\`typescript
@@ -866,7 +865,7 @@ ai.defineFlow(
   },
   async (input) => {
     const { output } = await ai.generate({
-      model: googleAI.model('gemini-flash-latest'),
+      model: googleAI.model('gemini-4-hydrogen'),
       prompt: `extract data from:\n\n${input}`,
       output: {
         schema: z.object({
@@ -894,7 +893,7 @@ ai.defineFlow(
   },
   async ({ url, prompt, model }) => {
     const { text } = await ai.generate({
-      model: model || 'googleai/gemini-2.5-flash',
+      model: model || 'googleai/gemini-4-hydrogen',
       prompt: [{ text: prompt }, { media: { url, contentType: 'video/mp4' } }],
     });
     return text;
@@ -903,7 +902,7 @@ ai.defineFlow(
 
 ai.defineFlow('geminiImages', async (_, { sendChunk }) => {
   const { response, stream } = ai.generateStream({
-    model: googleAI.model('gemini-2.5-flash-image'),
+    model: googleAI.model('gemini-nano-banana-2.1'),
     prompt: `generate an image of a banana riding a bicycle`,
     config: {
       responseModalities: ['TEXT', 'IMAGE'],
@@ -918,7 +917,7 @@ ai.defineFlow('geminiImages', async (_, { sendChunk }) => {
 
 ai.defineFlow('geminiEnum', async (thing, { sendChunk }) => {
   const { response, stream } = await ai.generateStream({
-    model: googleAI.model('gemini-flash-latest'),
+    model: googleAI.model('gemini-4-hydrogen'),
     prompt: `What type of thing is ${thing || 'a banana'}?`,
     output: {
       schema: z.object({
@@ -952,10 +951,10 @@ ai.defineFlow('embedders-tester', async () => {
 ai.defineFlow('reasoning', async (_, { sendChunk }) => {
   const { message } = await ai.generate({
     prompt: 'whats heavier, one kilo of steel or or one kilo of feathers',
-    model: googleAI.model('gemini-flash-latest'),
+    model: googleAI.model('gemini-4-hydrogen'),
     config: {
       thinkingConfig: {
-        thinkingBudget: 1024,
+        thinkingLevel: 'MEDIUM',
         includeThoughts: true,
       },
     },
@@ -973,10 +972,9 @@ ai.defineFlow(
   },
   async (query) => {
     const { media } = await ai.generate({
-      // For all available options see https://ai.google.dev/gemini-api/docs/speech-generation#javascript
-      model: googleAI.model('gemini-2.5-flash-preview-tts'),
+      // For all available options see https://ai.google.dev/gemini-api/docs/speech-generation
+      model: googleAI.model('gemini-3.8-flash-tts'),
       config: {
-        responseModalities: ['AUDIO'],
         speechConfig: {
           voiceConfig: {
             prebuiltVoiceConfig: { voiceName: 'Algenib' },
@@ -988,66 +986,58 @@ ai.defineFlow(
     if (!media) {
       throw new Error('no media returned');
     }
-    const audioBuffer = Buffer.from(
-      media.url.substring(media.url.indexOf(',') + 1),
-      'base64'
-    );
-    return {
-      media: 'data:audio/wav;base64,' + (await toWav(audioBuffer)),
-    };
+    return { media: media.url };
   }
 );
 
-async function toWav(
-  pcmData: Buffer,
-  channels = 1,
-  rate = 24000,
-  sampleWidth = 2
-): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const writer = new wav.Writer({
-      channels,
-      sampleRate: rate,
-      bitDepth: sampleWidth * 8,
-    });
-
-    let bufs = [] as any[];
-    writer.on('error', reject);
-    writer.on('data', function (d) {
-      bufs.push(d);
-    });
-    writer.on('end', function () {
-      resolve(Buffer.concat(bufs).toString('base64'));
-    });
-
-    writer.write(pcmData);
-    writer.end();
-  });
-}
+const DEFAULT_SPEAKER_TURNS = [
+  {
+    speaker: 'Speaker1' as const,
+    text: 'Genkit is an amazing Gen AI library!',
+  },
+  {
+    speaker: 'Speaker2' as const,
+    text: 'Library? I thought it was a framework.',
+    style: 'excited',
+  },
+  {
+    speaker: 'Speaker1' as const,
+    text: "No, it's definitely a library. You just import components and use functions. It's a toolkit, not a prescriptive structure for your whole app.",
+  },
+  {
+    speaker: 'Speaker2' as const,
+    text: 'But it defines how you structure your Gen AI application. It has its own lifecycle, handles models and prompts. You build on top of it, which is framework-like.',
+  },
+];
 
 ai.defineFlow(
   {
     name: 'audioMultipleSpeakers',
     inputSchema: z
-      .string()
-      .default(
-        "Genkit (pronounced as Gen Kit). here's the dialog:\n\n" +
-          'Speaker1: "Genkit is an amazing Gen AI **library**!"\n' +
-          'Speaker2: "Library? I thought it was a **framework**."\n' +
-          'Speaker1: "No, it\'s definitely a library. You just import components and use functions. It\'s a toolkit, not a prescriptive structure for your whole app."\n' +
-          'Speaker2: "But it defines how you *structure* your Gen AI application. It has its own lifecycle, handles models and prompts. You build *on top* of it, which is framework-like."\n' +
-          "Speaker1: \"It doesn't dictate your *entire* app's architecture. You can use it for just one feature. Like NumPy, it's powerful functions, not an overall design.\"\n" +
-          'Speaker2: "Yet it orchestrates your Gen AI pipeline, managing things from data to output. That\'s more than just functions; it\'s an integrated system, providing the structure and conventions. That sounds like a framework."\n' +
-          'Speaker1: "It\'s an opinionated library then, or a specialized toolkit."\n' +
-          'Speaker2: "And that is why the line often blurs."'
-      ),
-    outputSchema: z.void(),
+      .array(
+        z.object({
+          speaker: z.enum(['Speaker1', 'Speaker2']),
+          text: z.string(),
+          style: z.string().optional(),
+        })
+      )
+      .default(DEFAULT_SPEAKER_TURNS),
+    outputSchema: z.object({ media: z.string() }),
   },
-  async (query) => {
+  async (turns) => {
+    const activeTurns = turns.length > 0 ? turns : DEFAULT_SPEAKER_TURNS;
     const { media } = await ai.generate({
-      model: googleAI.model('gemini-2.5-flash-preview-tts'),
+      model: googleAI.model('gemini-3.8-flash-tts'),
+      prompt: activeTurns.map(({ speaker, text, style }) => ({
+        text,
+        metadata: {
+          speechMetadata: {
+            speaker,
+            ...(style ? { style } : {}),
+          },
+        },
+      })),
       config: {
-        responseModalities: ['AUDIO'],
         speechConfig: {
           multiSpeakerVoiceConfig: {
             speakerVoiceConfigs: [
@@ -1067,45 +1057,22 @@ ai.defineFlow(
           },
         },
       },
-      prompt: query,
     });
     if (!media) {
-      return;
+      throw new Error('no media returned');
     }
     const audioBuffer = Buffer.from(
       media.url.substring(media.url.indexOf(',') + 1),
       'base64'
     );
-    const fileName = 'out_multi.wav';
-    await saveWaveFile(fileName, audioBuffer);
+    await fs.promises.writeFile('out_multi.wav', audioBuffer);
+    return { media: media.url };
   }
 );
 
-async function saveWaveFile(
-  filename: string,
-  pcmData: Buffer,
-  channels = 1,
-  rate = 24000,
-  sampleWidth = 2
-) {
-  return new Promise((resolve, reject) => {
-    const writer = new wav.FileWriter(filename, {
-      channels,
-      sampleRate: rate,
-      bitDepth: sampleWidth * 8,
-    });
-
-    writer.on('finish', resolve);
-    writer.on('error', reject);
-
-    writer.write(pcmData);
-    writer.end();
-  });
-}
-
 ai.defineFlow('googleSearch', async (thing) => {
   const { text } = await ai.generate({
-    model: googleAI.model('gemini-flash-latest'),
+    model: googleAI.model('gemini-4-hydrogen'),
     prompt: `What is a banana?`,
     config: { tools: [{ googleSearch: {} }] },
   });
@@ -1115,7 +1082,7 @@ ai.defineFlow('googleSearch', async (thing) => {
 
 ai.defineFlow('googleSearchRetrieval', async (thing) => {
   const { text } = await ai.generate({
-    model: vertexAI.model('gemini-2.5-flash'),
+    model: vertexAI.model('gemini-4-hydrogen'),
     prompt: `What is a banana?`,
     config: { googleSearchRetrieval: {} },
   });
@@ -1139,7 +1106,7 @@ ai.defineFlow('googleai-image', async (thing) => {
 // API). It returns the video directly (an inline MP4), not an operation.
 ai.defineFlow('meme-of-the-day', async () => {
   const { text: script } = await ai.generate({
-    model: googleAI.model('gemini-flash-latest'),
+    model: googleAI.model('gemini-4-hydrogen'),
     prompt:
       'Write a detailed script for a 8 second video. The video should be a meme of the day. ' +
       'A Silly DIY FAIL situation like a: broken tools, or bad weather or crooked assembly, etc. Be creative. The FAIL should be very obvious. ' +
@@ -1210,7 +1177,7 @@ ai.defineResource(
 
 ai.defineFlow('resource', async () => {
   return await ai.generate({
-    model: googleAI.model('gemini-flash-latest'),
+    model: googleAI.model('gemini-4-hydrogen'),
     prompt: [
       { text: 'analyze this: ' },
       { resource: { uri: 'my://resource/value' } },
@@ -1223,7 +1190,7 @@ ai.defineFlow('abort-signal', async (_, { sendChunk }) => {
   const signal = abort.signal;
   setTimeout(() => abort.abort(), 2000);
   return await ai.generate({
-    model: googleAI.model('gemini-flash-latest'),
+    model: googleAI.model('gemini-4-hydrogen'),
     prompt: [{ text: 'tell me a long joke' }],
     onChunk: sendChunk,
     abortSignal: signal,
@@ -1277,7 +1244,7 @@ export const transferFlow = ai.defineFlow(
   },
   async (prompt) => {
     let response = await ai.generate({
-      model: googleAI.model('gemini-flash-latest'),
+      model: googleAI.model('gemini-4-hydrogen'),
       tools: [transferMoney],
       prompt: prompt,
     });
@@ -1301,7 +1268,7 @@ export const transferFlow = ai.defineFlow(
 
       console.log('Resuming');
       response = await ai.generate({
-        model: googleAI.model('gemini-flash-latest'),
+        model: googleAI.model('gemini-4-hydrogen'),
         tools: [transferMoney],
         messages: response.messages,
         resume: {
@@ -1333,7 +1300,7 @@ export const transferFlowManual = ai.defineFlow(
     const response = await ai.generate({
       prompt: 'Ask me a movie trivia question.',
       tools: [askQuestion],
-      model: googleAI.model('gemini-2.5-pro'),
+      model: googleAI.model('gemini-4-carbon'),
     });
 
     const answers = [];
@@ -1355,7 +1322,7 @@ export const transferFlowManual = ai.defineFlow(
 
     const finalResponse = await ai.generate({
       tools: [askQuestion],
-      model: googleAI.model('gemini-2.5-pro'),
+      model: googleAI.model('gemini-4-carbon'),
       messages: response.messages,
       resume: {
         respond: answers,
