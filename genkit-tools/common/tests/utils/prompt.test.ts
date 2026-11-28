@@ -18,11 +18,188 @@ import { describe, expect, it } from 'vitest';
 import type { MessageData } from '../../src/types/model.js';
 import type { PromptFrontmatter } from '../../src/types/prompt.js';
 import {
+  jsonSchemaToPicoschema,
   renderPromptFile,
   toFrontmatterInput,
   toFrontmatterOutput,
   toPromptFile,
 } from '../../src/utils/prompt.js';
+
+describe('jsonSchemaToPicoschema', () => {
+  it('converts supported JSON Schema constructs into Picoschema', () => {
+    const schema = {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        name: { type: 'string', description: 'Display name' },
+        age: { type: 'integer' },
+        active: { type: 'boolean' },
+        tags: {
+          type: 'array',
+          description: 'Search labels',
+          items: { type: 'string' },
+        },
+        address: {
+          type: 'object',
+          description: 'Mailing address',
+          additionalProperties: false,
+          properties: { city: { type: 'string' } },
+          required: ['city'],
+        },
+        status: {
+          type: 'string',
+          description: 'Account status',
+          enum: ['ACTIVE', 'DISABLED'],
+        },
+      },
+      required: ['name', 'active', 'tags', 'address', 'status'],
+    };
+
+    expect(jsonSchemaToPicoschema(schema)).toEqual({
+      name: 'string, Display name',
+      'age?': 'integer',
+      active: 'boolean',
+      'tags(array, Search labels)': 'string',
+      'address(object, Mailing address)': { city: 'string' },
+      'status(enum, Account status)': ['ACTIVE', 'DISABLED'],
+    });
+  });
+
+  it('omits constraints that Picoschema cannot represent', () => {
+    expect(jsonSchemaToPicoschema({ type: 'string', minLength: 1 })).toBe(
+      'string'
+    );
+  });
+
+  it('converts additional properties into a wildcard', () => {
+    const schema = {
+      type: 'object',
+      properties: { name: { type: 'string' } },
+      required: ['name'],
+      additionalProperties: { type: 'number' },
+    };
+
+    expect(jsonSchemaToPicoschema(schema)).toEqual({
+      name: 'string',
+      '(*)': 'number',
+    });
+  });
+
+  it('uses optional notation for a nullable optional property', () => {
+    const schema = {
+      type: 'object',
+      properties: { name: { type: ['string', 'null'] } },
+      required: [],
+    };
+
+    expect(jsonSchemaToPicoschema(schema)).toEqual({ 'name?': 'string' });
+  });
+
+  it.each([
+    { name: 'a union of types', value: { type: ['string', 'number'] } },
+    { name: 'anyOf', value: { anyOf: [{ type: 'number' }] } },
+    { name: 'oneOf', value: { oneOf: [{ type: 'number' }] } },
+    { name: 'allOf', value: { allOf: [{ type: 'number' }] } },
+    { name: 'not', value: { not: { type: 'number' } } },
+    { name: 'a reference', value: { $ref: '#/$defs/name' } },
+    { name: 'const', value: { const: 'v1' } },
+    { name: 'const on a typed field', value: { type: 'string', const: 'v1' } },
+    { name: 'a conditional', value: { if: { type: 'number' } } },
+    { name: 'then', value: { then: { type: 'number' } } },
+    { name: 'else', value: { else: { type: 'number' } } },
+    { name: 'an unknown type', value: { type: 'uuid' } },
+    {
+      name: 'an unknown type with properties',
+      value: { type: 'uuid', properties: { name: { type: 'string' } } },
+    },
+    {
+      name: 'a tuple without an explicit array type',
+      value: { items: [{ type: 'string' }] },
+    },
+  ])('falls back for a property with $name', ({ value }) => {
+    const schema = { type: 'object', properties: { value } };
+
+    expect(jsonSchemaToPicoschema(schema)).toBeUndefined();
+  });
+
+  it.each([
+    { name: 'a draft-07 tuple', items: [{ type: 'string' }] },
+    { name: 'items set to false', items: false },
+    { name: 'prefix items', prefixItems: [{ type: 'string' }] },
+  ])('falls back for an array property with $name', ({ name: _, ...array }) => {
+    const schema = {
+      type: 'object',
+      properties: { value: { type: 'array', ...array } },
+    };
+
+    expect(jsonSchemaToPicoschema(schema)).toBeUndefined();
+  });
+
+  it.each(['a(b', 'a)b', 'a\nb', 'a\rb', 'a\u2028b', 'a\u2029b'])(
+    'falls back when an array description cannot be represented (%j)',
+    (description) => {
+      const schema = {
+        type: 'object',
+        properties: { value: { type: 'array', description } },
+      };
+
+      expect(jsonSchemaToPicoschema(schema)).toBeUndefined();
+    }
+  );
+
+  it('falls back for a typed conditional in array items', () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        values: {
+          type: 'array',
+          items: { type: 'string', not: { const: 'reserved' } },
+        },
+      },
+    };
+
+    expect(jsonSchemaToPicoschema(schema)).toBeUndefined();
+  });
+
+  it('falls back for an unsupported schema in additional properties', () => {
+    const schema = {
+      type: 'object',
+      additionalProperties: { type: ['string', 'number'] },
+    };
+
+    expect(jsonSchemaToPicoschema(schema)).toBeUndefined();
+  });
+
+  it('falls back for top-level arrays and unconstrained roots', () => {
+    expect(
+      jsonSchemaToPicoschema({ type: 'array', items: { type: 'string' } })
+    ).toBeUndefined();
+    expect(
+      jsonSchemaToPicoschema({
+        type: 'array',
+        items: { type: ['string'] },
+      })
+    ).toBeUndefined();
+    expect(
+      jsonSchemaToPicoschema({ items: { type: 'string' } })
+    ).toBeUndefined();
+    expect(
+      jsonSchemaToPicoschema({ description: 'Anything goes' })
+    ).toBeUndefined();
+    expect(jsonSchemaToPicoschema({})).toBeUndefined();
+  });
+
+  it('keeps a nested unconstrained property compact', () => {
+    const schema = {
+      type: 'object',
+      properties: { value: { description: 'Anything goes' } },
+    };
+
+    expect(jsonSchemaToPicoschema(schema)).toEqual({
+      'value?': 'any, Anything goes',
+    });
+  });
+});
 
 describe('renderPromptFile', () => {
   it('builds a template from messages', () => {
@@ -289,5 +466,32 @@ describe('toPromptFile', () => {
       '{{role "user"}}\n' +
       'Hello\n';
     expect(toPromptFile(request)).toStrictEqual(expected);
+  });
+
+  it('uses compact Picoschema for input and output when requested', () => {
+    const request = {
+      model: '/model/googleai/gemini-pro',
+      picoSchema: true,
+      messages: [{ role: 'user' as const, content: [{ text: 'Hello' }] }],
+      input: {
+        schema: {
+          type: 'object',
+          properties: { topic: { type: 'string' } },
+          required: ['topic'],
+        },
+      },
+      output: {
+        format: 'json',
+        schema: {
+          type: 'object',
+          properties: { summary: { type: 'string' } },
+          required: ['summary'],
+        },
+      },
+    };
+
+    expect(toPromptFile(request)).toContain(
+      'input:\n  schema:\n    topic: string\noutput:\n  format: json\n  schema:\n    summary: string\n'
+    );
   });
 });

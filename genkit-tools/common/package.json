@@ -43,6 +43,7 @@
     "@types/json-schema": "^7.0.15",
     "@types/node": "catalog:",
     "@types/ws": "^8.18.2",
+    "dotprompt": "1.1.2",
     "genversion": "catalog:",
     "rimraf": "catalog:",
     "typescript": "catalog:",
