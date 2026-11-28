@@ -238,6 +238,76 @@ export type ValidationResponse =
       schema: JSONSchema;
     };
 
+/** Keywords whose value is a subschema. */
+const SUBSCHEMA_KEYWORDS = [
+  'additionalItems',
+  'additionalProperties',
+  'contains',
+  'else',
+  'if',
+  'items',
+  'not',
+  'propertyNames',
+  'then',
+  'unevaluatedItems',
+  'unevaluatedProperties',
+];
+/** Keywords whose value is an array of subschemas. */
+const SUBSCHEMA_LIST_KEYWORDS = ['allOf', 'anyOf', 'oneOf', 'prefixItems'];
+/** Keywords whose value maps names to subschemas. */
+const SUBSCHEMA_MAP_KEYWORDS = [
+  '$defs',
+  'definitions',
+  'dependencies',
+  'dependentSchemas',
+  'patternProperties',
+  'properties',
+];
+
+/**
+ * Returns a copy of a schema without its extension keywords, those prefixed
+ * with `x-`, for Ajv to compile: its strict mode rejects a keyword it does not
+ * know, while JSON Schema ignores one, {@link annotateSchema} recommends
+ * `x-genkit-*` keys, and a model that claims constrained output reads such
+ * keywords off the output schema its response is validated against. Only the
+ * keywords of the schema and its subschemas are dropped: a property named
+ * `x-...` and the values of `const`, `enum`, `default`, and `examples` are kept,
+ * and any other unknown keyword is still rejected.
+ */
+function withoutExtensionKeywords(schema: unknown): unknown {
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
+    return schema;
+  }
+  // Built from entries, so that a key such as `__proto__` stays an own key
+  // of the copy, as it is of the schema, rather than setting its prototype.
+  const entries: [string, unknown][] = [];
+  for (const [key, value] of Object.entries(schema)) {
+    if (key.startsWith('x-')) continue;
+    let copy: unknown = value;
+    if (SUBSCHEMA_KEYWORDS.includes(key)) {
+      copy = Array.isArray(value)
+        ? value.map(withoutExtensionKeywords)
+        : withoutExtensionKeywords(value);
+    } else if (SUBSCHEMA_LIST_KEYWORDS.includes(key) && Array.isArray(value)) {
+      copy = value.map(withoutExtensionKeywords);
+    } else if (
+      SUBSCHEMA_MAP_KEYWORDS.includes(key) &&
+      value &&
+      typeof value === 'object' &&
+      !Array.isArray(value)
+    ) {
+      copy = Object.fromEntries(
+        Object.entries(value).map(([name, sub]) => [
+          name,
+          withoutExtensionKeywords(sub),
+        ])
+      );
+    }
+    entries.push([key, copy]);
+  }
+  return Object.fromEntries(entries);
+}
+
 /**
  * Validates the provided data against the provided schema.
  */
@@ -275,7 +345,7 @@ export function validateSchema(
 
   let validator = ajvValidators.get(toValidate);
   if (!validator) {
-    validator = ajv.compile(toValidate);
+    validator = ajv.compile(withoutExtensionKeywords(toValidate) as JSONSchema);
     ajvValidators.set(toValidate, validator);
   }
 

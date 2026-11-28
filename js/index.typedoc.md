@@ -58,6 +58,7 @@ This reference documents the following packages:
 | **[@genkit-ai/fetch](modules/_genkit-ai_fetch.html)**                                 | HTTP fetch utilities for plugins.                                        |
 | **[@genkit-ai/middleware](modules/_genkit-ai_middleware.html)**                       | Model middleware plugin (retry, caching, etc.).                          |
 | **[@genkit-ai/a2ui](modules/_genkit-ai_a2ui.html)**                                   | A2UI (Agent-to-UI) streaming generative UI plugin.                       |
+| **[@genkit-ai/systemone](modules/_genkit-ai_systemone.html)**                         | System One decision models (TypeSafe jev, Liquid d1, Cloudflare Clef).   |
 
 The `genkit` package also provides subpath imports for specific functionality:
 
