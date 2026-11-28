@@ -44,6 +44,7 @@ import {
   parseRetryAfterMs,
   parseStreamErrorText,
   processStream,
+  toSnakeCaseKeys,
   toSnakeCaseObj,
   withoutHeaders,
 } from '../../src/common/utils.js';
@@ -834,6 +835,29 @@ describe('Common Utils', () => {
       assert.deepStrictEqual(toSnakeCaseObj([{ a: 1 }]), {});
       assert.deepStrictEqual(toSnakeCaseObj('text'), {});
       assert.deepStrictEqual(toSnakeCaseObj(null), {});
+    });
+  });
+
+  describe('toSnakeCaseKeys', () => {
+    it('converts top-level keys and keeps values as given', () => {
+      assert.deepStrictEqual(
+        toSnakeCaseKeys({
+          topK: 3,
+          headers: { Authorization: 'Bearer x' },
+          metadata_filter: 'a=b',
+        }),
+        {
+          top_k: 3,
+          headers: { Authorization: 'Bearer x' },
+          metadata_filter: 'a=b',
+        }
+      );
+    });
+
+    it('returns an empty object for arrays and non-objects', () => {
+      assert.deepStrictEqual(toSnakeCaseKeys([{ a: 1 }]), {});
+      assert.deepStrictEqual(toSnakeCaseKeys('text'), {});
+      assert.deepStrictEqual(toSnakeCaseKeys(null), {});
     });
   });
 

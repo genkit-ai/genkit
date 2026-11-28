@@ -1161,14 +1161,17 @@ describe('Interaction Converters', () => {
       assert.deepStrictEqual(dropped, ['thinkingConfig.thinking_budget']);
     });
 
-    it('should drop contextCache and report it', () => {
+    it('passes contextCache through like any unknown field (removed in v2)', () => {
       const dropped: string[] = [];
       const result = toInteractionGenerationConfig(
         { contextCache: true, temperature: 0.5 },
         (field) => dropped.push(field)
       );
-      assert.deepStrictEqual(result, { temperature: 0.5 });
-      assert.deepStrictEqual(dropped, ['contextCache']);
+      assert.deepStrictEqual(result, {
+        context_cache: true,
+        temperature: 0.5,
+      });
+      assert.deepStrictEqual(dropped, []);
     });
 
     it('should drop topK (no top_k in generation_config) and report it', () => {
@@ -1528,6 +1531,53 @@ describe('Interaction Converters', () => {
         type: 'url_context',
         my_url_param: 1,
       });
+    });
+
+    it('keeps MCP header names as given', () => {
+      const result = toInteractionConfigTool({
+        mcpServer: {
+          url: 'https://mcp.example.com',
+          headers: { Authorization: 'Bearer x', 'X-Api-Key': 'k' },
+        },
+      });
+      assert.deepStrictEqual(result, {
+        type: 'mcp_server',
+        url: 'https://mcp.example.com',
+        headers: { Authorization: 'Bearer x', 'X-Api-Key': 'k' },
+      });
+    });
+
+    it("keeps a passed-through tool's nested values as given", () => {
+      const parameters = {
+        type: 'object',
+        properties: { userName: { type: 'string' } },
+        required: ['userName'],
+      };
+      const result = toInteractionConfigTool({
+        type: 'function',
+        name: 'lookup',
+        parameters,
+        deferLoading: true,
+      });
+      assert.deepStrictEqual(result, {
+        type: 'function',
+        name: 'lookup',
+        parameters,
+        defer_loading: true,
+      });
+    });
+
+    it('sends snake_case input unchanged', () => {
+      const tool = {
+        type: 'mcp_server',
+        url: 'https://mcp.example.com',
+        allowed_tools: [{ mode: 'validated', tools: ['a'] }],
+      };
+      assert.deepStrictEqual(toInteractionConfigTool(tool), tool);
+      assert.deepStrictEqual(
+        toInteractionConfigTool({ googleMaps: { enable_widget: true } }),
+        { type: 'google_maps', enable_widget: true }
+      );
     });
 
     it('should handle mcpServer tool configuration and normalize string array allowed_tools to objects', () => {

@@ -26,14 +26,12 @@ import type { InferOutput } from 'genkit/schema';
 import {
   ensureToolIds,
   fromInteraction,
+  toInteractionConfigTool,
   toInteractionResponseFormat,
   toInteractionSteps,
   toInteractionTool,
 } from '../common/interaction-converters.js';
-import {
-  InteractionAllowedTools,
-  InteractionTool,
-} from '../common/interaction-types.js';
+import { InteractionTool } from '../common/interaction-types.js';
 import { cleanSchema, isKnownKey } from '../common/utils.js';
 import {
   cancelInteraction,
@@ -53,7 +51,6 @@ import {
   checkApiKey,
   checkModelName,
   extractVersion,
-  isStringArray,
   modelName,
   type PluginNamespace,
 } from './utils.js';
@@ -104,54 +101,14 @@ export const DeepResearchConfigSchema = z
         'Whether to enable multi-turn plan review before research begins.'
       )
       .optional(),
-    // TODO(V2): Remove googleSearch, urlContext, and codeExecution wrappers
-    // and rely entirely on `config.tools` being passed through.
-    googleSearch: z
-      .union([z.boolean(), z.looseObject({})])
+    tools: z
+      .array(z.record(z.string(), z.unknown()))
       .describe(
-        'Search the public web. Enabled by default if no tools are provided.'
-      )
-      .optional(),
-    urlContext: z
-      .union([z.boolean(), z.looseObject({})])
-      .describe(
-        'Read and summarize web page content. Enabled by default if no tools are provided.'
-      )
-      .optional(),
-    codeExecution: z
-      .union([z.boolean(), z.looseObject({})])
-      .describe(
-        'Execute code to perform calculations and data analysis. Enabled by default if no tools are provided.'
-      )
-      .optional(),
-    fileSearch: z
-      .object({
-        fileSearchStoreNames: z.array(z.string()),
-      })
-      .passthrough()
-      .optional(),
-    mcpServers: z
-      .array(
-        z
-          .object({
-            name: z.string().optional(),
-            url: z.string().optional(),
-            headers: z.record(z.string(), z.string()).optional(),
-            allowedTools: z
-              .union([
-                z.array(z.string()),
-                z.array(
-                  z.object({
-                    mode: z
-                      .enum(['auto', 'any', 'none', 'validated'])
-                      .optional(),
-                    tools: z.array(z.string()).optional(),
-                  })
-                ),
-              ])
-              .optional(),
-          })
-          .passthrough()
+        'Built-in tools, e.g. [{ googleSearch: {} }, { urlContext: {} }, ' +
+          '{ codeExecution: {} }, { fileSearch: { fileSearchStoreNames } }, ' +
+          '{ mcpServer: { name, url, headers, allowedTools } }]. Without ' +
+          'tools the agent uses Google Search, URL context and code ' +
+          'execution; any tool given replaces them.'
       )
       .optional(),
   })
@@ -327,11 +284,8 @@ export function defineModel(
         previousInteractionId,
         store,
         responseModalities,
-        googleSearch,
-        urlContext,
-        codeExecution,
-        fileSearch,
-        mcpServers,
+        // Built-in tools, e.g. [{ googleSearch: {} }, { mcpServer: {...} }].
+        tools: toolsFromConfig,
         ...rest
       } = request.config || {};
       const newClientOptions = applyContextOverrides(
@@ -353,58 +307,14 @@ export function defineModel(
         }
       }
 
-      const tools: InteractionTool[] = [];
-      if (request.tools?.length) {
-        for (const tool of request.tools) {
-          tools.push(toInteractionTool(tool));
-        }
-      }
-
-      // TODO(v2): Remove these explicit tool pushes for googleSearch, urlContext, and codeExecution.
-      if (googleSearch) {
-        tools.push({
-          type: 'google_search',
-          ...(googleSearch === true ? {} : googleSearch),
-        });
-      }
-      if (urlContext) {
-        tools.push({
-          type: 'url_context',
-          ...(urlContext === true ? {} : urlContext),
-        });
-      }
-      if (codeExecution) {
-        tools.push({
-          type: 'code_execution',
-          ...(codeExecution === true ? {} : codeExecution),
-        });
-      }
-      if (fileSearch) {
-        const { fileSearchStoreNames, ...restFileSearch } = fileSearch;
-        tools.push({
-          type: 'file_search',
-          file_search_store_names: fileSearchStoreNames,
-          ...restFileSearch,
-        });
-      }
-      if (mcpServers) {
-        for (const mcpServer of mcpServers) {
-          const { allowedTools, ...restMcp } = mcpServer;
-          let allowed_tools: InteractionAllowedTools[] | undefined = undefined;
-          if (allowedTools && allowedTools.length > 0) {
-            // A plain list of tool names is shorthand for one entry with no
-            // mode.
-            allowed_tools = isStringArray(allowedTools)
-              ? [{ tools: allowedTools }]
-              : allowedTools;
-          }
-          tools.push({
-            type: 'mcp_server',
-            ...restMcp,
-            ...(allowed_tools ? { allowed_tools } : {}),
-          });
-        }
-      }
+      // Without tools, the agent uses its defaults (Google Search, URL context
+      // and code execution); any tool given replaces them.
+      const tools: InteractionTool[] = [
+        ...(Array.isArray(toolsFromConfig)
+          ? toolsFromConfig.map(toInteractionConfigTool)
+          : []),
+        ...(request.tools ?? []).map(toInteractionTool),
+      ];
 
       // JSON output and the requested output types, as `response_format`
       // entries.

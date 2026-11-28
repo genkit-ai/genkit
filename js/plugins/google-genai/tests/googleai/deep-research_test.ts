@@ -461,18 +461,18 @@ describe('Deep Research', () => {
       const request: GenerateRequest<typeof DeepResearchConfigSchema> = {
         ...minimalRequest,
         config: {
-          googleSearch: true,
-          urlContext: true,
-          codeExecution: true,
-          fileSearch: {
-            fileSearchStoreNames: ['stores/123'],
-          },
-          mcpServers: [
+          tools: [
+            { googleSearch: {} },
+            { urlContext: {} },
+            { codeExecution: {} },
+            { fileSearch: { fileSearchStoreNames: ['stores/123'] } },
             {
-              name: 'MyServer',
-              url: 'http://localhost:8080',
-              headers: { Authorization: 'Bearer token' },
-              allowedTools: ['tool1', 'tool2'],
+              mcpServer: {
+                name: 'MyServer',
+                url: 'http://localhost:8080',
+                headers: { Authorization: 'Bearer token' },
+                allowedTools: ['tool1', 'tool2'],
+              },
             },
           ],
         },
@@ -503,7 +503,7 @@ describe('Deep Research', () => {
       ]);
     });
 
-    it('supports allowedTools with mode in mcpServers', async () => {
+    it('supports allowedTools with mode on an mcpServer tool', async () => {
       const model = defineModel(
         'deep-research-pro-preview-12-2025',
         defaultPluginOptions
@@ -513,11 +513,13 @@ describe('Deep Research', () => {
       const request: GenerateRequest<typeof DeepResearchConfigSchema> = {
         ...minimalRequest,
         config: {
-          mcpServers: [
+          tools: [
             {
-              name: 'MyServer',
-              url: 'http://localhost:8080',
-              allowedTools: [{ mode: 'validated', tools: ['tool1'] }],
+              mcpServer: {
+                name: 'MyServer',
+                url: 'http://localhost:8080',
+                allowedTools: [{ mode: 'validated', tools: ['tool1'] }],
+              },
             },
           ],
         },
@@ -535,6 +537,43 @@ describe('Deep Research', () => {
           name: 'MyServer',
           url: 'http://localhost:8080',
           allowed_tools: [{ mode: 'validated', tools: ['tool1'] }],
+        },
+      ]);
+    });
+
+    it('sends config.tools as built-in tools, followed by function tools', async () => {
+      const model = defineModel(
+        'deep-research-preview-04-2026',
+        defaultPluginOptions
+      );
+      mockFetchResponse(mockInteractionResponse);
+
+      await model.start({
+        ...minimalRequest,
+        tools: [
+          {
+            name: 'myFunc',
+            description: 'desc',
+            inputSchema: { type: 'object' },
+          },
+        ],
+        config: {
+          tools: [
+            { googleSearch: {} },
+            { fileSearch: { fileSearchStoreNames: ['stores/123'] } },
+          ],
+        },
+      });
+
+      const body = JSON.parse(fetchStub.lastCall.args[1].body);
+      assert.deepStrictEqual(body.tools, [
+        { type: 'google_search' },
+        { type: 'file_search', file_search_store_names: ['stores/123'] },
+        {
+          type: 'function',
+          name: 'myFunc',
+          description: 'desc',
+          parameters: { type: 'object' },
         },
       ]);
     });

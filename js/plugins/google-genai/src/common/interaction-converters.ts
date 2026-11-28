@@ -71,6 +71,7 @@ import {
   isInteractionContentBlockCode,
   snakeToCamelCase,
   stripLeadingId3Tags,
+  toSnakeCaseKeys,
   toSnakeCaseObj,
 } from './utils.js';
 
@@ -143,6 +144,17 @@ export function toInteractionTool(tool: ToolDefinition): InteractionTool {
   return func;
 }
 
+/**
+ * Converts a built-in tool from `config.tools` (e.g. `{ googleSearch: {} }`,
+ * `{ mcpServer: {...} }`, or a tool that names its own `type`) to the
+ * Interactions tool format.
+ *
+ * Only a tool's own keys are converted to snake_case (they're API field
+ * names). Values are sent as given, including nested objects: some hold
+ * keys chosen by the user, such as MCP `headers` or a function's
+ * `parameters` schema, and converting those would break input that's
+ * already correct.
+ */
 export function toInteractionConfigTool(toolRaw: unknown): InteractionTool {
   if (!isObject(toolRaw)) {
     throw new Error(
@@ -166,7 +178,7 @@ export function toInteractionConfigTool(toolRaw: unknown): InteractionTool {
     }
     return {
       type: 'code_execution',
-      ...toSnakeCaseObj(config),
+      ...toSnakeCaseKeys(config),
     };
   }
   if ('fileSearch' in tool || 'file_search' in tool) {
@@ -198,7 +210,7 @@ export function toInteractionConfigTool(toolRaw: unknown): InteractionTool {
     }
     return {
       ...result,
-      ...toSnakeCaseObj(restFileSearch),
+      ...toSnakeCaseKeys(restFileSearch),
     };
   }
   if ('urlContext' in tool) {
@@ -213,7 +225,7 @@ export function toInteractionConfigTool(toolRaw: unknown): InteractionTool {
     }
     return {
       type: 'url_context',
-      ...toSnakeCaseObj(config),
+      ...toSnakeCaseKeys(config),
     };
   }
   if ('googleMaps' in tool) {
@@ -228,7 +240,7 @@ export function toInteractionConfigTool(toolRaw: unknown): InteractionTool {
     }
     return {
       type: 'google_maps',
-      ...toSnakeCaseObj(config),
+      ...toSnakeCaseKeys(config),
     };
   }
   if ('computerUse' in tool) {
@@ -243,7 +255,7 @@ export function toInteractionConfigTool(toolRaw: unknown): InteractionTool {
     }
     return {
       type: 'computer_use',
-      ...toSnakeCaseObj(config),
+      ...toSnakeCaseKeys(config),
     };
   }
   if ('retrieval' in tool) {
@@ -258,7 +270,7 @@ export function toInteractionConfigTool(toolRaw: unknown): InteractionTool {
     }
     return {
       type: 'retrieval',
-      ...toSnakeCaseObj(config),
+      ...toSnakeCaseKeys(config),
     };
   }
   if ('mcpServer' in tool) {
@@ -271,7 +283,8 @@ export function toInteractionConfigTool(toolRaw: unknown): InteractionTool {
         `Invalid configuration for mcpServer tool: Expected object or true, got ${typeof config}`
       );
     }
-    const snakeConfig = toSnakeCaseObj(config);
+    // `headers` keeps its keys: they're header names.
+    const snakeConfig = toSnakeCaseKeys(config);
     if (
       Array.isArray(snakeConfig.allowed_tools) &&
       snakeConfig.allowed_tools.length > 0 &&
@@ -285,8 +298,9 @@ export function toInteractionConfigTool(toolRaw: unknown): InteractionTool {
     };
   }
 
-  // Pass through any other tool that names its own `type`, in snake_case.
-  const { type, ...rest } = toSnakeCaseObj(tool);
+  // Pass through any other tool that names its own `type`, with its keys in
+  // snake_case (values, e.g. a function's `parameters`, as given).
+  const { type, ...rest } = toSnakeCaseKeys(tool);
   if (typeof type !== 'string') {
     throw new Error(
       `Unsupported tool configuration: ${JSON.stringify(tool)}. ` +
@@ -489,7 +503,7 @@ export function toInteractionGoogleSearch(
   delete restConfig.searchTypes;
   delete restConfig.search_types;
 
-  Object.assign(result, toSnakeCaseObj(restConfig));
+  Object.assign(result, toSnakeCaseKeys(restConfig));
 
   return result;
 }
@@ -585,7 +599,6 @@ export function toInteractionSpeechConfig(
  *  - `thinkingConfig.thinkingLevel` / `includeThoughts` become
  *    `thinking_level` / `thinking_summaries`. There is no `thinking_config`,
  *    so other thinking fields (e.g. `thinkingBudget`) are dropped;
- *  - `contextCache` (not implemented by this plugin) is dropped;
  *  - `topK` is dropped: there's no `top_k` in the Interactions
  *    `generation_config` (Gemini Enterprise Agent Platform rejects it with a
  *    400; the Gemini API accepts and ignores it);
@@ -605,8 +618,6 @@ export function toInteractionGenerationConfig(
     speechConfig,
     thinkingConfig,
     thinking_config,
-    contextCache,
-    context_cache,
     topK,
     top_k,
     // Sent as `response_format` entries (see toInteractionResponseFormat).
@@ -636,10 +647,6 @@ export function toInteractionGenerationConfig(
         onDropped?.(`thinkingConfig.${key}`);
       }
     }
-  }
-
-  if (contextCache !== undefined || context_cache !== undefined) {
-    onDropped?.('contextCache');
   }
 
   if (topK !== undefined || top_k !== undefined) {
