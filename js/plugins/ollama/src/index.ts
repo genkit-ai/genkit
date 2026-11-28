@@ -22,6 +22,7 @@ import {
   type EmbedderReference,
   type Genkit,
   type ModelReference,
+  type Part,
   type Role,
   type ToolRequest,
   type ToolRequestPart,
@@ -302,28 +303,69 @@ function defineOllamaModel(
         const reader = res.body.getReader();
         const textDecoder = new TextDecoder();
         let textResponse = '';
+        const toolRequests: ToolRequestPart[] = [];
+        let buffer = '';
+
+        const processLine = (line: string) => {
+          const trimmed = line.trim();
+          if (!trimmed) {
+            return;
+          }
+          const json = JSON.parse(trimmed);
+          if (json.error) {
+            throw new Error(json.error);
+          }
+          if (type === 'chat' && json.message == null) {
+            return;
+          }
+          if (type === 'generate' && json.response == null) {
+            return;
+          }
+          const parsed = parseMessage(json, type);
+          streamingCallback({
+            index: 0,
+            content: parsed.content,
+          });
+          for (const part of parsed.content) {
+            if (part.text) {
+              textResponse += part.text;
+            }
+            if (part.toolRequest) {
+              toolRequests.push(part as ToolRequestPart);
+            }
+          }
+        };
+
         try {
           for await (const chunk of readChunks(reader)) {
-            const chunkText = textDecoder.decode(chunk);
-            const json = JSON.parse(chunkText);
-            const message = parseMessage(json, type);
-            streamingCallback({
-              index: 0,
-              content: message.content,
-            });
-            textResponse += message.content[0].text;
+            buffer += textDecoder.decode(chunk, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() ?? '';
+            for (const line of lines) {
+              processLine(line);
+            }
           }
+          buffer += textDecoder.decode();
+          processLine(buffer);
         } finally {
           // Catch prevents unhandled promise rejection if the stream was already cleanly finalized
           reader.cancel().catch(() => {});
         }
+
+        const content: Part[] = [];
+        if (textResponse) {
+          content.push({ text: textResponse });
+        }
+        if (toolRequests.length > 0) {
+          content.push(...toolRequests);
+        }
+        if (content.length === 0) {
+          content.push({ text: '' });
+        }
+
         message = {
           role: 'model',
-          content: [
-            {
-              text: textResponse,
-            },
-          ],
+          content,
         };
       } else {
         const txtBody = await res.text();
@@ -350,9 +392,14 @@ function parseMessage(response: any, type: ApiType): MessageData {
     // Tool calling is available only on the 'chat' API, not on 'generate'
     // https://github.com/ollama/ollama/blob/main/docs/api.md#chat-request-with-tools
     if (response.message.tool_calls && response.message.tool_calls.length > 0) {
+      const content: Part[] = [];
+      if (response.message.content) {
+        content.push({ text: response.message.content });
+      }
+      content.push(...toGenkitToolRequest(response.message.tool_calls));
       return {
         role: toGenkitRole(response.message.role),
-        content: toGenkitToolRequest(response.message.tool_calls),
+        content,
       };
     } else {
       return {
