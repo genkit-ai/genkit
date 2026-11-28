@@ -47,7 +47,8 @@ var (
 // is lost when the process exits; use [FileSessionStore] or a real backend
 // when persistence is needed.
 //
-// It implements [exp.SessionStore] and [exp.SnapshotSubscriber].
+// It implements [exp.SessionStore], [exp.SnapshotSubscriber] and
+// [exp.SessionDeleter].
 type InMemorySessionStore[State any] struct {
 	// mu is RWMutex so GetSnapshot (which JSON-marshals while holding the
 	// lock) can run concurrently with other readers. All writers (Save,
@@ -55,6 +56,11 @@ type InMemorySessionStore[State any] struct {
 	mu        sync.RWMutex
 	snapshots map[string]*exp.SessionSnapshot[State]
 	subs      map[string][]chan exp.SnapshotStatus
+	// deleted holds the IDs of snapshots removed by DeleteSession, so a late
+	// writer continuing a deleted chain is rejected even after a fresh root
+	// snapshot reuses the session ID; see SaveSnapshot. It grows by one ID per
+	// deleted snapshot for the life of the store, which is the process.
+	deleted map[string]struct{}
 }
 
 // NewInMemorySessionStore creates a new in-memory snapshot store.
@@ -62,6 +68,7 @@ func NewInMemorySessionStore[State any]() *InMemorySessionStore[State] {
 	return &InMemorySessionStore[State]{
 		snapshots: make(map[string]*exp.SessionSnapshot[State]),
 		subs:      make(map[string][]chan exp.SnapshotStatus),
+		deleted:   make(map[string]struct{}),
 	}
 }
 
@@ -216,6 +223,12 @@ func (s *InMemorySessionStore[State]) SaveSnapshot(
 	if next.Status == "" {
 		next.Status = exp.SnapshotStatusCompleted
 	}
+	// A late writer continuing a deleted chain (or rewriting one of its rows)
+	// must not bring the session back, even if a fresh root has since reused the
+	// session ID.
+	if s.isDeleted(id, next.ParentID) {
+		return nil, status.Errorf(exp.ErrSessionDeleted, "session %q was deleted", next.SessionID)
+	}
 
 	copied, err := copySnapshot(next)
 	if err != nil {
@@ -250,6 +263,46 @@ func (s *InMemorySessionStore[State]) OnSnapshotStatusChange(ctx context.Context
 
 	context.AfterFunc(ctx, func() { s.removeSub(snapshotID, ch) })
 	return ch
+}
+
+// DeleteSession removes every snapshot of the session, per
+// [exp.SessionDeleter]. Subscribers of a removed snapshot see
+// [exp.SnapshotStatusAborted] before their channel closes.
+func (s *InMemorySessionStore[State]) DeleteSession(_ context.Context, sessionID string) (bool, error) {
+	if sessionID == "" {
+		return false, status.Errorf(exp.ErrSessionIDRequired, "DeleteSession requires a session ID")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	removed := false
+	for id, snap := range s.snapshots {
+		if snap.SessionID != sessionID {
+			continue
+		}
+		delete(s.snapshots, id)
+		s.deleted[id] = struct{}{}
+		removed = true
+		for _, ch := range s.subs[id] {
+			coalesceSend(ch, exp.SnapshotStatusAborted)
+			close(ch)
+		}
+		delete(s.subs, id)
+	}
+	return removed, nil
+}
+
+// isDeleted reports whether a write for snapshot id with the given parent
+// touches a snapshot removed by DeleteSession. Caller must hold s.mu.
+func (s *InMemorySessionStore[State]) isDeleted(id, parentID string) bool {
+	if _, gone := s.deleted[id]; gone {
+		return true
+	}
+	if parentID == "" {
+		return false
+	}
+	_, gone := s.deleted[parentID]
+	return gone
 }
 
 // removeSub detaches a subscriber and closes its channel.

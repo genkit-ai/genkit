@@ -20,8 +20,9 @@ import pytest
 
 from genkit import GenkitError
 from genkit._core import _error as error_mod
-from genkit._core._error import PublicError, get_callable_json, get_http_status
+from genkit._core._error import PublicError
 from genkit.plugin_api import StatusName, provider_error
+from genkit.web import error_body, error_status
 
 # 2023-11-14 22:13:20 GMT
 _NOW = 1_700_000_000.0
@@ -44,8 +45,8 @@ def test_provider_error_maps_http_status_to_genkit_status(http_status: int, stat
 
     assert isinstance(error, GenkitError)
     assert error.status == status
-    assert error.original_message == 'boom'
-    assert error.response_metadata is None
+    assert error.message == 'boom'
+    assert error.retry_after_ms is None
 
 
 @pytest.mark.parametrize('http_status', [413, 418, 422])
@@ -55,8 +56,8 @@ def test_provider_error_unmapped_4xx_is_unknown(http_status: int) -> None:
 
     assert isinstance(error, GenkitError)
     assert error.status == 'UNKNOWN'
-    assert error.original_message == 'too large'
-    assert error.response_metadata is None
+    assert error.message == 'too large'
+    assert error.retry_after_ms is None
 
 
 def test_provider_error_explicit_status_wins_over_http_status() -> None:
@@ -65,8 +66,8 @@ def test_provider_error_explicit_status_wins_over_http_status() -> None:
 
     assert isinstance(error, GenkitError)
     assert error.status == 'UNAVAILABLE'
-    assert error.original_message == 'overloaded'
-    assert error.response_metadata is None
+    assert error.message == 'overloaded'
+    assert error.retry_after_ms is None
 
 
 @pytest.mark.parametrize('http_status', [None, -1])
@@ -76,8 +77,8 @@ def test_provider_error_with_no_usable_status_is_unknown(http_status: int | None
 
     assert isinstance(error, GenkitError)
     assert error.status == 'UNKNOWN'
-    assert error.original_message == 'reset'
-    assert error.response_metadata is None
+    assert error.message == 'reset'
+    assert error.retry_after_ms is None
 
 
 @pytest.mark.parametrize('header_name', ['Retry-After', 'retry-after'])
@@ -87,8 +88,8 @@ def test_provider_error_reads_retry_after_seconds_from_headers(header_name: str)
 
     assert isinstance(error, GenkitError)
     assert error.status == 'RESOURCE_EXHAUSTED'
-    assert error.original_message == 'slow down'
-    assert error.response_metadata == {'retry_after_ms': 30000.0}
+    assert error.message == 'slow down'
+    assert error.retry_after_ms == 30000.0
 
 
 @pytest.mark.parametrize(
@@ -109,8 +110,8 @@ def test_provider_error_reads_retry_after_http_date(
 
     assert isinstance(error, GenkitError)
     assert error.status == 'RESOURCE_EXHAUSTED'
-    assert error.original_message == 'slow down'
-    assert error.response_metadata == {'retry_after_ms': expected_ms}
+    assert error.message == 'slow down'
+    assert error.retry_after_ms == expected_ms
 
 
 def test_provider_error_explicit_retry_after_ms_wins_over_header() -> None:
@@ -124,8 +125,8 @@ def test_provider_error_explicit_retry_after_ms_wins_over_header() -> None:
 
     assert isinstance(error, GenkitError)
     assert error.status == 'RESOURCE_EXHAUSTED'
-    assert error.original_message == 'slow down'
-    assert error.response_metadata == {'retry_after_ms': 1500}
+    assert error.message == 'slow down'
+    assert error.retry_after_ms == 1500
 
 
 @pytest.mark.parametrize(
@@ -139,8 +140,8 @@ def test_provider_error_ignores_missing_or_malformed_retry_after(headers: dict[s
 
     assert isinstance(error, GenkitError)
     assert error.status == 'RESOURCE_EXHAUSTED'
-    assert error.original_message == 'slow down'
-    assert error.response_metadata is None
+    assert error.message == 'slow down'
+    assert error.retry_after_ms is None
 
 
 def test_provider_error_keeps_provider_message_and_cause() -> None:
@@ -152,13 +153,11 @@ def test_provider_error_keeps_provider_message_and_cause() -> None:
 
     assert isinstance(error, GenkitError)
     assert error.status == 'UNAUTHENTICATED'
-    assert error.original_message == 'API key not valid'
-    assert error.cause is cause
+    assert error.message == 'API key not valid'
     assert error.__cause__ is cause
     assert str(error) == 'UNAUTHENTICATED: API key not valid'
     assert renamed.status == 'UNAUTHENTICATED'
-    assert renamed.original_message == 'gemini rejected the key'
-    assert renamed.cause is cause
+    assert renamed.message == 'gemini rejected the key'
     assert renamed.__cause__ is cause
     assert str(renamed) == 'UNAUTHENTICATED: gemini rejected the key: API key not valid'
 
@@ -170,8 +169,8 @@ def test_provider_error_is_internal_error_over_http() -> None:
     assert isinstance(error, GenkitError)
     assert not isinstance(error, PublicError)
     assert error.status == 'UNAUTHENTICATED'
-    assert get_http_status(error) == 500
-    assert get_callable_json(error) == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert error_status(error) == 500
+    assert error_body(error) == {'message': 'Internal Error', 'status': 'INTERNAL'}
 
 
 def test_provider_error_names_the_type_when_the_error_has_no_text() -> None:
@@ -179,7 +178,7 @@ def test_provider_error_names_the_type_when_the_error_has_no_text() -> None:
     error = provider_error(TimeoutError(), status='DEADLINE_EXCEEDED')
 
     assert str(error) == 'DEADLINE_EXCEEDED: TimeoutError'
-    assert error.original_message == 'TimeoutError'
+    assert error.message == 'TimeoutError'
 
 
 def test_genkit_error_does_not_repeat_a_cause_already_in_the_message() -> None:

@@ -175,7 +175,7 @@ export const AnthropicConfigSchema = GenerationCommonConfigSchema.extend({
   ),
   output_config: z
     .object({
-      effort: z.enum(['low', 'medium', 'high', 'xhigh']).optional(),
+      effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
       task_budget: z
         .object({
           type: z.literal('tokens').default('tokens'),
@@ -338,9 +338,7 @@ export interface ContentBlockLocationCitation {
 
 /** Union of all citation types for documents. */
 export type AnthropicCitation =
-  | CharLocationCitation
-  | PageLocationCitation
-  | ContentBlockLocationCitation;
+  CharLocationCitation | PageLocationCitation | ContentBlockLocationCitation;
 
 /**
  * Calculates the API key to use for a request.

@@ -20,8 +20,11 @@ import {
   startTelemetryServer,
 } from '@genkit-ai/telemetry-server';
 import type { Status } from '@genkit-ai/tools-common';
-import {
+import type {
   BaseRuntimeManager,
+  GenkitToolsError,
+} from '@genkit-ai/tools-common/manager';
+import {
   DEFAULT_REFLECTION_V2_HOST,
   ProcessManager,
   REFLECTION_SECRET_ENV,
@@ -29,10 +32,9 @@ import {
   RuntimeManager,
   generateReflectionSecret,
   reflectionV2Url,
-  type GenkitToolsError,
 } from '@genkit-ai/tools-common/manager';
 import { logger } from '@genkit-ai/tools-common/utils';
-import getPort, { makeRange } from 'get-port';
+import getPort, { portNumbers } from 'get-port';
 
 /** Shared help text for `--experimental-auth` on every command that spawns or hosts runtimes. */
 export const EXPERIMENTAL_AUTH_OPTION_HELP =
@@ -56,10 +58,15 @@ export async function resolveTelemetryServer(options: {
 }): Promise<string> {
   let telemetryServerUrl = process.env.GENKIT_TELEMETRY_SERVER;
   if (!telemetryServerUrl) {
-    const telemetryPort = await getPort({ port: makeRange(4033, 4999) });
-    telemetryServerUrl = `http://localhost:${telemetryPort}`;
+    const host = '127.0.0.1';
+    const telemetryPort = await getPort({
+      port: portNumbers(4033, 4999),
+      host,
+    });
+    telemetryServerUrl = `http://${host}:${telemetryPort}`;
     await startTelemetryServer({
       port: telemetryPort,
+      host,
       traceStore: new LocalFileTraceStore({
         storeRoot: options.projectRoot,
         indexRoot: options.projectRoot,
@@ -174,10 +181,12 @@ export async function getDevEnvVars(
   projectRoot: string,
   options?: DevProcessManagerOptions
 ): Promise<DevEnv> {
-  const telemetryServerUrl = await resolveTelemetryServer({
-    projectRoot,
-    corsOrigin: options?.corsOrigin,
-  });
+  const telemetryServerUrl =
+    options?.telemetryServerUrl ??
+    (await resolveTelemetryServer({
+      projectRoot,
+      corsOrigin: options?.corsOrigin,
+    }));
   const disableRealtimeTelemetry = options?.disableRealtimeTelemetry ?? false;
   const experimentalReflectionV2 = options?.experimentalReflectionV2 ?? false;
   const reflectionSecret = resolveReflectionSecret({
@@ -197,11 +206,13 @@ export async function getDevEnvVars(
 
   if (useOtel) {
     // Drive the app's own OTel SDK to the dev telemetry server's OTLP endpoints.
-    // The server only parses JSON bodies (express.json), so http/json is
-    // required; per-signal endpoints are used verbatim (no /v1/* appended), so
-    // the full path is spelled out. Metrics are deliberately not redirected:
-    // the server doesn't ingest them, so they go wherever the app's own OTel
-    // config sends them.
+    // The protocol is set explicitly to http/protobuf (the OTLP spec default,
+    // supported by Go autoexport, Python, Java, and JS NodeSDK) so a shell
+    // OTEL_EXPORTER_OTLP_*_PROTOCOL=grpc or Python opentelemetry-distro's grpc
+    // default cannot leak in; per-signal endpoints are used verbatim (no /v1/*
+    // appended), so the full path is spelled out. Metrics are deliberately not
+    // redirected: the server doesn't ingest them, so they go wherever the app's
+    // own OTel config sends them.
     //
     // GENKIT_TELEMETRY_SERVER is blanked rather than omitted: the child
     // inherits process.env, so a value exported in the shell (the
@@ -214,9 +225,9 @@ export async function getDevEnvVars(
     // with one, and naive concatenation would yield a double slash.
     const baseUrl = telemetryServerUrl.replace(/\/+$/, '');
     envVars.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = `${baseUrl}/api/otlp/v1/traces`;
-    envVars.OTEL_EXPORTER_OTLP_TRACES_PROTOCOL = 'http/json';
+    envVars.OTEL_EXPORTER_OTLP_TRACES_PROTOCOL = 'http/protobuf';
     envVars.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT = `${baseUrl}/api/otlp/v1/logs`;
-    envVars.OTEL_EXPORTER_OTLP_LOGS_PROTOCOL = 'http/json';
+    envVars.OTEL_EXPORTER_OTLP_LOGS_PROTOCOL = 'http/protobuf';
   } else {
     envVars.GENKIT_TELEMETRY_SERVER = telemetryServerUrl;
     if (!disableRealtimeTelemetry) {
@@ -228,7 +239,7 @@ export async function getDevEnvVars(
     // Probe and URL must both match the interface the v2 server binds;
     // `localhost` may resolve to ::1 first and miss an IPv4-only listener.
     const host = options?.reflectionV2Host ?? DEFAULT_REFLECTION_V2_HOST;
-    reflectionV2Port = await getPort({ port: makeRange(3200, 3400), host });
+    reflectionV2Port = await getPort({ port: portNumbers(3200, 3400), host });
     envVars.GENKIT_REFLECTION_V2_SERVER = reflectionV2Url(
       host,
       reflectionV2Port
@@ -290,24 +301,38 @@ export async function startDevProcessManager(
 export async function waitForRuntime(
   manager: BaseRuntimeManager,
   processPromise: Promise<void>,
-  timeoutMs: number = 30000
+  timeoutMs: number = 30000,
+  existingRuntimeIds?: ReadonlySet<string>
 ): Promise<void> {
   let unsubscribe: (() => void) | undefined;
   let timeoutId: NodeJS.Timeout | undefined;
 
-  if (manager.listRuntimes().length > 0) {
+  const hasNewRuntime = () =>
+    manager
+      .listRuntimes()
+      .some(
+        (rt) =>
+          !existingRuntimeIds ||
+          (rt?.id !== undefined && !existingRuntimeIds.has(rt.id))
+      );
+
+  if (hasNewRuntime()) {
     return;
   }
 
   try {
     const runtimeAddedPromise = new Promise<void>((resolve) => {
-      unsubscribe = manager.onRuntimeEvent((event) => {
-        // Just listen for a new runtime, not for a specific ID.
-        if (event === RuntimeEvent.ADD) {
+      unsubscribe = manager.onRuntimeEvent((event, rt) => {
+        // Listen for a new runtime (ignoring pre-restart IDs if provided).
+        if (
+          event === RuntimeEvent.ADD &&
+          (!existingRuntimeIds ||
+            (rt?.id !== undefined && !existingRuntimeIds.has(rt.id)))
+        ) {
           resolve();
         }
       });
-      if (manager.listRuntimes().length > 0) {
+      if (hasNewRuntime()) {
         resolve();
       }
     });

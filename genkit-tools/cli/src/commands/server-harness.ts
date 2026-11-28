@@ -18,15 +18,15 @@ import { startServer } from '@genkit-ai/tools-common/server';
 import { findProjectRoot, logger } from '@genkit-ai/tools-common/utils';
 import { Command } from 'commander';
 import fs from 'fs';
-import { startManager } from '../utils/manager-utils';
+import { startManager } from '../utils/manager-utils.js';
 
 function redirectStdoutToFile(logFile: string) {
   const myLogFileStream = fs.createWriteStream(logFile);
 
   const originalStdout = process.stdout.write;
-  function writeStdout() {
-    originalStdout.apply(process.stdout, arguments as any);
-    myLogFileStream.write.apply(myLogFileStream, arguments as any);
+  function writeStdout(...args: any[]) {
+    (originalStdout as any).apply(process.stdout, args);
+    (myLogFileStream.write as any)(...args);
   }
 
   process.stdout.write = writeStdout as any;

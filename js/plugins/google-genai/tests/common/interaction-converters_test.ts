@@ -39,7 +39,9 @@ import {
   toInteractionSpeechConfig,
   toInteractionSteps,
   toInteractionTool,
+  toInteractionToolChoice,
   toInteractionVideoResponseFormat,
+  withBasicUsageStats,
 } from '../../src/common/interaction-converters.js';
 import {
   Content,
@@ -1304,6 +1306,71 @@ describe('Interaction Converters', () => {
         toInteractionContent({ text: 'Hi', metadata: { speechMetadata: {} } }),
         { type: 'text', text: 'Hi' }
       );
+    });
+  });
+
+  describe('toInteractionToolChoice', () => {
+    // The server only accepts allowed_tools with mode any or validated (400
+    // "allowed_tools mode must be either ANY or VALIDATED." otherwise).
+    it('sends a request toolChoice as a plain string', () => {
+      assert.strictEqual(toInteractionToolChoice(undefined, 'required'), 'any');
+      assert.strictEqual(toInteractionToolChoice(undefined, 'none'), 'none');
+      assert.strictEqual(toInteractionToolChoice(undefined, 'auto'), 'auto');
+      assert.strictEqual(toInteractionToolChoice(), undefined);
+    });
+
+    it('sends a functionCallingConfig mode without names as a plain string', () => {
+      for (const mode of ['AUTO', 'NONE', 'ANY', 'VALIDATED']) {
+        assert.strictEqual(
+          toInteractionToolChoice({ mode }),
+          mode.toLowerCase()
+        );
+      }
+      assert.strictEqual(
+        toInteractionToolChoice({ mode: 'MODE_UNSPECIFIED' }),
+        undefined
+      );
+    });
+
+    it('uses allowed_tools for names with ANY or VALIDATED', () => {
+      assert.deepStrictEqual(
+        toInteractionToolChoice({
+          mode: 'ANY',
+          allowedFunctionNames: ['getWeather'],
+        }),
+        { allowed_tools: { mode: 'any', tools: ['getWeather'] } }
+      );
+      assert.deepStrictEqual(
+        toInteractionToolChoice({
+          mode: 'VALIDATED',
+          allowedFunctionNames: ['getWeather'],
+        }),
+        { allowed_tools: { mode: 'validated', tools: ['getWeather'] } }
+      );
+    });
+
+    it('drops names without ANY or VALIDATED', () => {
+      const dropped: string[] = [];
+      assert.strictEqual(
+        toInteractionToolChoice(
+          { mode: 'AUTO', allowedFunctionNames: ['getWeather'] },
+          undefined,
+          (field) => dropped.push(field)
+        ),
+        'auto'
+      );
+      assert.strictEqual(
+        toInteractionToolChoice(
+          { allowedFunctionNames: ['getWeather'] },
+          undefined,
+          (field) => dropped.push(field)
+        ),
+        undefined
+      );
+      assert.deepStrictEqual(dropped, [
+        'functionCallingConfig.allowedFunctionNames',
+        'functionCallingConfig.allowedFunctionNames',
+      ]);
     });
   });
 
@@ -2922,6 +2989,75 @@ describe('Interaction Converters', () => {
     });
   });
 
+  describe('withBasicUsageStats', () => {
+    const request: MessageData[] = [
+      {
+        role: 'user',
+        content: [
+          { text: 'Describe this' },
+          {
+            media: {
+              url: 'data:image/png;base64,AAAA',
+              contentType: 'image/png',
+            },
+          },
+        ],
+      },
+    ];
+
+    it('adds character and media counts next to the token counts', () => {
+      const response = fromInteractionSync({
+        status: 'completed',
+        steps: [
+          {
+            type: 'model_output',
+            content: [
+              { type: 'text', text: 'A cat.' },
+              { type: 'audio', mime_type: 'audio/wav', data: 'AAAA' },
+            ],
+          },
+        ],
+        usage: {
+          total_input_tokens: 270,
+          total_output_tokens: 30,
+          total_tokens: 300,
+          input_tokens_by_modality: [
+            { modality: 'text', tokens: 12 },
+            { modality: 'image', tokens: 258 },
+          ],
+        },
+      });
+      const result = withBasicUsageStats(response, request);
+      assert.deepStrictEqual(result.usage, {
+        inputCharacters: 'Describe this'.length,
+        inputImages: 1,
+        inputVideos: 0,
+        inputAudioFiles: 0,
+        outputCharacters: 'A cat.'.length,
+        outputImages: 0,
+        outputVideos: 0,
+        outputAudioFiles: 1,
+        inputTokens: 270,
+        outputTokens: 30,
+        totalTokens: 300,
+        cachedContentTokens: undefined,
+        thoughtsTokens: undefined,
+        custom: { inputTextTokens: 12, inputImageTokens: 258 },
+      });
+      // The rest of the response is unchanged.
+      assert.deepStrictEqual(result.message, response.message);
+    });
+
+    it('counts the request even when the API sent no usage', () => {
+      const response = fromInteractionSync({ status: 'completed', steps: [] });
+      const result = withBasicUsageStats(response, request);
+      assert.strictEqual(result.usage?.inputCharacters, 'Describe this'.length);
+      assert.strictEqual(result.usage?.inputImages, 1);
+      assert.strictEqual(result.usage?.outputCharacters, 0);
+      assert.strictEqual(result.usage?.inputTokens, undefined);
+    });
+  });
+
   describe('fromInteractionSync', () => {
     it('returns finishReason blocked for a post-execution safety block', () => {
       const result = fromInteractionSync({
@@ -3063,14 +3199,15 @@ describe('Interaction Converters', () => {
         },
       });
       assert.strictEqual(result.finishReason, 'blocked');
+      // Per-modality counts are tokens: they go in `custom`, not in
+      // Genkit's character / media-count fields.
       assert.deepStrictEqual(result.usage, {
         inputTokens: 10,
         outputTokens: 0,
         totalTokens: 10,
         cachedContentTokens: undefined,
         thoughtsTokens: undefined,
-        inputCharacters: 8,
-        inputImages: 2,
+        custom: { inputTextTokens: 8, inputImageTokens: 2 },
       });
     });
 
@@ -3096,7 +3233,11 @@ describe('Interaction Converters', () => {
         },
       });
       assert.strictEqual(result.finishReason, 'stop');
-      assert.strictEqual(result.usage?.outputVideos, 57920);
+      assert.deepStrictEqual(result.usage?.custom, {
+        inputTextTokens: 16,
+        outputVideoTokens: 57920,
+      });
+      assert.strictEqual(result.usage?.outputVideos, undefined);
       const video = result.message?.content.find((p) => p.media);
       assert.deepStrictEqual(video?.media, {
         url: 'data:video/mp4;base64,AAAA',
@@ -3112,7 +3253,8 @@ describe('Interaction Converters', () => {
           input_tokens_by_modality: [{ modality: 'video', tokens: 30 }],
         },
       });
-      assert.strictEqual(result.usage?.inputVideos, 30);
+      assert.strictEqual(result.usage?.custom?.inputVideoTokens, 30);
+      assert.strictEqual(result.usage?.inputVideos, undefined);
     });
 
     it('carries usage on a cancelled response', () => {

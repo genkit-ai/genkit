@@ -42,8 +42,8 @@ import { Command, Option } from 'commander';
 import {
   EXPERIMENTAL_AUTH_OPTION_HELP,
   runWithManager,
-} from '../utils/manager-utils';
-import { parseJson, parsePositiveInt } from '../utils/option-parsers';
+} from '../utils/manager-utils.js';
+import { parseJson, parsePositiveInt } from '../utils/option-parsers.js';
 
 interface EvalFlowRunCliOptions {
   /** --experimental-auth. */
@@ -66,6 +66,7 @@ enum SourceType {
 
 /** Command to run a flow and evaluate the output */
 export const evalFlow = new Command('eval:flow')
+  .allowExcessArguments(true)
   .usage('[options] <flowName> [data] [-- <command...>]')
   .description(
     'evaluate a flow against configured evaluators using provided data as input'
@@ -178,7 +179,7 @@ export const evalFlow = new Command('eval:flow')
         const sourceType = getSourceType(actualData, options.input);
         let targetDatasetMetadata;
         if (sourceType === SourceType.DATASET) {
-          const datasetStore = await getDatasetStore();
+          const datasetStore = getDatasetStore();
           const datasetMetadatas = await datasetStore.listDatasets();
           targetDatasetMetadata = datasetMetadatas.find(
             (d: DatasetMetadata) => d.datasetId === options.input
@@ -265,20 +266,24 @@ async function readInputs(
       try {
         return await loadInferenceDatasetFile(input!);
       } catch (e) {
-        throw new Error(`Error parsing the input from file. Error: ${e}`);
+        throw new Error(`Error parsing the input from file. Error: ${e}`, {
+          cause: e,
+        });
       }
-    case SourceType.DATASET:
-      const datasetStore = await getDatasetStore();
+    case SourceType.DATASET: {
+      const datasetStore = getDatasetStore();
       const data = await datasetStore.getDataset(input!);
       parsedData = data;
       break;
+    }
   }
 
   try {
     return DatasetSchema.parse(parsedData);
   } catch (e) {
     throw new Error(
-      `Error parsing the input. Please provide an array of inputs for the flow or a ${EVAL_FLOW_SCHEMA} object. Error: ${e}`
+      `Error parsing the input. Please provide an array of inputs for the flow or a ${EVAL_FLOW_SCHEMA} object. Error: ${e}`,
+      { cause: e }
     );
   }
 }

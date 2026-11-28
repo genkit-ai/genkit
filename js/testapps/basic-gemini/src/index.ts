@@ -760,6 +760,52 @@ ai.defineFlow(
   }
 );
 
+// Tool choice: `required` makes the model call a tool, `none` makes it
+// answer without one, `auto` (the default without toolChoice) lets it
+// decide. returnToolRequests returns the tool calls instead of running
+// them, so the output shows what the model asked for.
+ai.defineFlow(
+  {
+    name: 'tool-choice',
+    inputSchema: z.enum(['required', 'auto', 'none']).default('required'),
+  },
+  async (toolChoice) => {
+    const response = await ai.generate({
+      model: googleAI.model('gemini-3.8-flash'),
+      prompt: "What's the weather in Paris, France?",
+      tools: [getWeather],
+      toolChoice,
+      returnToolRequests: true,
+    });
+    return {
+      toolRequests: response.toolRequests.map((p) => p.toolRequest),
+      text: response.text,
+    };
+  }
+);
+
+// Only some tools allowed: functionCallingConfig with mode ANY and
+// allowedFunctionNames. The model would start with getWeather; only
+// celsiusToFahrenheit is allowed, so it calls that one.
+// allowedFunctionNames only applies with mode ANY or VALIDATED: with
+// another mode it's ignored with a warning.
+ai.defineFlow('tool-choice-allowed-function-names', async () => {
+  const response = await ai.generate({
+    model: googleAI.model('gemini-3.8-flash'),
+    prompt:
+      "What's the weather in Paris, France? Convert the temperature to Fahrenheit.",
+    tools: [getWeather, celsiusToFahrenheit],
+    config: {
+      functionCallingConfig: {
+        mode: 'ANY',
+        allowedFunctionNames: ['celsiusToFahrenheit'],
+      },
+    },
+    returnToolRequests: true,
+  });
+  return response.toolRequests.map((p) => p.toolRequest);
+});
+
 // Multipart tool calling
 ai.defineFlow(
   {
@@ -1395,7 +1441,6 @@ function getApiKeyFromEnvVar(): string | undefined {
 }
 
 async function downloadVideo(video: MediaPart, path: string) {
-  const fetch = (await import('node-fetch')).default;
   // The key goes in a header, not the URL, so it stays out of logs.
   const videoDownloadResponse = await fetch(video.media!.url, {
     headers: { 'x-goog-api-key': getApiKeyFromEnvVar() ?? '' },
@@ -1410,7 +1455,7 @@ async function downloadVideo(video: MediaPart, path: string) {
 
   // Wait until the whole file is written, so callers can use it right away.
   await pipeline(
-    Readable.from(videoDownloadResponse.body),
+    Readable.fromWeb(videoDownloadResponse.body as any),
     fs.createWriteStream(path)
   );
 }

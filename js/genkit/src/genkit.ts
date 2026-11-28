@@ -229,6 +229,20 @@ export class Genkit extends GenkitAI implements HasRegistry {
 
   /**
    * Defines and registers a flow function.
+   *
+   * @example
+   * ```ts
+   * const greetFlow = ai.defineFlow(
+   *   {
+   *     name: 'greetFlow',
+   *     inputSchema: z.object({ name: z.string() }),
+   *     outputSchema: z.string(),
+   *   },
+   *   async ({ name }) => `Hello, ${name}!`
+   * );
+   *
+   * const greeting = await greetFlow({ name: 'world' });
+   * ```
    */
   defineFlow<
     I extends z.ZodTypeAny = z.ZodTypeAny,
@@ -575,8 +589,8 @@ export class Genkit extends GenkitAI implements HasRegistry {
    */
   defineEvaluator<
     DataPoint extends typeof BaseDataPointSchema = typeof BaseDataPointSchema,
-    EvalDataPoint extends
-      typeof BaseEvalDataPointSchema = typeof BaseEvalDataPointSchema,
+    EvalDataPoint extends typeof BaseEvalDataPointSchema =
+      typeof BaseEvalDataPointSchema,
     EvaluatorOptions extends z.ZodTypeAny = z.ZodTypeAny,
   >(
     options: {
@@ -787,6 +801,9 @@ function registerActionV2(
         message: 'Action type is missing for ' + resolvedAction.__action.name,
       });
     }
+    // tool()/resource() mark actions as dynamic so generate() registers them per call.
+    // Once a plugin registers them they're no longer dynamic (mirrors defineTool).
+    delete resolvedAction.__action.metadata?.dynamic;
     registry.registerAction(
       resolvedAction.__action.actionType,
       resolvedAction,
@@ -805,6 +822,21 @@ function registerActionV2(
  *
  * This will create a new Genkit registry, register the provided plugins, stores, and other configuration. This
  * should be called before any flows are registered.
+ *
+ * @example
+ * ```ts
+ * import { genkit } from 'genkit';
+ * import { googleAI } from '@genkit-ai/google-genai';
+ *
+ * const ai = genkit({
+ *   plugins: [googleAI()],
+ * });
+ *
+ * const { text } = await ai.generate({
+ *   model: googleAI.model('gemini-flash-latest'),
+ *   prompt: 'Why is Genkit awesome?',
+ * });
+ * ```
  */
 export function genkit(options: GenkitOptions): Genkit {
   return new Genkit(options);

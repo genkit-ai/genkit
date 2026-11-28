@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-import { GenerateRequest, GenkitError, z, type ActionContext } from 'genkit';
+import { GenkitError, z, type ActionContext } from 'genkit';
 import process from 'process';
-import { ClientOptions, VeoImage, VeoVideo } from './types.js';
+import { ClientOptions } from './types.js';
 
 export { isObject } from '../common/types.js';
 export {
@@ -126,35 +126,6 @@ export function calculateApiKey(
     throw MISSING_API_KEY_ERROR;
   }
   return apiKey;
-}
-
-export function extractVeoImage(
-  request: GenerateRequest
-): VeoImage | undefined {
-  const media = request.messages.at(-1)?.content.find((p) => !!p.media)?.media;
-  if (!media?.contentType?.startsWith('image/')) {
-    return undefined;
-  }
-  const bytes = media?.url.split(',')[1];
-  if (bytes) {
-    return {
-      bytesBase64Encoded: bytes,
-      mimeType: media.contentType,
-    };
-  }
-  return undefined;
-}
-
-export function extractVeoVideo(
-  request: GenerateRequest
-): VeoVideo | undefined {
-  const media = request.messages.at(-1)?.content.find((p) => !!p.media)?.media;
-  if (!media?.contentType?.startsWith('video/')) {
-    return undefined;
-  }
-  return {
-    uri: media.url,
-  };
 }
 
 /**

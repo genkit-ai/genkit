@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-export { BaseRuntimeManager, RuntimeManager } from './manager';
+export { BaseRuntimeManager, RuntimeManager } from './manager.js';
 export {
   AppProcessStatus,
   ProcessManager,
   ProcessManagerStartOptions,
   ProcessStatus,
-} from './process-manager';
+} from './process-manager.js';
 export {
   DEFAULT_REFLECTION_V2_HOST,
   REFLECTION_AUTH_ERROR_CODE,
@@ -29,5 +29,5 @@ export {
   generateReflectionSecret,
   isLoopbackHost,
   reflectionV2Url,
-} from './reflection-auth';
-export * from './types';
+} from './reflection-auth.js';
+export * from './types.js';

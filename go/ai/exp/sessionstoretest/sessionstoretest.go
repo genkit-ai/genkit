@@ -27,8 +27,8 @@
 //
 // The suite works only through the store's exported methods, so it suits any
 // implementation, including one outside this module. It checks the optional
-// capabilities ([exp.SnapshotMetadataReader] and [exp.SnapshotSubscriber]) when
-// the store implements them, and [Options] turns on the checks that need more
+// capabilities ([exp.SnapshotMetadataReader], [exp.SnapshotSubscriber] and
+// [exp.SessionDeleter]) when the store implements them, and [Options] turns on the checks that need more
 // than one store: a second instance over the same storage, and a store that
 // partitions its rows by a key from the context.
 //
@@ -92,8 +92,8 @@ type Options[State any] struct {
 
 // Run checks the stores newStore returns against the session store contract,
 // as subtests of t grouped by area: Save, Lifecycle, Chains, Latest, Metadata,
-// Subscriber, SecondInstance, and Scopes. A group whose capability the store
-// lacks, or whose [Options] hook is nil, is skipped with the reason.
+// Subscriber, Delete, SecondInstance, and Scopes. A group whose capability the
+// store lacks, or whose [Options] hook is nil, is skipped with the reason.
 //
 // newStore must return a fresh, empty store on every call, with its default
 // behavior: retention that deletes old rows, for example, must be off, because
@@ -120,12 +120,14 @@ func Run[State any](t *testing.T, newStore func(t *testing.T) exp.SessionStore[S
 	}
 	_, s.metadata = probe.(exp.SnapshotMetadataReader[State])
 	_, s.subscriber = probe.(exp.SnapshotSubscriber)
+	_, s.deleter = probe.(exp.SessionDeleter)
 	t.Run("Save", s.testSave)
 	t.Run("Lifecycle", s.testLifecycle)
 	t.Run("Chains", s.testChains)
 	t.Run("Latest", s.testLatest)
 	t.Run("Metadata", s.testMetadata)
 	t.Run("Subscriber", s.testSubscriber)
+	t.Run("Delete", s.testDelete)
 	t.Run("SecondInstance", s.testSecondInstance)
 	t.Run("Scopes", s.testScopes)
 }
@@ -137,4 +139,5 @@ type suite[State any] struct {
 	opts       Options[State]
 	metadata   bool // the stores implement exp.SnapshotMetadataReader
 	subscriber bool // the stores implement exp.SnapshotSubscriber
+	deleter    bool // the stores implement exp.SessionDeleter
 }

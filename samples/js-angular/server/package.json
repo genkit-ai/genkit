@@ -7,7 +7,7 @@
     "build:watch": "tsc --watch",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "name": "js-angular",
+  "name": "js-angular-server",
   "version": "1.0.0",
   "description": "This is a simple UI for streaming RPG character generator.",
   "keywords": [],

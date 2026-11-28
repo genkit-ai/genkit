@@ -43,7 +43,7 @@ async function testFlowServer() {
           data: 1,
         }),
       });
-      if (res.status != 200) {
+      if (res.status !== 200) {
         throw new Error(`timed out waiting for flow server to become healthy`);
       }
     },
@@ -62,34 +62,32 @@ async function testFlowServer() {
       result: test.response.result,
     };
     console.log(`checking stream for: ${test.path}`);
-    (async () => {
-      const response = await streamFlow({
-        url: `${url}/${test.path}`,
-        input: test.post.data,
-      });
+    const response = streamFlow({
+      url: `${url}/${test.path}`,
+      input: test.post.data,
+    });
 
-      for await (const chunk of response.stream) {
-        expected = want.message.replace('{count}', chunkCount.toString());
-        const chunkJSON = JSON.stringify(await chunk);
-        if (chunkJSON != expected) {
-          throw new Error(
-            `unexpected chunk data received, got: ${chunkJSON}, want: ${want.message}`
-          );
-        }
-        chunkCount++;
-      }
-      if (chunkCount != test.post.data) {
+    for await (const chunk of response.stream) {
+      expected = want.message.replace('{count}', chunkCount.toString());
+      const chunkJSON = JSON.stringify(chunk);
+      if (chunkJSON !== expected) {
         throw new Error(
-          `unexpected number of stream chunks received: got ${chunkCount}, want: ${test.post.data}`
+          `unexpected chunk data received, got: ${chunkJSON}, want: ${want.message}`
         );
       }
-      const out = await response.output;
-      want.result = want.result.replace(/\{count\}/g, chunkCount.toString());
-      if (out != want.result) {
-        throw new Error(
-          `unexpected output received, got: ${out}, want: ${want.result}`
-        );
-      }
-    })();
+      chunkCount++;
+    }
+    if (chunkCount !== test.post.data) {
+      throw new Error(
+        `unexpected number of stream chunks received: got ${chunkCount}, want: ${test.post.data}`
+      );
+    }
+    const out = await response.output;
+    want.result = want.result.replace(/\{count\}/g, chunkCount.toString());
+    if (out !== want.result) {
+      throw new Error(
+        `unexpected output received, got: ${out}, want: ${want.result}`
+      );
+    }
   }
 }

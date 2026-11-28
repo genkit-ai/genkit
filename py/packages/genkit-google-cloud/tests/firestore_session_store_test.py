@@ -31,9 +31,9 @@ from google.api_core import exceptions as google_exceptions
 from google.cloud import firestore
 from google.cloud.firestore_v1._helpers import ReadAfterWriteError
 
-from genkit._core._error import GenkitError, RuntimeErrorReason
-from genkit._core._model import SessionSnapshot, SessionState
-from genkit._core._typing import SnapshotStatus
+from genkit import ErrorReason, Failure, GenkitError
+from genkit.exp.agent import SessionSnapshot, SessionState, SnapshotStatus
+from genkit.plugin_api import Action, ActionKind
 
 
 def test_from_genkit_google_cloud_import_has_no_firestore_session_store() -> None:
@@ -421,9 +421,9 @@ async def test_firestore_get_slash_session_id_raises_invalid_session_id() -> Non
     with pytest.raises(GenkitError) as raised:
         await store.get_snapshot(session_id='a/b')
     assert raised.value.status == 'INVALID_ARGUMENT'
-    assert raised.value.reason is RuntimeErrorReason.INVALID_SESSION_ID
-    assert "invalid session_id 'a/b'" in raised.value.original_message
-    assert 'INVALID_SESSION_ID' not in raised.value.original_message
+    assert raised.value.reason is ErrorReason.INVALID_SESSION_ID
+    assert "invalid session_id 'a/b'" in raised.value.message
+    assert 'INVALID_SESSION_ID' not in raised.value.message
 
 
 @pytest.mark.asyncio
@@ -439,9 +439,9 @@ async def test_firestore_get_empty_session_id_raises_session_id_required() -> No
     with pytest.raises(GenkitError) as raised:
         await store.get_snapshot(session_id='')
     assert raised.value.status == 'INVALID_ARGUMENT'
-    assert raised.value.reason is RuntimeErrorReason.SESSION_ID_REQUIRED
-    assert 'session_id must not be empty' in raised.value.original_message
-    assert 'SESSION_ID_REQUIRED' not in raised.value.original_message
+    assert raised.value.reason is ErrorReason.SESSION_ID_REQUIRED
+    assert 'session_id must not be empty' in raised.value.message
+    assert 'SESSION_ID_REQUIRED' not in raised.value.message
 
 
 @pytest.mark.asyncio
@@ -453,9 +453,9 @@ async def test_firestore_get_slash_snapshot_id_raises_invalid_snapshot_id() -> N
     with pytest.raises(GenkitError) as raised:
         await store.get_snapshot(snapshot_id='a/b')
     assert raised.value.status == 'INVALID_ARGUMENT'
-    assert raised.value.reason is RuntimeErrorReason.INVALID_SNAPSHOT_ID
-    assert "invalid snapshot_id 'a/b'" in raised.value.original_message
-    assert 'INVALID_SNAPSHOT_ID' not in raised.value.original_message
+    assert raised.value.reason is ErrorReason.INVALID_SNAPSHOT_ID
+    assert "invalid snapshot_id 'a/b'" in raised.value.message
+    assert 'INVALID_SNAPSHOT_ID' not in raised.value.message
 
 
 @pytest.mark.asyncio
@@ -1239,6 +1239,44 @@ def _mk(sid: str, parent: str | None = None, custom: dict | None = None) -> Any:
 
 
 @pytest.mark.asyncio
+async def test_firestore_session_store_failed_snapshot_error_reads_back_with_status_and_message() -> None:
+    """A FAILED snapshot saved with an error reads back with the same status, message, and details."""
+    h = FakeStoreHarness()
+    store = h.store()
+    await store.save_snapshot(
+        'snap-1',
+        lambda _e: SessionSnapshot(
+            snapshot_id='snap-1',
+            session_id='sess-1',
+            created_at='2026-07-03T00:00:00Z',
+            status=SnapshotStatus.FAILED,
+            error=Failure(status='INTERNAL', message='model exploded', details={'attempt': 2}),
+            state=SessionState(session_id='sess-1'),
+        ),
+    )
+
+    loaded = await store.get_snapshot(snapshot_id='snap-1')
+
+    assert loaded is not None and loaded.error is not None
+    assert loaded.error.status == 'INTERNAL'
+    assert loaded.error.message == 'model exploded'
+    assert loaded.error.details == {'attempt': 2}
+
+
+@pytest.mark.asyncio
+async def test_firestore_session_store_snapshot_with_unreadable_error_raises_data_loss() -> None:
+    """A stored error missing its message is a corrupt doc: get_snapshot raises DATA_LOSS."""
+    h = FakeStoreHarness()
+    store = h.store()
+    await store.save_snapshot('snap-1', _mk('snap-1'))
+    h.docs[_snap_path('snap-1')]['error'] = {'status': 'INTERNAL'}
+
+    with pytest.raises(GenkitError) as exc_info:
+        await store.get_snapshot(snapshot_id='snap-1')
+    assert exc_info.value.status == 'DATA_LOSS'
+
+
+@pytest.mark.asyncio
 async def test_firestore_session_store_missing_shard_raises_data_loss() -> None:
     """A checkpoint whose shard document vanished raises DATA_LOSS, not with partial state."""
     h = FakeStoreHarness()
@@ -1434,9 +1472,9 @@ async def test_firestore_save_without_session_id_raises_session_id_required() ->
             ),
         )
     assert raised.value.status == 'INVALID_ARGUMENT'
-    assert raised.value.reason is RuntimeErrorReason.SESSION_ID_REQUIRED
-    assert "requires 'sessionId'" in raised.value.original_message
-    assert 'SESSION_ID_REQUIRED' not in raised.value.original_message
+    assert raised.value.reason is ErrorReason.SESSION_ID_REQUIRED
+    assert "requires 'sessionId'" in raised.value.message
+    assert 'SESSION_ID_REQUIRED' not in raised.value.message
     assert _snap_path('snap-1') not in h.docs
     assert _pointer_path('') not in h.docs
 
@@ -1488,9 +1526,9 @@ async def test_firestore_save_empty_session_id_raises_session_id_required() -> N
             ),
         )
     assert raised.value.status == 'INVALID_ARGUMENT'
-    assert raised.value.reason is RuntimeErrorReason.SESSION_ID_REQUIRED
-    assert "requires 'sessionId'" in raised.value.original_message
-    assert 'SESSION_ID_REQUIRED' not in raised.value.original_message
+    assert raised.value.reason is ErrorReason.SESSION_ID_REQUIRED
+    assert "requires 'sessionId'" in raised.value.message
+    assert 'SESSION_ID_REQUIRED' not in raised.value.message
     assert _snap_path('snap-1') not in h.docs
     assert _pointer_path('sess-1') not in h.docs
 
@@ -1513,9 +1551,9 @@ async def test_firestore_save_slash_session_id_raises_invalid_session_id() -> No
             ),
         )
     assert raised.value.status == 'INVALID_ARGUMENT'
-    assert raised.value.reason is RuntimeErrorReason.INVALID_SESSION_ID
-    assert "invalid session_id 'a/b'" in raised.value.original_message
-    assert 'INVALID_SESSION_ID' not in raised.value.original_message
+    assert raised.value.reason is ErrorReason.INVALID_SESSION_ID
+    assert "invalid session_id 'a/b'" in raised.value.message
+    assert 'INVALID_SESSION_ID' not in raised.value.message
     assert _snap_path('snap-1') not in h.docs
 
 
@@ -1541,9 +1579,9 @@ async def test_firestore_save_state_empty_session_id_raises_session_id_required(
             ),
         )
     assert raised.value.status == 'INVALID_ARGUMENT'
-    assert raised.value.reason is RuntimeErrorReason.SESSION_ID_REQUIRED
-    assert "requires 'sessionId'" in raised.value.original_message
-    assert 'SESSION_ID_REQUIRED' not in raised.value.original_message
+    assert raised.value.reason is ErrorReason.SESSION_ID_REQUIRED
+    assert "requires 'sessionId'" in raised.value.message
+    assert 'SESSION_ID_REQUIRED' not in raised.value.message
     assert _snap_path('snap-1') not in h.docs
 
 
@@ -1565,9 +1603,9 @@ async def test_firestore_save_state_slash_session_id_raises_invalid_session_id()
             ),
         )
     assert raised.value.status == 'INVALID_ARGUMENT'
-    assert raised.value.reason is RuntimeErrorReason.INVALID_SESSION_ID
-    assert "invalid session_id 'a/b'" in raised.value.original_message
-    assert 'INVALID_SESSION_ID' not in raised.value.original_message
+    assert raised.value.reason is ErrorReason.INVALID_SESSION_ID
+    assert "invalid session_id 'a/b'" in raised.value.message
+    assert 'INVALID_SESSION_ID' not in raised.value.message
     assert _snap_path('snap-1') not in h.docs
 
 
@@ -1589,9 +1627,9 @@ async def test_firestore_save_empty_snapshot_id_raises_invalid_snapshot_id() -> 
             ),
         )
     assert raised.value.status == 'INVALID_ARGUMENT'
-    assert raised.value.reason is RuntimeErrorReason.INVALID_SNAPSHOT_ID
-    assert "invalid snapshot_id ''" in raised.value.original_message
-    assert 'INVALID_SNAPSHOT_ID' not in raised.value.original_message
+    assert raised.value.reason is ErrorReason.INVALID_SNAPSHOT_ID
+    assert "invalid snapshot_id ''" in raised.value.message
+    assert 'INVALID_SNAPSHOT_ID' not in raised.value.message
     assert _pointer_path('sess-1') not in h.docs
 
 
@@ -1613,9 +1651,9 @@ async def test_firestore_save_slash_snapshot_id_raises_invalid_snapshot_id() -> 
             ),
         )
     assert raised.value.status == 'INVALID_ARGUMENT'
-    assert raised.value.reason is RuntimeErrorReason.INVALID_SNAPSHOT_ID
-    assert "invalid snapshot_id 'a/b'" in raised.value.original_message
-    assert 'INVALID_SNAPSHOT_ID' not in raised.value.original_message
+    assert raised.value.reason is ErrorReason.INVALID_SNAPSHOT_ID
+    assert "invalid snapshot_id 'a/b'" in raised.value.message
+    assert 'INVALID_SNAPSHOT_ID' not in raised.value.message
     assert _pointer_path('sess-1') not in h.docs
 
 
@@ -2037,7 +2075,7 @@ async def test_firestore_session_store_mutator_supplied_path_ids_rejected() -> N
     with pytest.raises(GenkitError) as e1:
         await store.save_snapshot('snap-1', bad_session)
     assert e1.value.status == 'INVALID_ARGUMENT'
-    assert e1.value.reason is RuntimeErrorReason.INVALID_SESSION_ID
+    assert e1.value.reason is ErrorReason.INVALID_SESSION_ID
     assert 'session_id' in str(e1.value)
     assert _snap_path('snap-1') not in h.docs
 
@@ -2938,12 +2976,10 @@ async def test_firestore_session_store_no_context_defaults_to_global_prefix() ->
 @pytest.mark.asyncio
 async def test_firestore_session_store_omitted_context_ignores_ambient_action_context() -> None:
     """Omitting context= does not read ambient action context (callers must pass it)."""
-    from genkit._core._action import _action_context
-
     h = FakeStoreHarness()
     store = h.store(snapshot_path_prefix=lambda c: (c or {}).get('tenant', 'global'))
-    token = _action_context.set({'tenant': 'ambient-t'})
-    try:
+
+    async def save_and_load(_input: object) -> SessionSnapshot | None:
         await store.save_snapshot(
             'snap-1',
             lambda _e: SessionSnapshot(
@@ -2954,9 +2990,10 @@ async def test_firestore_session_store_omitted_context_ignores_ambient_action_co
                 state=SessionState(session_id='sess-1'),
             ),
         )
-        loaded = await store.get_snapshot(snapshot_id='snap-1')
-    finally:
-        _action_context.reset(token)
+        return await store.get_snapshot(snapshot_id='snap-1')
+
+    action = Action(name='saveAndLoad', kind=ActionKind.FLOW, fn=save_and_load)
+    loaded = (await action.run(context={'tenant': 'ambient-t'})).response
 
     assert loaded is not None and loaded.snapshot_id == 'snap-1'
     assert _snap_path('snap-1', prefix='global') in h.docs

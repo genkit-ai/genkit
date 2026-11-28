@@ -29,7 +29,7 @@ Usage:
     enable_google_cloud_telemetry(project='my-project')
 
     # 2. All subsequent Genkit actions automatically export telemetry
-    ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
+    ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
     await ai.generate(prompt='Hello, world!')
     ```
 

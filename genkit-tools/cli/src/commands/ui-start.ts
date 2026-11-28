@@ -28,14 +28,14 @@ import { spawn, type ChildProcess } from 'child_process';
 import * as clc from 'colorette';
 import { Command } from 'commander';
 import fs from 'fs/promises';
-import getPort, { makeRange } from 'get-port';
+import getPort, { portNumbers } from 'get-port';
 import open from 'open';
 import path from 'path';
-import { detectCLIRuntime } from '../utils/runtime-detector';
+import { detectCLIRuntime } from '../utils/runtime-detector.js';
 import {
   buildServerHarnessSpawnConfig,
   validateExecutablePath,
-} from '../utils/spawn-config';
+} from '../utils/spawn-config.js';
 
 interface StartOptions {
   port?: string;
@@ -62,7 +62,7 @@ export const uiStart = new Command('ui:start')
         return;
       }
     } else {
-      port = await getPort({ port: makeRange(4000, 4099) });
+      port = await getPort({ port: portNumbers(4000, 4099) });
     }
     const serversDir = await findServersDir(await findProjectRoot());
     const toolsJsonPath = path.join(serversDir, 'tools.json');
@@ -79,13 +79,13 @@ export const uiStart = new Command('ui:start')
           );
           logger.info(`  To stop the UI, run \`genkit ui:stop\`.\n`);
           return;
-        } catch (error) {
+        } catch {
           logger.debug(
             'Found UI server metadata but server is not healthy. Starting a new one...'
           );
         }
       }
-    } catch (error) {
+    } catch {
       logger.debug('No UI running. Starting a new one...');
     }
     logger.info('Starting...');
@@ -108,7 +108,7 @@ export const uiStart = new Command('ui:start')
           2
         )
       );
-    } catch (error) {
+    } catch {
       logger.error(
         `Failed to write UI server metadata. UI server will continue to run.`
       );
@@ -119,13 +119,13 @@ export const uiStart = new Command('ui:start')
     logger.info(`  To stop the UI, run \`genkit ui:stop\`.\n`);
     try {
       await axios.get(`http://localhost:${port}/api/trpc/listActions`);
-    } catch (error) {
+    } catch {
       logger.info(
         'Set env variable `GENKIT_ENV` to `dev` and start your app code to interact with it in the UI.'
       );
     }
     if (options.open) {
-      open(`http://localhost:${port}`);
+      await Promise.resolve(open(`http://localhost:${port}`)).catch(() => {});
     }
   });
 

@@ -17,9 +17,9 @@
 import * as fsSync from 'fs';
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import type { Runtime } from '../manager/types';
-import { isConnectionRefusedError } from './errors';
-import { logger } from './logger';
+import type { Runtime } from '../manager/types.js';
+import { isConnectionRefusedError } from './errors.js';
+import { logger } from './logger.js';
 
 export interface DevToolsInfo {
   /** URL of the dev tools server. */
@@ -215,7 +215,7 @@ export async function waitUntilHealthy(
       if (response.status === 200) {
         return true;
       }
-    } catch (error) {
+    } catch {
       // Ignore errors and continue retrying
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
@@ -233,7 +233,7 @@ export async function waitUntilUnresponsive(
   const startTime = Date.now();
   while (Date.now() - startTime < maxTimeout) {
     try {
-      const health = await fetch(`${url}/api/__health`);
+      await fetch(`${url}/api/__health`);
     } catch (error) {
       if (isConnectionRefusedError(error)) {
         return true;

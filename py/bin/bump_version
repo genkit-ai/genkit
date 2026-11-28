@@ -30,7 +30,7 @@ NC='\033[0m' # No Color
 
 # Get the directory of this script and the py directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PY_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PY_DIR="${GENKIT_PY_DIR:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
 
 cd "$PY_DIR"
 
@@ -50,6 +50,7 @@ usage() {
   echo "  --minor        Bump minor version (x.Y.0)"
   echo "  --patch        Bump patch version (x.y.Z)"
   echo "  --dry-run      Show what would be changed without making changes"
+  echo "  --no-lock      Skip updating uv.lock"
   echo "  -h, --help     Show this help message"
   echo ""
   echo "Current version: $CURRENT_VERSION"
@@ -66,6 +67,7 @@ IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
 
 # Parse arguments
 DRY_RUN=false
+NO_LOCK=false
 NEW_VERSION=""
 
 while [[ $# -gt 0 ]]; do
@@ -90,6 +92,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --dry-run)
       DRY_RUN=true
+      shift
+      ;;
+    --no-lock)
+      NO_LOCK=true
       shift
       ;;
     -h|--help)
@@ -126,6 +132,12 @@ if ! [[ "$NEW_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   exit 1
 fi
 
+IFS='.' read -r NEW_MAJOR _ _ <<< "$NEW_VERSION"
+NEW_CAP=$((NEW_MAJOR + 1))
+if [ "$NEW_CAP" -lt 2 ]; then
+  NEW_CAP=2
+fi
+
 echo -e "${BLUE}╔════════════════════════════════════════════════════════════════╗${NC}"
 echo -e "${BLUE}║              Genkit Python Version Bump                        ║${NC}"
 echo -e "${BLUE}╚════════════════════════════════════════════════════════════════╝${NC}"
@@ -139,24 +151,41 @@ if $DRY_RUN; then
   echo ""
 fi
 
+# sed expressions applied to every pyproject.toml:
+#   - the version line
+#   - exact intra-repo pins (e.g. genkit-openai==X.Y.Z in genkit-vertexai's extras)
+#   - capped intra-repo ranges: floor moves to $NEW_VERSION and major cap moves
+#     to max(2, major + 1), except 0.x-only specs explicitly capped at <1 (such
+#     as genkit-evaluators), which keep <1 while on 0.x.
+CUR_RE=$(printf '%s' "$CURRENT_VERSION" | sed 's/\./\\./g')
+DEP_RE='\("genkit[a-z0-9-]*\(\[[a-z0-9,_-]*\]\)\{0,1\}\)'
+SED_ARGS=(
+  -e "s/^version *= *\"$CUR_RE\"/version = \"$NEW_VERSION\"/"
+  -e "s/$DEP_RE==$CUR_RE\"/\\1==$NEW_VERSION\"/g"
+  -e "s/$DEP_RE>=$CUR_RE,<[2-9]\"/\\1>=$NEW_VERSION,<$NEW_CAP\"/g"
+  -e "s/$DEP_RE>=$CUR_RE,<[1-9][0-9][0-9]*\"/\\1>=$NEW_VERSION,<$NEW_CAP\"/g"
+)
+if [ "$NEW_MAJOR" -eq 0 ]; then
+  SED_ARGS+=(-e "s/$DEP_RE>=$CUR_RE,<1\"/\\1>=$NEW_VERSION,<1\"/g")
+fi
+
 # Function to update version in a file
 update_version() {
   local file="$1"
   local pkg_name
   pkg_name=$(grep '^name' "$file" | head -1 | sed 's/.*= *"//' | sed 's/".*//')
-  
+
   if $DRY_RUN; then
     echo -e "  Would update: $file ($pkg_name)"
+    # Show every rewritten line, so pin and floor changes can be checked before applying.
+    sed "${SED_ARGS[@]}" "$file" | diff "$file" - | sed -n 's/^> /      /p' || true
   else
-    # Use sed to replace the version line and exact intra-repo pins
-    # (e.g. genkit-openai==X.Y.Z in genkit-vertexai's extras).
-    local pin_expr="s/\\(\"genkit[a-z0-9-]*\\(\\[[a-z0-9,-]*\\]\\)\\{0,1\\}\\)==$CURRENT_VERSION\"/\\1==$NEW_VERSION\"/g"
     if [[ "$OSTYPE" == "darwin"* ]]; then
       # macOS sed
-      sed -i '' -e "s/^version *= *\"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" -e "$pin_expr" "$file"
+      sed -i '' "${SED_ARGS[@]}" "$file"
     else
       # GNU sed
-      sed -i -e "s/^version *= *\"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" -e "$pin_expr" "$file"
+      sed -i "${SED_ARGS[@]}" "$file"
     fi
     echo -e "  ${GREEN}✓${NC} Updated: $file ($pkg_name)"
   fi
@@ -188,11 +217,13 @@ if $DRY_RUN; then
   echo -e "${YELLOW}[DRY RUN] No changes were made.${NC}"
   echo -e "Run without --dry-run to apply changes."
 else
-  # Update lock file
-  echo -e "${CYAN}Updating lock file...${NC}"
-  uv lock > /dev/null 2>&1
-  echo -e "  ${GREEN}✓${NC} uv.lock updated"
-  
+  if ! $NO_LOCK; then
+    # Update lock file
+    echo -e "${CYAN}Updating lock file...${NC}"
+    uv lock > /dev/null 2>&1
+    echo -e "  ${GREEN}✓${NC} uv.lock updated"
+  fi
+
   echo ""
   echo -e "${GREEN}╔════════════════════════════════════════════════════════════════╗${NC}"
   echo -e "${GREEN}║  ✓ Version bumped to $NEW_VERSION                               ║${NC}"

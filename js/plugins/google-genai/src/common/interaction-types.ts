@@ -32,10 +32,7 @@ export declare interface InteractionGoogleSearchTool {
   type: 'google_search';
   /** Unknown search types are passed through for forward compatibility. */
   search_types?: (
-    | 'web_search'
-    | 'image_search'
-    | 'enterprise_web_search'
-    | (string & {})
+    'web_search' | 'image_search' | 'enterprise_web_search' | (string & {})
   )[];
 }
 
@@ -716,27 +713,19 @@ export declare interface AntigravityAgentConfig {
  * Service Tier
  */
 export declare type ServiceTier =
-  | 'flex'
-  | 'standard'
-  | 'priority'
-  | (string & {});
+  'flex' | 'standard' | 'priority' | (string & {});
 
 /**
  * Configuration for the agent.
  */
 export type InteractionsAgentConfig =
-  | DynamicAgentConfig
-  | DeepResearchAgentConfig
-  | AntigravityAgentConfig;
+  DynamicAgentConfig | DeepResearchAgentConfig | AntigravityAgentConfig;
 
 /**
  * Indicates the model should return text, images, or audio.
  */
 export declare type ResponseModality =
-  | 'text'
-  | 'image'
-  | 'audio'
-  | (string & {});
+  'text' | 'image' | 'audio' | (string & {});
 
 /**
  * A safety setting: the threshold for blocking one harm category.

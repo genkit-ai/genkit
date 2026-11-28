@@ -31,7 +31,7 @@ import random
 from _ai import ai, reply_text
 from pydantic import BaseModel
 
-from genkit import ActionRunContext
+from genkit import FlowContext
 from genkit.exp.agent import FileSessionStore
 
 
@@ -63,7 +63,7 @@ weather_agent = ai.define_agent(
 
 
 @ai.flow()
-async def test_weather_agent(text: str, ctx: ActionRunContext) -> str:
+async def test_weather_agent(text: str, ctx: FlowContext) -> str:
     """One streamed turn. Tools light up as they're called; text streams as it lands."""
     chat = weather_agent.chat()
     turn = chat.send_stream(text or 'What is the weather like in London?')
@@ -78,7 +78,7 @@ async def test_weather_agent(text: str, ctx: ActionRunContext) -> str:
 
 
 @ai.flow()
-async def test_weather_agent_stream(text: str, ctx: ActionRunContext) -> str:
+async def test_weather_agent_stream(text: str, ctx: FlowContext) -> str:
     """Multi-turn: one chat carries history across turns, so the follow-up just knows."""
     chat = weather_agent.chat()
 

@@ -33,11 +33,11 @@ from genkit._core._action import Action, ActionKind
 from genkit._core._dap import (
     DapMetadata,
     DapValue,
-    DynamicActionProvider,
     is_dynamic_action_provider,
 )
 from genkit._core._registry import Registry, define_dynamic_action_provider
 from genkit._core._typing import ActionMetadata
+from genkit.plugin_api import DynamicActionProvider
 
 
 @pytest.fixture
@@ -120,7 +120,7 @@ async def test_dap_tool_v2_bucket_is_not_found_by_mcp_tool_echo(registry: Regist
     """{tool.v2: [...]} is missed by mcp:tool/echo."""
 
     async def dap_fn() -> DapValue:
-        return {ActionKind.TOOL: [tool1]}
+        return {ActionKind.TOOL_V2: [tool1]}
 
     dap = define_dynamic_action_provider(registry, 'my-dap', dap_fn)
 

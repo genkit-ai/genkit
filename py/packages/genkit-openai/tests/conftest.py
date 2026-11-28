@@ -43,8 +43,8 @@ def sample_request() -> ModelRequest:
             model='gpt-4',
             top_p=0.9,
             temperature=0.7,
-            stop=['stop'],
-            max_tokens=100,
+            stop_sequences=['stop'],
+            max_output_tokens=100,
         ),
     )
 

@@ -19,7 +19,7 @@ import { randomUUID } from 'crypto';
 import { createReadStream } from 'fs';
 import { readFile } from 'fs/promises';
 import { createInterface } from 'readline';
-import type { BaseRuntimeManager } from '../manager';
+import type { BaseRuntimeManager } from '../manager/index.js';
 import {
   findToolsConfig,
   isEvalField,
@@ -28,7 +28,7 @@ import {
   type InputStepSelector,
   type OutputStepSelector,
   type StepSelector,
-} from '../plugin';
+} from '../plugin/index.js';
 import {
   DatasetSchema,
   EvalInputDatasetSchema,
@@ -48,9 +48,9 @@ import {
   type NestedSpanData,
   type RetrieverResponse,
   type TraceData,
-} from '../types';
-import { logger } from './logger';
-import { stackTraceSpans } from './trace';
+} from '../types/index.js';
+import { logger } from './logger.js';
+import { stackTraceSpans } from './trace.js';
 
 export type EvalExtractorFn = (t: TraceData) => any;
 
@@ -98,7 +98,7 @@ function safeParse(value?: string) {
   if (value) {
     try {
       return JSON.parse(value);
-    } catch (e) {
+    } catch {
       return '';
     }
   }
@@ -173,8 +173,8 @@ function getExtractorFromStepSelector(
   stepSelector: StepSelector
 ): EvalExtractorFn {
   return (trace: TraceData) => {
-    let stepName: string | undefined = undefined;
-    let selectedAttribute = 'genkit:output'; // default
+    let stepName: string | undefined;
+    let selectedAttribute: string;
 
     if (Object.hasOwn(stepSelector, 'inputOf')) {
       stepName = (stepSelector as InputStepSelector).inputOf;
@@ -329,7 +329,7 @@ export async function hasAction(params: {
   const { manager, actionRef } = { ...params };
   const actionsRecord = await manager.listActions();
 
-  return actionsRecord.hasOwnProperty(actionRef);
+  return Object.hasOwn(actionsRecord, actionRef);
 }
 
 export async function getAction(params: {
@@ -381,7 +381,7 @@ export function groupBy(
     const key =
       typeof criteria === 'function' ? criteria(item) : item[criteria];
 
-    if (!obj.hasOwnProperty(key)) {
+    if (!Object.hasOwn(obj, key)) {
       obj[key] = [];
     }
     obj[key].push(item);

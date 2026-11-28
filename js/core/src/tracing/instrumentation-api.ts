@@ -145,14 +145,14 @@ export function metadataToAttributes(
   metadata: SpanMetadata
 ): Record<string, string> {
   const out = {} as Record<string, string>;
-  Object.keys(metadata).forEach((key) => {
+  (Object.keys(metadata) as (keyof SpanMetadata)[]).forEach((key) => {
     if (
       key === 'metadata' &&
       typeof metadata[key] === 'object' &&
       metadata.metadata
     ) {
       Object.entries(metadata.metadata).forEach(([metaKey, value]) => {
-        out[ATTR_PREFIX + ':metadata:' + metaKey] = value;
+        out[ATTR_PREFIX + ':metadata:' + metaKey] = value as string;
       });
     } else if (
       key === 'input' ||
@@ -161,7 +161,7 @@ export function metadataToAttributes(
     ) {
       out[ATTR_PREFIX + ':' + key] = JSON.stringify(metadata[key]);
     } else {
-      out[ATTR_PREFIX + ':' + key] = metadata[key];
+      out[ATTR_PREFIX + ':' + key] = metadata[key] as string;
     }
   });
   return out;

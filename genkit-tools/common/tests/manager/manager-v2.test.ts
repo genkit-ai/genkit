@@ -1,0 +1,758 @@
+/**
+ * Copyright 2024 Google LLC
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import WebSocket from 'ws';
+import { RuntimeManagerV2 } from '../../src/manager/manager-v2.js';
+import {
+  REFLECTION_AUTH_ERROR_CODE,
+  REFLECTION_SECRET_ENV,
+} from '../../src/manager/reflection-auth.js';
+import { RuntimeEvent } from '../../src/manager/types.js';
+
+describe('RuntimeManagerV2', () => {
+  let manager: RuntimeManagerV2;
+  let wsClient: WebSocket;
+  let port: number;
+
+  beforeEach(async () => {
+    manager = await RuntimeManagerV2.create({
+      projectRoot: './',
+    });
+    port = manager.port!;
+  });
+
+  afterEach(async () => {
+    if (wsClient) {
+      wsClient.close();
+    }
+    // Clean up server
+    await manager.stop();
+  });
+
+  it('should accept connections and handle registration', async () => {
+    wsClient = new WebSocket(`ws://localhost:${port}`);
+
+    await new Promise<void>((resolve, reject) => {
+      const unsubscribe = manager.onRuntimeEvent((event, runtime) => {
+        if (event === RuntimeEvent.ADD) {
+          try {
+            expect(runtime.id).toBe('test-runtime-1');
+            expect(runtime.pid).toBe(1234);
+            expect(manager.listRuntimes()).toHaveLength(1);
+            unsubscribe();
+            resolve();
+          } catch (err) {
+            unsubscribe();
+            reject(err);
+          }
+        }
+      });
+
+      wsClient.on('error', reject);
+      wsClient.on('open', () => {
+        const registerMessage = {
+          jsonrpc: '2.0',
+          method: 'register',
+          params: {
+            id: 'test-runtime-1',
+            pid: 1234,
+            name: 'Test Runtime',
+            genkitVersion: '0.0.1',
+            reflectionApiSpecVersion: 1,
+          },
+          id: '1',
+        };
+        wsClient.send(JSON.stringify(registerMessage));
+      });
+    });
+  });
+
+  it('should allow unsubscribing from runtime events', async () => {
+    wsClient = new WebSocket(`ws://localhost:${port}`);
+    const listener = vi.fn();
+
+    const unsubscribe = manager.onRuntimeEvent(listener);
+
+    await new Promise<void>((resolve) => {
+      wsClient.on('open', () => {
+        wsClient.send(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'register',
+            params: { id: 'test-runtime-unsubscribe', pid: 1234 },
+            id: '1',
+          })
+        );
+        setTimeout(resolve, 100);
+      });
+    });
+
+    // Wait for event
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(listener).toHaveBeenCalled();
+
+    unsubscribe();
+    listener.mockClear();
+
+    // Trigger another event (e.g. disconnect)
+    wsClient.close();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it('should send requests and handle responses', async () => {
+    wsClient = new WebSocket(`ws://localhost:${port}`);
+
+    await new Promise<void>((resolve) => {
+      wsClient.on('open', () => {
+        wsClient.send(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'register',
+            params: { id: 'test-runtime-2', pid: 1234 },
+            id: '1',
+          })
+        );
+        // Wait for server to acknowledge or just wait a bit
+        setTimeout(resolve, 100);
+      });
+    });
+
+    // Mock runtime response to runAction
+    wsClient.on('message', (data) => {
+      const message = JSON.parse(data.toString());
+      if (message.method === 'runAction') {
+        const response = {
+          jsonrpc: '2.0',
+          result: {
+            result: 'Hello World',
+            telemetry: {
+              traceId: '1234',
+            },
+          },
+          id: message.id,
+        };
+        wsClient.send(JSON.stringify(response));
+      }
+    });
+
+    const response = await manager.runAction({
+      key: 'testAction',
+      input: {},
+    });
+
+    expect(response.result).toBe('Hello World');
+    expect(response.telemetry).toStrictEqual({
+      traceId: '1234',
+    });
+  });
+
+  it('should handle listValues', async () => {
+    wsClient = new WebSocket(`ws://localhost:${port}`);
+
+    await new Promise<void>((resolve) => {
+      wsClient.on('open', () => {
+        wsClient.send(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'register',
+            params: { id: 'test-runtime-values', pid: 1234 },
+            id: '1',
+          })
+        );
+        setTimeout(resolve, 100);
+      });
+    });
+
+    wsClient.on('message', (data) => {
+      const message = JSON.parse(data.toString());
+      if (message.method === 'listValues') {
+        const response = {
+          jsonrpc: '2.0',
+          result: {
+            values: {
+              'my-prompt': { template: 'foo' },
+            },
+          },
+          id: message.id,
+        };
+        wsClient.send(JSON.stringify(response));
+      }
+    });
+
+    const values = await manager.listValues({
+      type: 'prompt',
+    });
+
+    expect(values['my-prompt']).toBeDefined();
+    expect(values['my-prompt']).toEqual({ template: 'foo' });
+  });
+
+  it('should handle streaming', async () => {
+    wsClient = new WebSocket(`ws://localhost:${port}`);
+
+    await new Promise<void>((resolve) => {
+      wsClient.on('open', () => {
+        wsClient.send(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'register',
+            params: { id: 'test-runtime-3', pid: 1234 },
+            id: '1',
+          })
+        );
+        setTimeout(resolve, 100);
+      });
+    });
+
+    wsClient.on('message', (data) => {
+      const message = JSON.parse(data.toString());
+      if (message.method === 'runAction' && message.params.stream) {
+        // Send chunk 1
+        wsClient.send(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'streamChunk',
+            params: { requestId: message.id, chunk: { content: 'Hello' } },
+          })
+        );
+        // Send chunk 2
+        wsClient.send(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'streamChunk',
+            params: { requestId: message.id, chunk: { content: ' World' } },
+          })
+        );
+        // Send final result
+        wsClient.send(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            result: { result: 'Hello World', telemetry: {} },
+            id: message.id,
+          })
+        );
+      }
+    });
+
+    const chunks: any[] = [];
+    const response = await manager.runAction(
+      {
+        key: 'testAction',
+        input: {},
+      },
+      (chunk) => {
+        chunks.push(chunk);
+      }
+    );
+
+    expect(chunks).toHaveLength(2);
+    expect(chunks[0]).toEqual({ content: 'Hello' });
+    expect(chunks[1]).toEqual({ content: ' World' });
+    expect(response.result).toBe('Hello World');
+    expect(response.telemetry).toBeDefined();
+  });
+
+  it('should handle streaming errors and massage the error object', async () => {
+    wsClient = new WebSocket(`ws://localhost:${port}`);
+
+    await new Promise<void>((resolve) => {
+      wsClient.on('open', () => {
+        wsClient.send(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'register',
+            params: { id: 'test-runtime-error', pid: 1234 },
+            id: '1',
+          })
+        );
+        setTimeout(resolve, 100);
+      });
+    });
+
+    wsClient.on('message', (data) => {
+      const message = JSON.parse(data.toString());
+      if (message.method === 'runAction' && message.params.stream) {
+        // Send chunk 1
+        wsClient.send(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'streamChunk',
+            params: { requestId: message.id, chunk: { content: 'Hello' } },
+          })
+        );
+        // Send error
+        const errorResponse = {
+          code: -32000,
+          message: 'Test Error',
+          data: {
+            code: 13,
+            message: 'Test Error',
+            details: {
+              stack: 'Error stack...',
+              traceId: 'trace-123',
+            },
+          },
+        };
+        wsClient.send(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            error: errorResponse,
+            id: message.id,
+          })
+        );
+      }
+    });
+
+    const chunks: any[] = [];
+    try {
+      await manager.runAction(
+        {
+          key: 'testAction',
+          input: {},
+        },
+        (chunk) => {
+          chunks.push(chunk);
+        }
+      );
+      throw new Error('Should have thrown');
+    } catch (err: any) {
+      expect(chunks).toHaveLength(1);
+      expect(chunks[0]).toEqual({ content: 'Hello' });
+      expect(err.message).toBe('Test Error');
+      expect(err.data).toBeDefined();
+      expect(err.data.data.genkitErrorMessage).toBe('Test Error');
+      expect(err.data.stack).toBe('Error stack...');
+      expect(err.data.data.genkitErrorDetails).toEqual({
+        stack: 'Error stack...',
+        traceId: 'trace-123',
+      });
+    }
+  });
+
+  it('should send cancelAction request', async () => {
+    wsClient = new WebSocket(`ws://localhost:${port}`);
+
+    await new Promise<void>((resolve) => {
+      wsClient.on('open', () => {
+        wsClient.send(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'register',
+            params: { id: 'test-runtime-cancel', pid: 1234 },
+            id: '1',
+          })
+        );
+        setTimeout(resolve, 100);
+      });
+    });
+
+    wsClient.on('message', (data) => {
+      const message = JSON.parse(data.toString());
+      if (message.method === 'cancelAction') {
+        const response = {
+          jsonrpc: '2.0',
+          result: {
+            message: 'Action cancelled',
+          },
+          id: message.id,
+        };
+        wsClient.send(JSON.stringify(response));
+      }
+    });
+
+    const response = await manager.cancelAction({
+      traceId: '1234',
+    });
+
+    expect(response.message).toBe('Action cancelled');
+  });
+
+  it('should handle listActions with null action metadata', async () => {
+    wsClient = new WebSocket(`ws://localhost:${port}`);
+
+    await new Promise<void>((resolve) => {
+      wsClient.on('open', () => {
+        wsClient.send(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'register',
+            params: { id: 'test-runtime-list-actions', pid: 1234 },
+            id: '1',
+          })
+        );
+        setTimeout(resolve, 100);
+      });
+    });
+
+    wsClient.on('message', (data) => {
+      const message = JSON.parse(data.toString());
+      if (message.method === 'listActions') {
+        // Some runtimes (e.g. Go) send actions with an explicit null metadata.
+        const response = {
+          jsonrpc: '2.0',
+          result: {
+            actions: {
+              '/util/generate': {
+                key: '/util/generate',
+                name: 'generate',
+                metadata: null,
+              },
+            },
+          },
+          id: message.id,
+        };
+        wsClient.send(JSON.stringify(response));
+      }
+    });
+
+    const actions = await manager.listActions();
+    expect(actions['/util/generate']).toBeDefined();
+    expect(actions['/util/generate'].name).toBe('generate');
+  });
+
+  it('should reject the request (not hang) when a response fails validation', async () => {
+    wsClient = new WebSocket(`ws://localhost:${port}`);
+
+    await new Promise<void>((resolve) => {
+      wsClient.on('open', () => {
+        wsClient.send(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'register',
+            params: { id: 'test-runtime-bad-response', pid: 1234 },
+            id: '1',
+          })
+        );
+        setTimeout(resolve, 100);
+      });
+    });
+
+    wsClient.on('message', (data) => {
+      const message = JSON.parse(data.toString());
+      if (message.method === 'listActions') {
+        // Missing the required `actions` field, so schema parsing will throw.
+        const response = {
+          jsonrpc: '2.0',
+          result: { notActions: {} },
+          id: message.id,
+        };
+        wsClient.send(JSON.stringify(response));
+      }
+    });
+
+    await expect(manager.listActions()).rejects.toThrow();
+  });
+
+  it('should handle runActionState for early trace info', async () => {
+    wsClient = new WebSocket(`ws://localhost:${port}`);
+
+    await new Promise<void>((resolve) => {
+      wsClient.on('open', () => {
+        wsClient.send(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'register',
+            params: { id: 'test-runtime-trace', pid: 1234 },
+            id: '1',
+          })
+        );
+        setTimeout(resolve, 100);
+      });
+    });
+
+    wsClient.on('message', (data) => {
+      const message = JSON.parse(data.toString());
+      if (message.method === 'runAction') {
+        // Send runActionState with traceId
+        wsClient.send(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'runActionState',
+            params: {
+              requestId: message.id,
+              state: {
+                traceId: 'early-trace-id',
+              },
+            },
+          })
+        );
+
+        // Send final result
+        const response = {
+          jsonrpc: '2.0',
+          result: {
+            result: 'Hello World',
+            telemetry: {
+              traceId: 'early-trace-id',
+            },
+          },
+          id: message.id,
+        };
+        wsClient.send(JSON.stringify(response));
+      }
+    });
+
+    let capturedTraceId: string | undefined;
+    const response = await manager.runAction(
+      {
+        key: 'testAction',
+        input: {},
+      },
+      undefined,
+      (traceId) => {
+        capturedTraceId = traceId;
+      }
+    );
+
+    expect(capturedTraceId).toBe('early-trace-id');
+    expect(response.result).toBe('Hello World');
+  });
+});
+
+describe('RuntimeManagerV2 reflection auth', () => {
+  const SECRET = 'test-secret';
+  let manager: RuntimeManagerV2;
+  let wsClient: WebSocket | undefined;
+
+  /** Registers with the given params and resolves with the server's reply. */
+  function register(port: number, params: Record<string, unknown>) {
+    return new Promise<{ message: any; closeCode: number | undefined }>(
+      (resolve) => {
+        const client = new WebSocket(`ws://127.0.0.1:${port}`);
+        wsClient = client;
+        let message: any;
+        client.on('open', () => {
+          client.send(
+            JSON.stringify({
+              jsonrpc: '2.0',
+              method: 'register',
+              params,
+              id: '1',
+            })
+          );
+        });
+        client.on('message', (data) => {
+          message = JSON.parse(data.toString());
+        });
+        client.on('close', (code) => resolve({ message, closeCode: code }));
+        // A successful register keeps the socket open, so stop waiting for it.
+        setTimeout(() => resolve({ message, closeCode: undefined }), 300);
+      }
+    );
+  }
+
+  afterEach(async () => {
+    wsClient?.close();
+    wsClient = undefined;
+    await manager.stop();
+  });
+
+  it('binds loopback by default', async () => {
+    manager = await RuntimeManagerV2.create({ projectRoot: './' });
+    expect(manager.boundHost).toBe('127.0.0.1');
+  });
+
+  it('binds the configured reflectionV2Host', async () => {
+    manager = await RuntimeManagerV2.create({
+      projectRoot: './',
+      reflectionV2Host: '0.0.0.0',
+      reflectionSecret: SECRET,
+    });
+    expect(manager.boundHost).toBe('0.0.0.0');
+    // Reachable on loopback, and the runtime is advertised there.
+    await register(manager.port!, { id: 'rt-any', pid: 1, secret: SECRET });
+    expect(manager.listRuntimes()[0].reflectionServerUrl).toBe(
+      `ws://127.0.0.1:${manager.port}`
+    );
+  });
+
+  it('accepts a register carrying the right secret', async () => {
+    manager = await RuntimeManagerV2.create({
+      projectRoot: './',
+      reflectionSecret: SECRET,
+    });
+    const { message } = await register(manager.port!, {
+      id: 'rt-ok',
+      pid: 1,
+      secret: SECRET,
+    });
+    expect(message.error).toBeUndefined();
+    expect(manager.listRuntimes().map((r) => r.id)).toEqual(['rt-ok']);
+  });
+
+  it('rejects a register with no secret and does not add the runtime', async () => {
+    manager = await RuntimeManagerV2.create({
+      projectRoot: './',
+      reflectionSecret: SECRET,
+    });
+    const { message, closeCode } = await register(manager.port!, {
+      id: 'rt-missing',
+      pid: 2,
+    });
+    expect(message.error.code).toBe(REFLECTION_AUTH_ERROR_CODE);
+    expect(message.error.message).toContain('--experimental-auth');
+    expect(message.error.message).toContain(REFLECTION_SECRET_ENV);
+    expect(closeCode).toBe(1008);
+    expect(manager.listRuntimes()).toEqual([]);
+  });
+
+  it('rejects a register with a wrong secret', async () => {
+    manager = await RuntimeManagerV2.create({
+      projectRoot: './',
+      reflectionSecret: SECRET,
+    });
+    const { message, closeCode } = await register(manager.port!, {
+      id: 'rt-wrong',
+      pid: 3,
+      secret: 'nope',
+    });
+    expect(message.error.code).toBe(REFLECTION_AUTH_ERROR_CODE);
+    expect(closeCode).toBe(1008);
+    expect(manager.listRuntimes()).toEqual([]);
+  });
+
+  it('accepts a register without a secret when the manager has none', async () => {
+    manager = await RuntimeManagerV2.create({ projectRoot: './' });
+    const { message } = await register(manager.port!, {
+      id: 'rt-unsecured',
+      pid: 4,
+    });
+    expect(message.error).toBeUndefined();
+    expect(manager.listRuntimes().map((r) => r.id)).toEqual(['rt-unsecured']);
+  });
+
+  it('ignores a register pipelined behind a rejected one', async () => {
+    manager = await RuntimeManagerV2.create({
+      projectRoot: './',
+      reflectionSecret: SECRET,
+    });
+    const { messages, closeCode } = await new Promise<{
+      messages: any[];
+      closeCode: number;
+    }>((resolve) => {
+      const client = new WebSocket(`ws://127.0.0.1:${manager.port}`);
+      wsClient = client;
+      const messages: any[] = [];
+      const registerMsg = (id: string, secret: string) =>
+        JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'register',
+          params: { id: 'rt-pipelined', pid: 5, secret },
+          id,
+        });
+      client.on('open', () => {
+        // Both frames go out before the server can close the socket.
+        client.send(registerMsg('1', 'nope'));
+        client.send(registerMsg('2', SECRET));
+      });
+      client.on('message', (data) =>
+        messages.push(JSON.parse(data.toString()))
+      );
+      client.on('close', (code) => resolve({ messages, closeCode: code }));
+    });
+    expect(messages).toHaveLength(1);
+    expect(messages[0].id).toBe('1');
+    expect(messages[0].error.code).toBe(REFLECTION_AUTH_ERROR_CODE);
+    expect(closeCode).toBe(1008);
+    expect(manager.listRuntimes()).toEqual([]);
+  });
+
+  it('closes a connection whose first message is not register', async () => {
+    manager = await RuntimeManagerV2.create({
+      projectRoot: './',
+      reflectionSecret: SECRET,
+    });
+    const closeCode = await new Promise<number>((resolve) => {
+      const client = new WebSocket(`ws://127.0.0.1:${manager.port}`);
+      wsClient = client;
+      client.on('open', () => {
+        client.send(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'streamChunk',
+            params: { requestId: '1', chunk: 'x' },
+          })
+        );
+      });
+      client.on('close', (code) => resolve(code));
+    });
+    expect(closeCode).toBe(1008);
+    expect(manager.listRuntimes()).toEqual([]);
+  });
+});
+
+describe('RuntimeManagerV2 register reply', () => {
+  const TELEMETRY_URL = 'http://localhost:4033';
+
+  /** Registers a runtime and resolves with the JSON-RPC `register` result. */
+  async function register(
+    m: RuntimeManagerV2
+  ): Promise<{ telemetryServerUrl?: string }> {
+    const ws = new WebSocket(`ws://localhost:${m.port}`);
+    try {
+      return await new Promise((resolve, reject) => {
+        ws.on('error', reject);
+        ws.on('message', (data) => {
+          resolve(JSON.parse(data.toString()).result);
+        });
+        ws.on('open', () => {
+          ws.send(
+            JSON.stringify({
+              jsonrpc: '2.0',
+              method: 'register',
+              params: { id: 'test-runtime-telemetry', pid: 1234 },
+              id: '1',
+            })
+          );
+        });
+      });
+    } finally {
+      ws.close();
+    }
+  }
+
+  it('hands telemetryServerUrl to the runtime by default', async () => {
+    const m = await RuntimeManagerV2.create({
+      projectRoot: './',
+      telemetryServerUrl: TELEMETRY_URL,
+    });
+    try {
+      const result = await register(m);
+      expect(result.telemetryServerUrl).toBe(TELEMETRY_URL);
+    } finally {
+      await m.stop();
+    }
+  });
+
+  it('withholds telemetryServerUrl when suppressRuntimeTelemetry is set, but keeps it for UI reads', async () => {
+    const m = await RuntimeManagerV2.create({
+      projectRoot: './',
+      telemetryServerUrl: TELEMETRY_URL,
+      suppressRuntimeTelemetry: true,
+    });
+    try {
+      const result = await register(m);
+      expect(result.telemetryServerUrl).toBeUndefined();
+      // The manager still knows the URL so the Dev UI can read traces/logs.
+      expect(m.telemetryServerUrl).toBe(TELEMETRY_URL);
+    } finally {
+      await m.stop();
+    }
+  });
+});

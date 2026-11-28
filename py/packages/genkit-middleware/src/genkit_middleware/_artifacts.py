@@ -22,16 +22,17 @@ from collections.abc import Awaitable, Callable
 
 from pydantic import BaseModel, Field
 
-from genkit import Message, ModelResponse, Part, Role, Tool, tool
+from genkit import Message, ModelResponse, Part, Role, Tool
 from genkit.exp import current_session
 from genkit.exp.agent import Artifact
-from genkit.middleware import BaseMiddleware, GenerateHookParams, GenerateMiddlewareContext
+from genkit.middleware import GenerateHookParams, Middleware, MiddlewareContext
 from genkit.model import GenerateActionOptions
+from genkit.plugin_api import GenkitConfig
 
 ARTIFACTS_LISTING_MARKER = 'artifacts-middleware-listing'
 
 
-class ArtifactsConfig(BaseModel):
+class ArtifactsConfig(GenkitConfig):
     """Options for session artifact tools and prompt injection."""
 
     readonly: bool = Field(
@@ -134,10 +135,13 @@ def inject_artifact_listing(options: GenerateActionOptions, listing: str) -> Gen
     return new_options
 
 
-class Artifacts(BaseMiddleware[ArtifactsConfig]):
+class Artifacts(Middleware[ArtifactsConfig]):
     """Session artifact tools plus an injected artifact listing in the system prompt."""
 
-    def tools(self, ctx: GenerateMiddlewareContext) -> list[Tool]:
+    name = 'artifacts'
+    description = 'Session artifact tools plus an injected artifact listing in the system prompt'
+
+    def tools(self, ctx: MiddlewareContext) -> list[Tool]:
         tools: list[Tool] = []
 
         async def read_artifact(input: ReadArtifactInput) -> ReadArtifactOutput:
@@ -168,7 +172,7 @@ class Artifacts(BaseMiddleware[ArtifactsConfig]):
             )
 
         tools.append(
-            tool(
+            Tool(
                 read_artifact,
                 name='read_artifact',
                 description=(
@@ -190,7 +194,7 @@ class Artifacts(BaseMiddleware[ArtifactsConfig]):
                 return WriteArtifactOutput(status=f'Artifact "{input.name}" saved successfully.')
 
             tools.append(
-                tool(
+                Tool(
                     write_artifact,
                     name='write_artifact',
                     description=(
@@ -207,8 +211,8 @@ class Artifacts(BaseMiddleware[ArtifactsConfig]):
     async def wrap_generate(
         self,
         params: GenerateHookParams,
-        ctx: GenerateMiddlewareContext,
-        next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ctx: MiddlewareContext,
+        next_fn: Callable[[GenerateHookParams, MiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         session = current_session()
         artifacts = await session.get_artifacts() if session is not None else []

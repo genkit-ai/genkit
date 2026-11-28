@@ -1161,8 +1161,8 @@ describe('toAnthropicRequestBody', () => {
       },
     },
     {
-      should: '(claude-sonnet-4-5) handles request with text messages',
-      modelName: 'claude-sonnet-4-5',
+      should: '(claude-sonnet-5-5) handles request with text messages',
+      modelName: 'claude-sonnet-5-5',
       genkitRequest: {
         messages: [
           { role: 'user', content: [{ text: 'Tell a joke about dogs.' }] },
@@ -1189,7 +1189,7 @@ describe('toAnthropicRequestBody', () => {
             role: 'user',
           },
         ],
-        model: 'claude-sonnet-4-5',
+        model: 'claude-sonnet-5-5',
         metadata: {
           user_id: 'exampleUser123',
         },

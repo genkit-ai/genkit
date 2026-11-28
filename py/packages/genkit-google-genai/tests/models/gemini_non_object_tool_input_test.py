@@ -11,8 +11,8 @@ from genkit_google_genai._models._gemini import GeminiModel
 from google.genai import types as genai_types
 from pytest_mock import MockerFixture
 
-from genkit import ActionRunContext, Message, Part, Role
-from genkit.model import ModelRequest, ToolDefinition, ToolRequest
+from genkit import Message, Part, Role
+from genkit.model import ModelContext, ModelRequest, ToolDefinition, ToolRequest
 
 STRING_INPUT = {'type': 'string'}
 CITY_OBJECT_INPUT = {
@@ -45,7 +45,7 @@ def _gemini_calls(name: str, args: dict[str, Any]) -> genai_types.GenerateConten
 async def _generate(mocker: MockerFixture, request: ModelRequest, reply: genai_types.GenerateContentResponse) -> Any:  # noqa: ANN401
     client = mocker.AsyncMock()
     client.aio.models.generate_content.return_value = reply
-    response = await GeminiModel('gemini-2.5-flash', client).generate(request, ActionRunContext())
+    response = await GeminiModel('gemini-2.5-flash', client).generate(request, ModelContext())
     return response, client.aio.models.generate_content.call_args.kwargs
 
 
@@ -197,7 +197,7 @@ async def test_gemini_streaming_str_tool_call_receives_string(mocker: MockerFixt
 
     client.aio.models.generate_content_stream.return_value = stream()
     chunks: list[Any] = []
-    ctx = ActionRunContext(streaming_callback=chunks.append)
+    ctx = ModelContext(streaming_callback=chunks.append)
 
     response = await GeminiModel('gemini-2.5-flash', client).generate(_request(_tool(STRING_INPUT)), ctx)
 

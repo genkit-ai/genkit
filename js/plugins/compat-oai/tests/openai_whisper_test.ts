@@ -17,8 +17,10 @@
 
 import { describe, expect, it, jest } from '@jest/globals';
 import OpenAI from 'openai';
-import { Transcription } from 'openai/resources/audio/transcriptions.mjs';
-import { Translation } from 'openai/resources/audio/translations.mjs';
+import type {
+  Transcription,
+  Translation,
+} from 'openai/resources/audio/index.mjs';
 import { defineOpenAIWhisperModel } from '../src/openai/whisper';
 
 jest.mock('genkit/model', () => {

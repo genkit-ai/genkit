@@ -44,7 +44,7 @@ ai.defineFlow('anthropic-stable-hello', async () => {
 
 ai.defineFlow('anthropic-stable-stream', async (_, { sendChunk }) => {
   const { stream } = ai.generateStream({
-    model: anthropic.model('claude-sonnet-4-5'),
+    model: anthropic.model('claude-sonnet-5-5'),
     prompt: 'Compose a short limerick about using Genkit with Anthropic.',
   });
 

@@ -18,7 +18,7 @@
 import { describe, expect, it, jest } from '@jest/globals';
 import { GenerateRequest } from 'genkit';
 import OpenAI from 'openai';
-import { Translation } from 'openai/resources/audio/translations.mjs';
+import type { Translation } from 'openai/resources/audio/index.mjs';
 import {
   defineCompatOpenAITranslationModel,
   toTranslationRequest,
