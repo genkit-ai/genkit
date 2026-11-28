@@ -19,7 +19,12 @@ import { initNodeFeatures } from '@genkit-ai/core/node';
 import { Registry } from '@genkit-ai/core/registry';
 import * as assert from 'assert';
 import { beforeEach, describe, it } from 'node:test';
-import { defineReranker, rerank, reranker } from '../../src/reranker';
+import {
+  defineReranker,
+  rerank,
+  reranker,
+  rerankerRef,
+} from '../../src/reranker';
 import { Document } from '../../src/retriever';
 
 initNodeFeatures();
@@ -30,6 +35,29 @@ describe('reranker', () => {
     beforeEach(() => {
       registry = new Registry();
     });
+    it('resolves a reranker reference without optional info', async () => {
+      defineReranker(
+        registry,
+        { name: 'local' },
+        async (_query, documents) => ({
+          documents: documents.map((document) => ({
+            ...document,
+            metadata: { score: 1 },
+          })),
+        })
+      );
+
+      const documents = [Document.fromText('one')];
+      const result = await rerank(registry, {
+        reranker: rerankerRef({ name: 'local' }),
+        query: 'example',
+        documents,
+      });
+
+      assert.equal(result.length, 1);
+      assert.equal(result[0].text, 'one');
+    });
+
     it('reranks documents based on custom logic', async () => {
       const customReranker = defineReranker(
         registry,
