@@ -198,7 +198,7 @@ export async function rerank<CustomOptions extends z.ZodTypeAny>(
   let reranker: RerankerAction<CustomOptions>;
   if (typeof params.reranker === 'string') {
     reranker = await registry.lookupAction(`/reranker/${params.reranker}`);
-  } else if (Object.hasOwnProperty.call(params.reranker, 'info')) {
+  } else if (typeof params.reranker !== 'function') {
     reranker = await registry.lookupAction(`/reranker/${params.reranker.name}`);
   } else {
     reranker = params.reranker as RerankerAction<CustomOptions>;
