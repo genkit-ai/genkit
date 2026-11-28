@@ -16,12 +16,16 @@
  */
 
 import { describe, expect, it, jest } from '@jest/globals';
+import { logger } from 'genkit/logging';
 import OpenAI from 'openai';
 import type {
   Transcription,
   Translation,
 } from 'openai/resources/audio/index.mjs';
-import { defineOpenAIWhisperModel } from '../src/openai/whisper';
+import {
+  defineOpenAIWhisperModel,
+  WhisperConfigSchema,
+} from '../src/openai/whisper';
 
 jest.mock('genkit/model', () => {
   const originalModule =
@@ -149,6 +153,12 @@ describe('defineOpenAIWhisperModel runner — transcription (default)', () => {
 });
 
 describe('defineOpenAIWhisperModel runner — translation (translate: true)', () => {
+  it('marks translate as deprecated in the model config schema', () => {
+    expect(WhisperConfigSchema.shape.translate.description).toContain(
+      'February 26, 2027'
+    );
+  });
+
   it('should call translations.create when translate is true', async () => {
     const result: Translation = {
       text: 'Hello in English',
@@ -165,6 +175,7 @@ describe('defineOpenAIWhisperModel runner — translation (translate: true)', ()
       },
     };
     const abortSignal = jest.fn();
+    const warning = jest.spyOn(logger, 'warn').mockImplementation(() => {});
 
     const runner = defineOpenAIWhisperModel({
       name: 'whisper-1',
@@ -203,5 +214,9 @@ describe('defineOpenAIWhisperModel runner — translation (translate: true)', ()
       { signal: abortSignal }
     );
     expect(openaiClient.audio.transcriptions.create).not.toHaveBeenCalled();
+    expect(warning).toHaveBeenCalledWith(
+      expect.stringContaining('February 26, 2027')
+    );
+    warning.mockRestore();
   });
 });
