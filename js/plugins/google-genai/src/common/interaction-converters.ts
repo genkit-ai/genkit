@@ -90,7 +90,7 @@ export function ensureToolIds(messages: MessageData[]): MessageData[] {
   let nextIdCounter = 0;
 
   // Deep copy to avoid mutating original request messages
-  const newMessages = structuredClone(messages) as MessageData[];
+  const newMessages = structuredClone(messages);
 
   // First pass: find ToolRequests without ref
   for (const message of newMessages) {

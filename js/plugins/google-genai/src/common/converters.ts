@@ -131,9 +131,8 @@ function toGeminiSchemaProperty(
       items: toGeminiSchemaProperty(property.items),
     };
   } else {
-    const schemaType = (SchemaType as unknown as Record<string, SchemaType>)[
-      propertyType.toUpperCase()
-    ];
+    const upperType = propertyType.toUpperCase();
+    const schemaType = Object.values(SchemaType).find((t) => t === upperType);
     if (!schemaType) {
       throw new GenkitError({
         status: 'INVALID_ARGUMENT',
@@ -227,10 +226,12 @@ function toGeminiResource(part: Part): GeminiPart {
     throw Error('Invalid ResourcePart: uri was missing.');
   }
 
+  const mimeType = part.metadata?.mimeType;
   const media: GeminiPart = {
     fileData: {
       mimeType:
-        (part.metadata?.mimeType as string) || 'application/octet-stream',
+        (typeof mimeType === 'string' && mimeType) ||
+        'application/octet-stream',
       fileUri: part.resource.uri,
     },
   };
@@ -313,10 +314,10 @@ function maybeAddGeminiThoughtSignatureAndMetadata(
   if (part.metadata) {
     const { thoughtSignature, metadata } = part.metadata;
 
-    if (thoughtSignature) {
+    if (typeof thoughtSignature === 'string' && thoughtSignature) {
       updatedPart = {
         ...updatedPart,
-        thoughtSignature: thoughtSignature as string,
+        thoughtSignature,
       };
     }
 
@@ -598,7 +599,7 @@ export function applyGeminiPartialArgs(
     ) {
       current[finalKey] += partialArg.stringValue;
     } else {
-      current[finalKey] = value as any;
+      current[finalKey] = value;
     }
   }
 }
@@ -731,9 +732,8 @@ function fromCodeExecutionResult(part: GeminiPart): Part {
 }
 
 function fromGeminiText(part: GeminiPart): Part {
-  return maybeAddThoughtSignatureAndMetadata(part, {
-    text: part.text,
-  } as TextPart);
+  const textPart: TextPart = { text: part.text ?? '' };
+  return maybeAddThoughtSignatureAndMetadata(part, textPart);
 }
 
 function fromGeminiToolCall(part: GeminiPart): Part {
@@ -766,7 +766,7 @@ function fromGeminiPart(
   part: GeminiPart,
   previousChunks?: CandidateData[]
 ): Part {
-  if (part.thought) return fromGeminiThought(part as any);
+  if (part.thought) return fromGeminiThought(part);
   if (typeof part.text === 'string') return fromGeminiText(part);
   if (part.inlineData) return fromGeminiInlineData(part);
   if (part.fileData) return fromGeminiFileData(part);
@@ -776,7 +776,7 @@ function fromGeminiPart(
   if (part.toolResponse) return fromGeminiToolResponse(part);
   if (part.executableCode) return fromExecutableCode(part);
   if (part.codeExecutionResult) return fromCodeExecutionResult(part);
-  if (part.thoughtSignature) return fromGeminiThought(part as any);
+  if (part.thoughtSignature) return fromGeminiThought(part);
 
   throw new Error('Unsupported GeminiPart type ' + JSON.stringify(part));
 }

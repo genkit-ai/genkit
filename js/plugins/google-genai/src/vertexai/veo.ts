@@ -125,27 +125,30 @@ export type VeoConfig = InferOutput<VeoConfigSchemaType>;
 // This contains all the Veo config schema types
 type ConfigSchemaType = VeoConfigSchemaType;
 
+// `longRunning` isn't in ModelInfo's `supports` type, but Genkit requires it
+// at runtime for background models (generateOperation). Declaring `supports`
+// separately keeps it without a cast (excess-property checks only apply to
+// object literals written in place).
+const VEO_SUPPORTS = {
+  media: true,
+  multiturn: false,
+  tools: false,
+  systemRole: false,
+  output: ['media'],
+  longRunning: true,
+};
+const VEO_INFO: ModelInfo = { supports: VEO_SUPPORTS };
+
 function commonRef(
   name: string,
-  info?: ModelInfo,
+  info: ModelInfo = VEO_INFO,
   configSchema: ConfigSchemaType = VeoConfigSchema
 ): ModelReference<ConfigSchemaType> {
   // `model()` re-creates known refs under the requested namespace.
   return modelRef({
     name: `${DEFAULT_NAMESPACE}/${name}`,
     configSchema,
-    info:
-      info ??
-      ({
-        supports: {
-          media: true,
-          multiturn: false,
-          tools: false,
-          systemRole: false,
-          output: ['media'],
-          longRunning: true,
-        },
-      } as ModelInfo), // TODO(ifielker): Remove this cast if we fix longRunning
+    info,
   });
 }
 

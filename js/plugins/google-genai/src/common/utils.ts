@@ -985,10 +985,9 @@ export function parseStreamErrorText(text: string): Error {
     ) {
       // Coerce `code` to a number so a stringified code (e.g. "503") still maps.
       const rawCode = Number(apiError.code);
-      const status: StatusName = StatusNameSchema.safeParse(apiError.status)
-        .success
-        ? (apiError.status as StatusName)
-        : httpStatusToGenkitStatus(isNaN(rawCode) ? undefined : rawCode);
+      const status: StatusName =
+        StatusNameSchema.safeParse(apiError.status).data ??
+        httpStatusToGenkitStatus(isNaN(rawCode) ? undefined : rawCode);
       const message =
         typeof apiError.message === 'string'
           ? apiError.message
@@ -1263,7 +1262,7 @@ function aggregateResponses(
         }
 
         for (const part of candidate.content.parts) {
-          const newPart: Partial<Part> = {};
+          const newPart: Part = {};
 
           // Instead of iterating over the keys in the Object, which might
           // Contain new, unsupported things, we iterate over the PART_KEYS
@@ -1299,7 +1298,7 @@ function aggregateResponses(
           if (Object.keys(newPart).length === 0) {
             newPart.text = '';
           }
-          aggregatedCandidate.content.parts.push(newPart as Part);
+          aggregatedCandidate.content.parts.push(newPart);
         }
       }
     }
@@ -1324,17 +1323,15 @@ function aggregateMetadata<K extends keyof GenerateContentCandidate>(
     return;
   }
 
-  if (isObject(chunkObj)) {
-    const chunkRecord = chunkObj as Record<string, unknown>;
-    const aggRecord = aggObj as Record<string, unknown>;
-    for (const k of Object.keys(chunkRecord)) {
-      if (Array.isArray(aggRecord[k]) && Array.isArray(chunkRecord[k])) {
-        aggRecord[k] = (aggRecord[k] as unknown[]).concat(
-          chunkRecord[k] as unknown[]
-        );
+  if (isObject(chunkObj) && isObject(aggObj)) {
+    for (const k of Object.keys(chunkObj)) {
+      const aggValue = aggObj[k];
+      const chunkValue = chunkObj[k];
+      if (Array.isArray(aggValue) && Array.isArray(chunkValue)) {
+        aggObj[k] = aggValue.concat(chunkValue);
       } else {
         // last one wins, also handles only one being an array.
-        aggRecord[k] = chunkRecord[k] ?? aggRecord[k];
+        aggObj[k] = chunkValue ?? aggValue;
       }
     }
   }
@@ -1432,20 +1429,19 @@ export function convertObjectKeysToSnakeCase(
 export function convertObjectKeysToSnakeCase(obj: unknown): unknown;
 
 export function convertObjectKeysToSnakeCase(obj: unknown): unknown {
-  if (typeof obj !== 'object' || obj === null) {
-    return obj;
-  }
-
   if (Array.isArray(obj)) {
     return obj.map((item) => convertObjectKeysToSnakeCase(item));
   }
 
-  const objRecord = obj as Record<string, unknown>;
+  if (!isObject(obj)) {
+    return obj;
+  }
+
   const newObj: Record<string, unknown> = {};
-  for (const key in objRecord) {
-    if (Object.prototype.hasOwnProperty.call(objRecord, key)) {
+  for (const key in obj) {
+    if (Object.prototype.hasOwnProperty.call(obj, key)) {
       const snakeCaseKey = camelToSnakeCase(key);
-      newObj[snakeCaseKey] = convertObjectKeysToSnakeCase(objRecord[key]);
+      newObj[snakeCaseKey] = convertObjectKeysToSnakeCase(obj[key]);
     }
   }
   return newObj;

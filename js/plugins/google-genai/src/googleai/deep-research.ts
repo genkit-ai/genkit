@@ -162,44 +162,48 @@ export type DeepResearchConfig = InferOutput<DeepResearchConfigSchemaType>;
 // This contains all the DeepResearch config schema types
 type ConfigSchemaType = DeepResearchConfigSchemaType;
 
+// `longRunning` isn't in ModelInfo's `supports` type, but Genkit requires it
+// at runtime for background models (generateOperation). Declaring `supports`
+// separately keeps it without a cast (excess-property checks only apply to
+// object literals written in place).
+const DEEP_RESEARCH_SUPPORTS = {
+  multiturn: true,
+  media: false,
+  tools: false,
+  toolChoice: false,
+  systemRole: false,
+  output: ['text'],
+  longRunning: true,
+};
+const DEEP_RESEARCH_INFO: ModelInfo = { supports: DEEP_RESEARCH_SUPPORTS };
+
 function commonRef(
   name: string,
-  info?: ModelInfo,
+  info: ModelInfo = DEEP_RESEARCH_INFO,
   configSchema: ConfigSchemaType = DeepResearchConfigSchema
 ): ModelReference<ConfigSchemaType> {
   // `model()` re-creates known refs under the requested namespace.
   return modelRef({
     name: `${DEFAULT_NAMESPACE}/${name}`,
     configSchema,
-    info:
-      info ??
-      ({
-        supports: {
-          multiturn: true,
-          media: false,
-          tools: false,
-          toolChoice: false,
-          systemRole: false,
-          output: ['text'],
-          longRunning: true,
-        },
-      } as ModelInfo),
+    info,
   });
 }
 
 const GENERIC_MODEL = commonRef('deep-research');
 
-const ADVANCED_DEEP_RESEARCH_INFO = {
-  supports: {
-    multiturn: true,
-    media: true,
-    tools: true,
-    toolChoice: false,
-    systemRole: false,
-    output: ['text', 'media'],
-    longRunning: true,
-  },
-} as ModelInfo;
+const ADVANCED_DEEP_RESEARCH_SUPPORTS = {
+  multiturn: true,
+  media: true,
+  tools: true,
+  toolChoice: false,
+  systemRole: false,
+  output: ['text', 'media'],
+  longRunning: true,
+};
+const ADVANCED_DEEP_RESEARCH_INFO: ModelInfo = {
+  supports: ADVANCED_DEEP_RESEARCH_SUPPORTS,
+};
 
 const KNOWN_MODELS = {
   'deep-research-preview-04-2026': commonRef(
@@ -361,19 +365,19 @@ export function defineModel(
         tools.push({
           type: 'google_search',
           ...(googleSearch === true ? {} : googleSearch),
-        } as InteractionTool);
+        });
       }
       if (urlContext) {
         tools.push({
           type: 'url_context',
           ...(urlContext === true ? {} : urlContext),
-        } as InteractionTool);
+        });
       }
       if (codeExecution) {
         tools.push({
           type: 'code_execution',
           ...(codeExecution === true ? {} : codeExecution),
-        } as InteractionTool);
+        });
       }
       if (fileSearch) {
         const { fileSearchStoreNames, ...restFileSearch } = fileSearch;
@@ -381,7 +385,7 @@ export function defineModel(
           type: 'file_search',
           file_search_store_names: fileSearchStoreNames,
           ...restFileSearch,
-        } as InteractionTool);
+        });
       }
       if (mcpServers) {
         for (const mcpServer of mcpServers) {

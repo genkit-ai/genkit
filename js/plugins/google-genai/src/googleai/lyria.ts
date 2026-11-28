@@ -84,18 +84,16 @@ function commonRef(
   return modelRef({
     name: `${DEFAULT_NAMESPACE}/${name}`,
     configSchema,
-    info:
-      info ??
-      ({
-        supports: {
-          multiturn: false,
-          media: true, // Lyria supports images as multimodal input
-          tools: false,
-          toolChoice: false,
-          systemRole: false,
-          output: ['media', 'text'],
-        },
-      } as ModelInfo),
+    info: info ?? {
+      supports: {
+        multiturn: false,
+        media: true, // Lyria supports images as multimodal input
+        tools: false,
+        toolChoice: false,
+        systemRole: false,
+        output: ['media', 'text'],
+      },
+    },
   });
 }
 

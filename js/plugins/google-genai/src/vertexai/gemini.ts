@@ -1633,7 +1633,7 @@ export function defineModel(
 
         const chunks: CandidateData[] = [];
         for await (const item of result.stream) {
-          (item as GenerateContentResponse).candidates?.forEach((candidate) => {
+          item.candidates?.forEach((candidate) => {
             const c = fromGeminiCandidate(candidate, chunks);
             chunks.push(c);
             sendChunk({

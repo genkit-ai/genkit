@@ -52,7 +52,10 @@ const CLOUD_PLATFORM_OAUTH_SCOPE =
 function parseFirebaseProjectId(): string | undefined {
   if (!process.env.FIREBASE_CONFIG) return undefined;
   try {
-    return JSON.parse(process.env.FIREBASE_CONFIG).projectId as string;
+    const projectId: unknown = JSON.parse(
+      process.env.FIREBASE_CONFIG
+    ).projectId;
+    return typeof projectId === 'string' ? projectId : undefined;
   } catch {
     return undefined;
   }

@@ -397,11 +397,10 @@ function toEmbeddingResult(prediction: EmbeddingPrediction): EmbeddingResult[] {
     if (prediction.videoEmbeddings?.length) {
       for (const ve of prediction.videoEmbeddings) {
         if (ve.embedding?.length) {
-          const { embedding, ...metadata } = ve;
-          (metadata as Record<string, unknown>).embedType = 'videoEmbedding';
+          const { embedding, ...rest } = ve;
           const videoResult: EmbeddingResult = {
             embedding,
-            metadata,
+            metadata: { ...rest, embedType: 'videoEmbedding' },
           };
           eArray.push(videoResult);
         }
