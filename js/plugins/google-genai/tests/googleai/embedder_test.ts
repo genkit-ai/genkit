@@ -20,7 +20,9 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import * as sinon from 'sinon';
 import {
   EmbeddingConfig,
+  EmbeddingConfigSchema,
   defineEmbedder,
+  model,
 } from '../../src/googleai/embedder.js';
 import {
   EmbedContentResponse,
@@ -54,6 +56,36 @@ describe('defineGoogleAIEmbedder', () => {
   const defaultPluginOptions: GoogleAIPluginOptions = {
     apiKey: 'test-api-key-option',
   };
+
+  describe('namespace', () => {
+    it('names refs googleai/ by default', () => {
+      assert.strictEqual(
+        model('gemini-embedding-2').name,
+        'googleai/gemini-embedding-2'
+      );
+    });
+
+    it('names known and unlisted embedders under the given namespace', () => {
+      for (const name of ['gemini-embedding-2', 'gemini-embedding-9']) {
+        const ref = model(name, {}, 'googlegenai');
+        assert.strictEqual(ref.name, `googlegenai/${name}`);
+        assert.strictEqual(ref.configSchema, EmbeddingConfigSchema);
+        assert.deepStrictEqual(ref.info, model(name).info);
+      }
+    });
+
+    it('defines the embedder under the given namespace', () => {
+      const embedder = defineEmbedder(
+        'gemini-embedding-2',
+        defaultPluginOptions,
+        'googlegenai'
+      );
+      assert.strictEqual(
+        embedder.__action.name,
+        'googlegenai/gemini-embedding-2'
+      );
+    });
+  });
 
   describe('API Key Handling', () => {
     beforeEach(() => {

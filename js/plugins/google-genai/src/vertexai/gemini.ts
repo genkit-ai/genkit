@@ -95,12 +95,14 @@ import {
   VertexPluginOptions,
 } from './types.js';
 import {
+  DEFAULT_NAMESPACE,
   calculateRequestOptions,
   checkModelName,
   cleanSchema,
   extractVersion,
   modelName,
   toInteractionsClientOptions,
+  type PluginNamespace,
 } from './utils.js';
 
 export const SafetySettingsSchema = z
@@ -662,8 +664,9 @@ function commonRef(
 ): ModelReference<ConfigSchemaType> {
   modelInteractionsMap.set(name, useInteractions);
 
+  // `model()` re-creates known refs under the requested namespace.
   return modelRef({
-    name: `vertexai/${name}`,
+    name: `${DEFAULT_NAMESPACE}/${name}`,
     configSchema,
     info: info ?? {
       supports: {
@@ -933,17 +936,24 @@ function usesInteractions(modelVersion: string): boolean {
 
 export function model(
   version: string,
-  config: ConfigSchema = {}
+  config: ConfigSchema = {},
+  namespace: PluginNamespace = DEFAULT_NAMESPACE
 ): ModelReference<ConfigSchemaType> {
   const name = checkModelName(version);
 
   if (isKnownKey(name, ALL_MODELS)) {
-    return ALL_MODELS[name].withConfig(config);
+    const known = ALL_MODELS[name];
+    return modelRef({
+      name: `${namespace}/${name}`,
+      config,
+      configSchema: known.configSchema,
+      info: known.info,
+    });
   }
 
   if (isImageModelName(name)) {
     return modelRef({
-      name: `vertexai/${name}`,
+      name: `${namespace}/${name}`,
       config,
       configSchema: GeminiImageConfigSchema,
       info: { ...GENERIC_IMAGE_MODEL.info },
@@ -952,7 +962,7 @@ export function model(
 
   if (isVideoModelName(name)) {
     return modelRef({
-      name: `vertexai/${name}`,
+      name: `${namespace}/${name}`,
       config,
       configSchema: GeminiVideoConfigSchema,
       info: { ...GENERIC_VIDEO_MODEL.info },
@@ -961,7 +971,7 @@ export function model(
 
   if (isTTSModelName(name)) {
     return modelRef({
-      name: `vertexai/${name}`,
+      name: `${namespace}/${name}`,
       config,
       configSchema: GeminiTtsConfigSchema,
       info: { ...GENERIC_TTS_MODEL.info },
@@ -969,7 +979,7 @@ export function model(
   }
 
   return modelRef({
-    name: `vertexai/${name}`,
+    name: `${namespace}/${name}`,
     config,
     configSchema: GeminiConfigSchema,
     info: {
@@ -978,7 +988,10 @@ export function model(
   });
 }
 
-export function listActions(models: Model[]): ActionMetadata[] {
+export function listActions(
+  models: Model[],
+  namespace: PluginNamespace = DEFAULT_NAMESPACE
+): ActionMetadata[] {
   const KNOWN_DECOMISSIONED_MODELS = [
     'gemini-pro-vision',
     'gemini-pro',
@@ -996,7 +1009,7 @@ export function listActions(models: Model[]): ActionMetadata[] {
         !KNOWN_DECOMISSIONED_MODELS.includes(modelName(m.name) || '')
     )
     .map((m) => {
-      const ref = model(m.name);
+      const ref = model(m.name, {}, namespace);
       return modelActionMetadata({
         name: ref.name,
         info: ref.info,
@@ -1007,10 +1020,11 @@ export function listActions(models: Model[]): ActionMetadata[] {
 
 export function listKnownModels(
   clientOptions: ClientOptions,
-  pluginOptions?: VertexPluginOptions
+  pluginOptions?: VertexPluginOptions,
+  namespace: PluginNamespace = DEFAULT_NAMESPACE
 ) {
   return Object.keys(ALL_MODELS).map((name) =>
-    defineModel(name, clientOptions, pluginOptions)
+    defineModel(name, clientOptions, pluginOptions, namespace)
   );
 }
 
@@ -1360,9 +1374,10 @@ async function generateWithInteractions(params: {
 export function defineModel(
   name: string,
   clientOptions: ClientOptions,
-  pluginOptions?: VertexPluginOptions
+  pluginOptions?: VertexPluginOptions,
+  namespace: PluginNamespace = DEFAULT_NAMESPACE
 ): ModelAction {
-  const ref = model(name);
+  const ref = model(name, {}, namespace);
   const middlewares: ModelMiddleware[] = [];
   if (ref.info?.supports?.media) {
     // the gemini api doesn't support downloading media from http(s)

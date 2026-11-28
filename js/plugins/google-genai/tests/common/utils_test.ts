@@ -104,6 +104,10 @@ describe('Common Utils', () => {
       assert.strictEqual(modelName('model/foo'), 'foo');
       assert.strictEqual(modelName('embedders/bar'), 'bar');
       assert.strictEqual(modelName('background-model/baz'), 'baz');
+      assert.strictEqual(
+        modelName('googlegenai/gemini-3.8-flash'),
+        'gemini-3.8-flash'
+      );
     });
 
     it('returns the name if no known prefix is present', () => {

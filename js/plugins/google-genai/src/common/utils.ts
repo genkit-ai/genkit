@@ -145,6 +145,13 @@ export function extractVersion(
 }
 
 /**
+ * The namespaces model and embedder actions can be registered under. Each one
+ * must be a prefix that `modelName` strips, so the model version can be read
+ * back from an action name.
+ */
+export type PluginNamespace = 'googleai' | 'vertexai' | 'googlegenai';
+
+/**
  * Gets the model name without certain prefixes..
  * e.g. for "models/googleai/gemini-2.5-pro" it returns just 'gemini-2.5-pro'
  * @param name A string containing the model string with possible prefixes
@@ -155,7 +162,7 @@ export function modelName(name?: string): string | undefined {
 
   // Remove any of these prefixes:
   const prefixesToRemove =
-    /background-model\/|model\/|models\/|embedders\/|googleai\/|vertexai\//g;
+    /background-model\/|model\/|models\/|embedders\/|googlegenai\/|googleai\/|vertexai\//g;
   return name.replace(prefixesToRemove, '');
 }
 

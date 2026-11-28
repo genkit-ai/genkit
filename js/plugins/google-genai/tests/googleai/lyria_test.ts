@@ -19,7 +19,11 @@ import { GenerateRequest } from 'genkit/model';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import * as sinon from 'sinon';
 import { GeminiInteraction } from '../../src/common/interaction-types.js';
-import { LyriaConfigSchema, defineModel } from '../../src/googleai/lyria.js';
+import {
+  LyriaConfigSchema,
+  defineModel,
+  model,
+} from '../../src/googleai/lyria.js';
 import { GoogleAIPluginOptions } from '../../src/googleai/types.js';
 
 describe('Lyria 3', () => {
@@ -75,6 +79,34 @@ describe('Lyria 3', () => {
       },
     ],
   };
+
+  describe('namespace', () => {
+    it('names refs googleai/ by default', () => {
+      assert.strictEqual(model('lyria-3.5').name, 'googleai/lyria-3.5');
+    });
+
+    it('names known and unlisted models under the given namespace', () => {
+      for (const name of ['lyria-3.5', 'lyria-9']) {
+        const ref = model(name, {}, 'googlegenai');
+        assert.strictEqual(ref.name, `googlegenai/${name}`);
+        assert.strictEqual(ref.configSchema, LyriaConfigSchema);
+        assert.deepStrictEqual(ref.info, model(name).info);
+      }
+    });
+
+    it('defines the model under the given namespace, sending the bare name', async () => {
+      const lyria = defineModel(
+        'lyria-3.5',
+        defaultPluginOptions,
+        'googlegenai'
+      );
+      assert.strictEqual(lyria.__action.name, 'googlegenai/lyria-3.5');
+      mockFetchResponse(mockInteractionResponse);
+      await lyria.run(minimalRequest);
+      const body = JSON.parse(fetchStub.lastCall.args[1].body);
+      assert.strictEqual(body.model, 'lyria-3.5');
+    });
+  });
 
   describe('defineModel', () => {
     it('asks for audio and text by default, as response_format entries', async () => {

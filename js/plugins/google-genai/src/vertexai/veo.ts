@@ -34,10 +34,12 @@ import {
 } from './converters.js';
 import { ClientOptions, Model, VertexPluginOptions } from './types.js';
 import {
+  DEFAULT_NAMESPACE,
   applyContextOverrides,
   calculateRequestOptions,
   checkModelName,
   extractVersion,
+  type PluginNamespace,
 } from './utils.js';
 
 export const VeoConfigSchema = z
@@ -128,8 +130,9 @@ function commonRef(
   info?: ModelInfo,
   configSchema: ConfigSchemaType = VeoConfigSchema
 ): ModelReference<ConfigSchemaType> {
+  // `model()` re-creates known refs under the requested namespace.
   return modelRef({
-    name: `vertexai/${name}`,
+    name: `${DEFAULT_NAMESPACE}/${name}`,
     configSchema,
     info:
       info ??
@@ -173,14 +176,15 @@ export function isVeoModelName(value?: string): value is VeoModelName {
 
 export function model(
   version: string,
-  config: VeoConfig = {}
+  config: VeoConfig = {},
+  namespace: PluginNamespace = DEFAULT_NAMESPACE
 ): ModelReference<ConfigSchemaType> {
   const name = checkModelName(version);
 
   if (isKnownKey(name, ALL_MODELS)) {
     const known = ALL_MODELS[name];
     return modelRef({
-      name: known.name,
+      name: `${namespace}/${name}`,
       info: known.info,
       configSchema: known.configSchema,
       config,
@@ -188,7 +192,7 @@ export function model(
   }
 
   return modelRef({
-    name: `vertexai/${name}`,
+    name: `${namespace}/${name}`,
     config,
     configSchema: VeoConfigSchema,
     info: { ...GENERIC_MODEL.info },
@@ -197,11 +201,14 @@ export function model(
 
 // Takes a full list of models, filters for current Veo models only
 // and returns a modelActionMetadata for each.
-export function listActions(models: Model[]): ActionMetadata[] {
+export function listActions(
+  models: Model[],
+  namespace: PluginNamespace = DEFAULT_NAMESPACE
+): ActionMetadata[] {
   return models
     .filter((m: Model) => isVeoModelName(m.name))
     .map((m: Model) => {
-      const ref = model(m.name);
+      const ref = model(m.name, {}, namespace);
       return modelActionMetadata({
         name: ref.name,
         info: ref.info,
@@ -212,19 +219,21 @@ export function listActions(models: Model[]): ActionMetadata[] {
 
 export function listKnownModels(
   clientOptions: ClientOptions,
-  pluginOptions?: VertexPluginOptions
+  pluginOptions?: VertexPluginOptions,
+  namespace: PluginNamespace = DEFAULT_NAMESPACE
 ) {
   return Object.keys(ALL_MODELS).map((name: string) =>
-    defineModel(name, clientOptions, pluginOptions)
+    defineModel(name, clientOptions, pluginOptions, namespace)
   );
 }
 
 export function defineModel(
   name: string,
   clientOptions: ClientOptions,
-  pluginOptions?: VertexPluginOptions
+  pluginOptions?: VertexPluginOptions,
+  namespace: PluginNamespace = DEFAULT_NAMESPACE
 ): BackgroundModelAction<VeoConfigSchemaType> {
-  const ref = model(name);
+  const ref = model(name, {}, namespace);
 
   return pluginBackgroundModel({
     name: ref.name,

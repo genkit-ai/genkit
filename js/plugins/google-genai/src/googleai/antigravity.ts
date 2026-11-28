@@ -37,6 +37,7 @@ import {
   Model,
 } from './types.js';
 import {
+  DEFAULT_NAMESPACE,
   calculateApiKey,
   calculateRequestOptions,
   checkApiKey,
@@ -44,6 +45,7 @@ import {
   extractVersion,
   modelName,
   removeClientOptionOverrides,
+  type PluginNamespace,
 } from './utils.js';
 
 export const AntigravityConfigSchema = z
@@ -113,8 +115,9 @@ function commonRef(
   info?: ModelInfo,
   configSchema: ConfigSchemaType = AntigravityConfigSchema
 ): ModelReference<ConfigSchemaType> {
+  // `model()` re-creates known refs under the requested namespace.
   return modelRef({
-    name: `googleai/${name}`,
+    name: `${DEFAULT_NAMESPACE}/${name}`,
     configSchema,
     info:
       info ??
@@ -148,28 +151,38 @@ export function isAntigravityModelName(
 
 export function model(
   version: string,
-  config: AntigravityConfig = {}
+  config: AntigravityConfig = {},
+  namespace: PluginNamespace = DEFAULT_NAMESPACE
 ): ModelReference<ConfigSchemaType> {
   const name = checkModelName(version);
 
   if (isKnownKey(name, KNOWN_MODELS)) {
-    return KNOWN_MODELS[name].withConfig(config);
+    const known = KNOWN_MODELS[name];
+    return modelRef({
+      name: `${namespace}/${name}`,
+      config,
+      configSchema: known.configSchema,
+      info: known.info,
+    });
   }
 
   return modelRef({
-    name: `googleai/${name}`,
+    name: `${namespace}/${name}`,
     config,
     configSchema: AntigravityConfigSchema,
     info: { ...GENERIC_MODEL.info },
   });
 }
 
-export function listActions(models: Model[]): ActionMetadata[] {
+export function listActions(
+  models: Model[],
+  namespace: PluginNamespace = DEFAULT_NAMESPACE
+): ActionMetadata[] {
   return models
     .filter((m) => isAntigravityModelName(modelName(m.name)))
     .filter((m) => !m.description || !m.description.includes('deprecated'))
     .map((m) => {
-      const ref = model(m.name);
+      const ref = model(m.name, {}, namespace);
       return modelActionMetadata({
         name: ref.name,
         info: ref.info,
@@ -178,18 +191,22 @@ export function listActions(models: Model[]): ActionMetadata[] {
     });
 }
 
-export function listKnownModels(options?: GoogleAIPluginOptions) {
+export function listKnownModels(
+  options?: GoogleAIPluginOptions,
+  namespace: PluginNamespace = DEFAULT_NAMESPACE
+) {
   return Object.keys(KNOWN_MODELS).map((name: string) =>
-    defineModel(name, options)
+    defineModel(name, options, namespace)
   );
 }
 
 export function defineModel(
   name: string,
-  pluginOptions?: GoogleAIPluginOptions
+  pluginOptions?: GoogleAIPluginOptions,
+  namespace: PluginNamespace = DEFAULT_NAMESPACE
 ): ModelAction<AntigravityConfigSchemaType> {
   checkApiKey(pluginOptions?.apiKey);
-  const ref = model(name);
+  const ref = model(name, {}, namespace);
   const clientOptions: ClientOptions = {
     apiVersion: pluginOptions?.apiVersion,
     baseUrl: pluginOptions?.baseUrl,

@@ -16,6 +16,7 @@
 
 import { GenkitError, type ActionContext } from 'genkit';
 import process from 'process';
+import { type PluginNamespace } from '../common/utils.js';
 import { ClientOptions } from './types.js';
 
 export { isObject } from '../common/types.js';
@@ -31,7 +32,15 @@ export {
   modelName,
   stripLeadingId3Tags,
   toSnakeCaseObj,
+  type PluginNamespace,
 } from '../common/utils.js';
+
+/**
+ * Namespace of the googleAI plugin's actions (`googleai/<model>`). Model and
+ * embedder functions take the namespace as a parameter so another plugin
+ * can register the same models under its own name.
+ */
+export const DEFAULT_NAMESPACE: PluginNamespace = 'googleai';
 
 /**
  * Retrieves an API key from environment variables.

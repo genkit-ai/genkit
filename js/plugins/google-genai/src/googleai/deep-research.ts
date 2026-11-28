@@ -47,6 +47,7 @@ import {
   Model,
 } from './types.js';
 import {
+  DEFAULT_NAMESPACE,
   applyContextOverrides,
   calculateApiKey,
   checkApiKey,
@@ -54,6 +55,7 @@ import {
   extractVersion,
   isStringArray,
   modelName,
+  type PluginNamespace,
 } from './utils.js';
 
 export const DeepResearchConfigSchema = z
@@ -165,8 +167,9 @@ function commonRef(
   info?: ModelInfo,
   configSchema: ConfigSchemaType = DeepResearchConfigSchema
 ): ModelReference<ConfigSchemaType> {
+  // `model()` re-creates known refs under the requested namespace.
   return modelRef({
-    name: `googleai/${name}`,
+    name: `${DEFAULT_NAMESPACE}/${name}`,
     configSchema,
     info:
       info ??
@@ -239,30 +242,40 @@ export function isDeepResearchModelName(
 
 export function model(
   version: string,
-  config: DeepResearchConfig = {}
+  config: DeepResearchConfig = {},
+  namespace: PluginNamespace = DEFAULT_NAMESPACE
 ): ModelReference<ConfigSchemaType> {
   const name = checkModelName(version);
 
   if (isKnownKey(name, ALL_MODELS)) {
-    return ALL_MODELS[name].withConfig(config);
+    const known = ALL_MODELS[name];
+    return modelRef({
+      name: `${namespace}/${name}`,
+      config,
+      configSchema: known.configSchema,
+      info: known.info,
+    });
   }
 
   return modelRef({
-    name: `googleai/${name}`,
+    name: `${namespace}/${name}`,
     config,
     configSchema: DeepResearchConfigSchema,
     info: { ...GENERIC_MODEL.info },
   });
 }
 
-export function listActions(models: Model[]): ActionMetadata[] {
+export function listActions(
+  models: Model[],
+  namespace: PluginNamespace = DEFAULT_NAMESPACE
+): ActionMetadata[] {
   return (
     models
       .filter((m) => isDeepResearchModelName(modelName(m.name)))
       // Filter out deprecated
       .filter((m) => !m.description || !m.description.includes('deprecated'))
       .map((m) => {
-        const ref = model(m.name);
+        const ref = model(m.name, {}, namespace);
         return modelActionMetadata({
           name: ref.name,
           info: ref.info,
@@ -272,18 +285,22 @@ export function listActions(models: Model[]): ActionMetadata[] {
   );
 }
 
-export function listKnownModels(options?: GoogleAIPluginOptions) {
+export function listKnownModels(
+  options?: GoogleAIPluginOptions,
+  namespace: PluginNamespace = DEFAULT_NAMESPACE
+) {
   return Object.keys(ALL_MODELS).map((name: string) =>
-    defineModel(name, options)
+    defineModel(name, options, namespace)
   );
 }
 
 export function defineModel(
   name: string,
-  pluginOptions?: GoogleAIPluginOptions
+  pluginOptions?: GoogleAIPluginOptions,
+  namespace: PluginNamespace = DEFAULT_NAMESPACE
 ): BackgroundModelAction<DeepResearchConfigSchemaType> {
   checkApiKey(pluginOptions?.apiKey);
-  const ref = model(name);
+  const ref = model(name, {}, namespace);
   const clientOptions: ClientOptions = {
     apiVersion: pluginOptions?.apiVersion,
     baseUrl: pluginOptions?.baseUrl,

@@ -96,6 +96,31 @@ describe('Vertex AI Imagen', () => {
       assert.strictEqual(ref.name, `vertexai/${modelName}`);
       assert.strictEqual(ref.configSchema, ImagenTryOnConfigSchema);
     });
+
+    it('names known and unlisted models under the given namespace', () => {
+      const known = model('virtual-try-on-001', {}, 'googlegenai');
+      assert.strictEqual(known.name, 'googlegenai/virtual-try-on-001');
+      assert.strictEqual(known.configSchema, ImagenTryOnConfigSchema);
+      assert.deepStrictEqual(known.info, model('virtual-try-on-001').info);
+
+      const unknown = model('imagen-unknown-model', {}, 'googlegenai');
+      assert.strictEqual(unknown.name, 'googlegenai/imagen-unknown-model');
+      assert.strictEqual(unknown.configSchema, ImagenConfigSchema);
+      assert.deepStrictEqual(unknown.info, TEST_ONLY.GENERIC_MODEL.info);
+    });
+
+    it('defines the model under the given namespace', () => {
+      const action = defineModel(
+        'virtual-try-on-001',
+        { kind: 'express', apiKey: 'test-key' },
+        undefined,
+        'googlegenai'
+      );
+      assert.strictEqual(
+        action.__action.name,
+        'googlegenai/virtual-try-on-001'
+      );
+    });
   });
 
   describe('defineImagenModel()', () => {

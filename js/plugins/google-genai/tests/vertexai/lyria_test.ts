@@ -116,6 +116,30 @@ describe('Vertex AI Lyria', () => {
       assert.strictEqual(ref.name, `vertexai/${knownModelName}`);
       assert.deepStrictEqual(ref.config, config);
     });
+
+    it('names known and unlisted models under the given namespace', () => {
+      for (const name of [
+        Object.keys(KNOWN_LYRIA_LEGACY_MODELS)[0],
+        Object.keys(KNOWN_LYRIA_INTERACTIONS_MODELS)[0],
+        'lyria-unknown-model',
+      ]) {
+        const ref = model(name, {}, 'googlegenai');
+        const defaultRef = model(name);
+        assert.strictEqual(ref.name, `googlegenai/${name}`);
+        assert.strictEqual(ref.configSchema, defaultRef.configSchema);
+        assert.deepStrictEqual(ref.info, defaultRef.info);
+      }
+    });
+
+    it('defines the model under the given namespace', () => {
+      const action = defineModel(
+        'lyria-002',
+        defaultRegionalClientOptions,
+        undefined,
+        'googlegenai'
+      );
+      assert.strictEqual(action.__action.name, 'googlegenai/lyria-002');
+    });
   });
 
   describe('defineModel()', () => {

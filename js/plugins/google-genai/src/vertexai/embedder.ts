@@ -37,7 +37,12 @@ import {
   isMultimodalEmbeddingPrediction,
   isObject,
 } from './types.js';
-import { checkModelName, extractVersion } from './utils.js';
+import {
+  DEFAULT_NAMESPACE,
+  checkModelName,
+  extractVersion,
+  type PluginNamespace,
+} from './utils.js';
 
 export const EmbeddingConfigSchema = z
   .object({
@@ -76,8 +81,9 @@ function commonRef(
   info?: EmbedderInfo,
   configSchema: ConfigSchemaType = EmbeddingConfigSchema
 ): EmbedderReference<ConfigSchemaType> {
+  // `model()` re-creates known refs under the requested namespace.
   return embedderRef({
-    name: `vertexai/${name}`,
+    name: `${DEFAULT_NAMESPACE}/${name}`,
     configSchema,
     info: info ?? {
       dimensions: 768,
@@ -158,14 +164,15 @@ export function isEmbedderName(value: string): value is EmbedderModelName {
 
 export function model(
   version: string,
-  config: EmbeddingConfig = {}
+  config: EmbeddingConfig = {},
+  namespace: PluginNamespace = DEFAULT_NAMESPACE
 ): EmbedderReference<ConfigSchemaType> {
   const name = checkModelName(version);
 
   if (isKnownKey(name, ALL_MODELS)) {
     const known = ALL_MODELS[name];
     return embedderRef({
-      name: known.name,
+      name: `${namespace}/${name}`,
       info: known.info,
       configSchema: known.configSchema,
       config,
@@ -175,7 +182,7 @@ export function model(
   if (config.multimodal) {
     // Generic multimodal embedder format
     return embedderRef({
-      name: `vertexai/${name}`,
+      name: `${namespace}/${name}`,
       configSchema: EmbeddingConfigSchema,
       config,
       info: {
@@ -185,7 +192,7 @@ export function model(
   }
   // Generic text-only embedder format
   return embedderRef({
-    name: `vertexai/${name}`,
+    name: `${namespace}/${name}`,
     configSchema: EmbeddingConfigSchema,
     config,
     info: {
@@ -196,10 +203,11 @@ export function model(
 
 export function listKnownModels(
   clientOptions: ClientOptions,
-  pluginOptions?: VertexPluginOptions
+  pluginOptions?: VertexPluginOptions,
+  namespace: PluginNamespace = DEFAULT_NAMESPACE
 ) {
   return Object.keys(ALL_MODELS).map((name) =>
-    defineEmbedder(name, clientOptions, pluginOptions)
+    defineEmbedder(name, clientOptions, pluginOptions, namespace)
   );
 }
 
@@ -238,9 +246,10 @@ async function embedWithEmbedContent(
 export function defineEmbedder(
   name: string,
   clientOptions: ClientOptions,
-  pluginOptions?: VertexPluginOptions
+  pluginOptions?: VertexPluginOptions,
+  namespace: PluginNamespace = DEFAULT_NAMESPACE
 ): EmbedderAction<any> {
-  const ref = model(name);
+  const ref = model(name, {}, namespace);
 
   return pluginEmbedder(
     {

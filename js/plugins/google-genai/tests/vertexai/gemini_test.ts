@@ -175,6 +175,31 @@ describe('Vertex AI Gemini', () => {
       assert.strictEqual(modelRef.configSchema, GeminiImageConfigSchema);
     });
 
+    it('names a known model under the given namespace, keeping its schema and info', () => {
+      const known = model('gemini-3-pro-image-preview');
+      const ref = model('gemini-3-pro-image-preview', {}, 'googlegenai');
+      assert.strictEqual(ref.name, 'googlegenai/gemini-3-pro-image-preview');
+      assert.strictEqual(ref.configSchema, GeminiImageConfigSchema);
+      assert.deepStrictEqual(ref.info, known.info);
+    });
+
+    it('names an unknown model under the given namespace', () => {
+      const ref = model('gemini-new-model', { temperature: 1 }, 'googlegenai');
+      assert.strictEqual(ref.name, 'googlegenai/gemini-new-model');
+      assert.strictEqual(ref.configSchema, GeminiConfigSchema);
+      assert.deepStrictEqual(ref.config, { temperature: 1 });
+    });
+
+    it('defines the action under the given namespace', () => {
+      const action = defineModel(
+        'gemini-2.5-flash',
+        defaultRegionalClientOptions,
+        undefined,
+        'googlegenai'
+      );
+      assert.strictEqual(action.__action.name, 'googlegenai/gemini-2.5-flash');
+    });
+
     it('keeps hidden models resolvable but out of the known lists', () => {
       const { HIDDEN_MODELS, ALL_MODELS, KNOWN_GEMINI_MODELS } = TEST_ONLY;
       for (const name of [

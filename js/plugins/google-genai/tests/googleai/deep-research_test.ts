@@ -109,6 +109,42 @@ describe('Deep Research', () => {
     });
   });
 
+  describe('namespace', () => {
+    it('names known, hidden and unlisted models under the given namespace', () => {
+      for (const name of [
+        'deep-research-preview-04-2026',
+        'deep-research-pro-preview-12-2025',
+        'deep-research-9',
+      ]) {
+        const ref = model(name, {}, 'googlegenai');
+        assert.strictEqual(ref.name, `googlegenai/${name}`);
+        assert.strictEqual(ref.configSchema, DeepResearchConfigSchema);
+        assert.deepStrictEqual(ref.info, model(name).info);
+      }
+    });
+
+    it('registers known models under the given namespace', () => {
+      const names = listKnownModels(defaultPluginOptions, 'googlegenai').map(
+        (m) => m.__action.name
+      );
+      for (const name of Object.keys(TEST_ONLY.KNOWN_MODELS)) {
+        assert.ok(names.includes(`googlegenai/${name}`), name);
+      }
+    });
+
+    it('sends the bare agent name under another namespace', async () => {
+      const deepResearch = defineModel(
+        'deep-research-preview-04-2026',
+        defaultPluginOptions,
+        'googlegenai'
+      );
+      mockFetchResponse(mockInteractionResponse);
+      await deepResearch.start(minimalRequest);
+      const body = JSON.parse(fetchStub.lastCall.args[1].body);
+      assert.strictEqual(body.agent, 'deep-research-preview-04-2026');
+    });
+  });
+
   describe('defineModel', () => {
     it('sends responseModalities as response_format entries', async () => {
       const model = defineModel(

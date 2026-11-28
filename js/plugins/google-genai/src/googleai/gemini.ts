@@ -87,6 +87,7 @@ import {
   UrlContextTool,
 } from './types.js';
 import {
+  DEFAULT_NAMESPACE,
   calculateApiKey,
   calculateRequestOptions,
   checkApiKey,
@@ -95,6 +96,7 @@ import {
   extractVersion,
   isObject,
   removeClientOptionOverrides,
+  type PluginNamespace,
 } from './utils.js';
 
 const MAX_INLINE_MEDIA_BYTES = 1024 * 1024 * 100; // 100 MB
@@ -592,8 +594,9 @@ function commonRef(
 ): ModelReference<ConfigSchemaType> {
   modelInteractionsMap.set(name, useInteractions);
 
+  // `model()` re-creates known refs under the requested namespace.
   return modelRef({
-    name: `googleai/${name}`,
+    name: `${DEFAULT_NAMESPACE}/${name}`,
     configSchema,
     info: info ?? {
       supports: {
@@ -883,17 +886,24 @@ const ALL_MODELS = {
 
 export function model(
   version: string,
-  config: ConfigSchema = {}
+  config: ConfigSchema = {},
+  namespace: PluginNamespace = DEFAULT_NAMESPACE
 ): ModelReference<ConfigSchemaType> {
   const name = checkModelName(version);
 
   if (isKnownKey(name, ALL_MODELS)) {
-    return ALL_MODELS[name].withConfig(config);
+    const known = ALL_MODELS[name];
+    return modelRef({
+      name: `${namespace}/${name}`,
+      config,
+      configSchema: known.configSchema,
+      info: known.info,
+    });
   }
 
   if (isTTSModelName(name)) {
     return modelRef({
-      name: `googleai/${name}`,
+      name: `${namespace}/${name}`,
       config,
       configSchema: GeminiTtsConfigSchema,
       info: { ...GENERIC_TTS_MODEL.info },
@@ -902,7 +912,7 @@ export function model(
 
   if (isImageModelName(name)) {
     return modelRef({
-      name: `googleai/${name}`,
+      name: `${namespace}/${name}`,
       config,
       configSchema: GeminiImageConfigSchema,
       info: { ...GENERIC_IMAGE_MODEL.info },
@@ -911,7 +921,7 @@ export function model(
 
   if (isVideoModelName(name)) {
     return modelRef({
-      name: `googleai/${name}`,
+      name: `${namespace}/${name}`,
       config,
       configSchema: GeminiVideoConfigSchema,
       info: { ...GENERIC_VIDEO_MODEL.info },
@@ -920,7 +930,7 @@ export function model(
 
   if (isGemmaModelName(name)) {
     return modelRef({
-      name: `googleai/${name}`,
+      name: `${namespace}/${name}`,
       config,
       configSchema: GemmaConfigSchema,
       info: { ...GENERIC_GEMMA_MODEL.info },
@@ -928,7 +938,7 @@ export function model(
   }
 
   return modelRef({
-    name: `googleai/${name}`,
+    name: `${namespace}/${name}`,
     config,
     configSchema: GeminiConfigSchema,
     info: { ...GENERIC_MODEL.info },
@@ -937,14 +947,17 @@ export function model(
 
 // Takes a full list of models, filters for current Gemini models only
 // and returns a modelActionMetadata for each.
-export function listActions(models: Model[]): ActionMetadata[] {
+export function listActions(
+  models: Model[],
+  namespace: PluginNamespace = DEFAULT_NAMESPACE
+): ActionMetadata[] {
   return (
     models
       .filter((m) => m.supportedGenerationMethods.includes('generateContent'))
       // Filter out deprecated
       .filter((m) => !m.description || !m.description.includes('deprecated'))
       .map((m) => {
-        const ref = model(m.name);
+        const ref = model(m.name, {}, namespace);
         return modelActionMetadata({
           name: ref.name,
           info: ref.info,
@@ -954,9 +967,12 @@ export function listActions(models: Model[]): ActionMetadata[] {
   );
 }
 
-export function listKnownModels(options?: GoogleAIPluginOptions) {
+export function listKnownModels(
+  options?: GoogleAIPluginOptions,
+  namespace: PluginNamespace = DEFAULT_NAMESPACE
+) {
   return Object.keys(ALL_MODELS).map((name: string) =>
-    defineModel(name, options)
+    defineModel(name, options, namespace)
   );
 }
 
@@ -965,10 +981,11 @@ export function listKnownModels(options?: GoogleAIPluginOptions) {
  */
 export function defineModel(
   name: string,
-  pluginOptions?: GoogleAIPluginOptions
+  pluginOptions?: GoogleAIPluginOptions,
+  namespace: PluginNamespace = DEFAULT_NAMESPACE
 ): ModelAction {
   checkApiKey(pluginOptions?.apiKey);
-  const ref = model(name);
+  const ref = model(name, {}, namespace);
   const clientOptions: ClientOptions = {
     apiVersion: pluginOptions?.apiVersion,
     baseUrl: pluginOptions?.baseUrl,
